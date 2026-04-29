@@ -18,27 +18,30 @@ doc enumerates them and shows exactly what to do for each.
 
 Everything you collect goes into `~/.fitt/secrets.yaml` on the desktop.
 
+For software you need to *install* on each machine (Ollama, Python,
+NSSM, Tailscale client), see [`prerequisites.md`](./prerequisites.md).
+
 ---
 
 ## Tailscale
 
-Already set up per the roadmap. Make sure:
+Install and sign in — full machine-by-machine steps are in
+[`prerequisites.md`](./prerequisites.md#1-tailscale-both-machines--phone).
 
-- Tailscale is running on both rigs (desktop + laptop) and on your
-  phone.
-- You know the desktop's Tailscale IP (e.g. `100.x.y.z`) — you'll
-  reference it from the laptop's Continue config.
-- You know the laptop's Tailscale IP — you'll reference it from
-  `~/.fitt/config.yaml` on the desktop (it's the endpoint for
-  `qwen-coder-big`).
+Collect for `config.yaml`:
 
-To see them:
+- Desktop's Tailscale IP (the URL your IDE and phone use).
+- Laptop's Tailscale IP (becomes the `endpoint` of the
+  `qwen-coder-big` model entry on the desktop's `config.yaml`).
+
+Get them with:
 
 ```powershell
 tailscale status
 ```
 
-Or enable MagicDNS and use hostnames instead of IPs.
+Optional: enable MagicDNS in the Tailscale admin console and use
+hostnames instead of IPs.
 
 ## OpenRouter
 

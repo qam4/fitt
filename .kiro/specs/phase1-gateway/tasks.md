@@ -149,24 +149,25 @@
 
 ## Phase 1k — Production install (desktop, at-home)
 
-- [ ] 44. Write `scripts/install-service.ps1`:
+- [x] 44. Write `scripts/install-service.ps1`:
   - Installs NSSM if missing.
   - Registers the gateway as `FITTGateway` Windows service.
   - Sets auto-start, 30-second restart on failure.
-- [ ] 45. Write `scripts/uninstall-service.ps1` for symmetry.
-- [ ] 46. Add Windows Defender Firewall rule allowing inbound 8080
-  only on the Tailscale network profile.
+- [x] 45. Write `scripts/uninstall-service.ps1` for symmetry.
+- [x] 46. Firewall rule creation automated in the install script
+  (inbound TCP 8080 on Private profile only).
 - [ ] 47. Verify with `netstat -an` that 8080 is bound on the Tailscale
-  IP and not the public Wi-Fi NIC IP.
+  IP and not the public Wi-Fi NIC IP. (At-home, runtime.)
 - [ ] 48. Run an external port scan (from the phone's mobile data,
   outside Tailscale) against the desktop's public IP; confirm 8080
-  closed.
+  closed. (At-home, runtime.)
 - [ ] 49. Set a per-provider spend cap in the provider dashboard
   (OpenRouter credit balance as a hard ceiling; Anthropic console spend
   limit if/when direct Anthropic is enabled).
 - [ ] 50. Reboot desktop; verify gateway reachable within 60s without
-  manual steps.
+  manual steps. (At-home, runtime.)
 - [ ] 51. Kill the Python process; verify auto-restart within 30s.
+  (At-home, runtime.)
 
 ## Phase 1l — IDE wiring and end-to-end (at-home)
 
@@ -188,16 +189,21 @@
 
 ## Phase 1m — Documentation and release
 
-- [ ] 57. Flesh out `gateway/README.md`:
+- [x] 57. Flesh out `gateway/README.md`:
   - Installation steps (Windows service, config files, firewall).
   - Configuration reference (aliases, models, cost rates).
   - `fitt` CLI reference.
-  - Failure-handling table (copy from design.md).
-  - Troubleshooting (common issues: auth 401, 503 on /ready, firewall
-    not allowing Tailscale).
+  - HTTP API reference.
+  - Failure-handling table.
+  - Troubleshooting section (auth 401, /ready 503, streaming cost=0,
+    service crash loop, update workflow).
+- [x] 57a. Create `docs/prerequisites.md` listing software to install
+  on each machine (Tailscale, Ollama + `OLLAMA_HOST=0.0.0.0`, Python,
+  NSSM) with the right order of operations.
 - [ ] 58. Update `FITT_ROADMAP.md`: mark Phase 1 complete, note any
-  deviations from the spec.
-- [ ] 59. Commit and push. Tag the repo `v0.1.0-phase1`.
+  deviations from the spec. (After at-home smoke.)
+- [ ] 59. Commit and push. Tag the repo `v0.1.0-phase1`. (After
+  at-home smoke.)
 
 ## Exit Criteria
 

@@ -1,79 +1,333 @@
 # FITT Gateway
 
 OpenAI-compatible HTTP gateway that routes chat-completion requests
-between local Ollama models and cloud providers (OpenRouter, optionally
-Anthropic) based on the alias the client asks for.
+between local Ollama models and cloud providers (OpenRouter primary,
+Anthropic optional) based on an alias the client asks for.
 
-## Install (development)
+- **Clients ask for aliases**, never concrete model IDs. The gateway
+  resolves each alias to a model + optional fallback at request time.
+- **Auth by Bearer token** on every `/v1/*` endpoint except discovery.
+- **One daemon, many interfaces**: IDE (VS Code + Continue / Cursor /
+  Kiro), Telegram (later), Open WebUI (later), curl.
 
-```bash
+## Before you start
+
+1. [`../docs/prerequisites.md`](../docs/prerequisites.md) — Tailscale,
+   Ollama + `OLLAMA_HOST=0.0.0.0`, Python 3.11+, NSSM.
+2. [`../docs/accounts-setup.md`](../docs/accounts-setup.md) —
+   OpenRouter API key, Bearer token, optional Telegram + Anthropic.
+
+Without these, the gateway will start but won't be able to reach the
+laptop's Ollama or OpenRouter.
+
+## Quick install (desktop, Windows, as a service)
+
+From an **elevated** PowerShell prompt, at the repo root:
+
+```powershell
+# 1. Seed ~/.fitt with config and secrets.
+mkdir $env:USERPROFILE\.fitt
+Copy-Item configs\config.example.yaml  $env:USERPROFILE\.fitt\config.yaml
+Copy-Item configs\secrets.example.yaml $env:USERPROFILE\.fitt\secrets.yaml
+# Edit both. Put real Tailscale IPs in config.yaml; real keys in secrets.yaml.
+notepad $env:USERPROFILE\.fitt\config.yaml
+notepad $env:USERPROFILE\.fitt\secrets.yaml
+
+# 2. Lock down the secrets file so only you can read it.
+icacls "$env:USERPROFILE\.fitt\secrets.yaml" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
+
+# 3. Create a venv and install the gateway.
 cd gateway
 python -m venv .venv
-.venv\Scripts\activate       # Windows
-# source .venv/bin/activate  # POSIX
+.venv\Scripts\python -m pip install --upgrade pip
+.venv\Scripts\python -m pip install -e .
+cd ..
 
+# 4. Install as a Windows service.
+.\scripts\install-service.ps1
+```
+
+The install script:
+
+- registers `FITTGateway` via NSSM (auto-start at boot, 30-second
+  restart on failure),
+- adds a Windows Defender Firewall rule for TCP 8080 on Private
+  profile only (Tailscale is Private),
+- runs a `/health` probe to confirm it's up.
+
+Verify:
+
+```powershell
+Get-Service FITTGateway
+curl http://localhost:8080/health
+```
+
+Uninstall with `.\scripts\uninstall-service.ps1`.
+
+## Dev install (no service, foreground process)
+
+```powershell
+cd gateway
+python -m venv .venv
+.venv\Scripts\activate
 pip install -e ".[dev]"
-pytest
+pytest                      # 64 tests, 2 POSIX-only skips on Windows
+
+# Run the gateway in the foreground.
+python -m gateway
 ```
 
 ## Configuration
 
-1. Copy `../configs/config.example.yaml` to `~/.fitt/config.yaml`.
-2. Copy `../configs/secrets.example.yaml` to `~/.fitt/secrets.yaml`.
-3. Restrict permissions on the secrets file:
+Config lives in **`~/.fitt/config.yaml`** (non-secret) and
+**`~/.fitt/secrets.yaml`** (secret). The repo only ships `.example`
+templates under `configs/`; real values never land in git.
 
-   ```powershell
-   # Windows
-   icacls "$env:USERPROFILE\.fitt\secrets.yaml" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
-   ```
+### `config.yaml` structure
 
-4. Fill in your OpenRouter API key, a random Bearer token, and the
-   Tailscale IP of your laptop.
+```yaml
+server:
+  host: 0.0.0.0
+  port: 8080
+  log_level: info
+  log_bodies: false          # set true to log prompt/response bodies
 
-See [`../docs/accounts-setup.md`](../docs/accounts-setup.md) for
-step-by-step guidance on account creation and key collection.
+aliases:
+  fitt-default: <model-id>   # local, everyday coding
+  fitt-smart:   <model-id>   # cloud, hard turns
+  fitt-fast:    <model-id>   # local, cheap helpers
 
-## Run
+models:
+  - id: <string>
+    backend: openrouter | anthropic | ollama
+    model:   <upstream model name, LiteLLM convention>
+    endpoint: <URL>          # required for ollama
+    cost_per_mtok_in:  <USD>
+    cost_per_mtok_out: <USD>
+    fallback: <another model id, optional>
 
-```bash
-fitt-gateway
+logging:
+  dir: ~/.fitt/logs
+  retention_days: 30
 ```
 
-Listens on `http://0.0.0.0:8080` by default. Configure with
-`~/.fitt/config.yaml`.
+**Client discipline:** the `model` field of a chat-completion request
+MUST be one of the `aliases` keys. Concrete names like
+`qwen2.5-coder:14b` are rejected with 400. This is what keeps
+"models are configuration, not architecture" enforceable.
 
-## Usage
+### `secrets.yaml` structure
 
-```bash
-curl -H "Authorization: Bearer <your-token>" \
-     -H "Content-Type: application/json" \
-     -X POST http://localhost:8080/v1/chat/completions \
-     -d '{
-       "model": "fitt-smart",
-       "messages": [{"role": "user", "content": "hello"}]
-     }'
+```yaml
+allowed_tokens:
+  - name: personal
+    token: <32+ random chars>   # clients send: Authorization: Bearer <this>
+
+openrouter_api_key: sk-or-v1-...
+
+# Optional; uncomment if you enable the `claude-...-direct` model.
+# anthropic_api_key: sk-ant-...
+
+# Reserved for Phase 3.
+# telegram:
+#   bot_token: 123456:ABC-...
+#   allowlist_user_ids:
+#     - 123456789
 ```
 
-`fitt-smart`, `fitt-default`, `fitt-fast` are aliases configured in
-`config.yaml`. Never pass concrete model IDs like `qwen2.5-coder:14b`
-— the gateway rejects them.
+Refuses to load if group/world-readable on POSIX. On Windows, run the
+`icacls` command shown above.
 
-## CLI
+## HTTP API
 
-```bash
-fitt status         # list aliases and their reachability
-fitt cost           # month-to-date spend aggregated from logs
-fitt config check   # validate config and secrets without starting
+### `POST /v1/chat/completions` (auth required)
+
+OpenAI-compatible. Forward any request body that Claude or GPT would
+accept; the gateway strips `model`, resolves it to an alias, and
+forwards the rest to the configured backend via LiteLLM.
+
+**Request:**
+
+```json
+{
+  "model": "fitt-smart",
+  "messages": [{"role": "user", "content": "Hello"}],
+  "stream": false,
+  "temperature": 0.7
+}
 ```
 
-## Endpoints
+**Response headers:**
 
-| Path                        | Auth | Purpose                                    |
-|-----------------------------|------|--------------------------------------------|
-| `GET /health`               | no   | liveness                                   |
-| `GET /ready`                | no   | readiness (backends reachable)             |
-| `GET /v1/models`            | no   | list aliases                               |
-| `POST /v1/chat/completions` | yes  | main chat endpoint (OpenAI-compatible)     |
+| Header              | Meaning                                              |
+|---------------------|------------------------------------------------------|
+| `X-FITT-Alias`      | The alias the client asked for.                      |
+| `X-FITT-Backend`    | The *actual* backend that served the request (e.g. `openrouter:anthropic/claude-sonnet-4.5` or `ollama:http://laptop:11434`). |
+| `X-FITT-Fallback`   | Present and `1` if the primary was down and fallback was used. |
+
+**Streaming:** set `stream: true`. The response is `text/event-stream`
+with standard OpenAI chunk shapes. If the upstream stream fails
+mid-response, the gateway emits a `[ERROR]` SSE event rather than
+silently truncating.
+
+### `GET /v1/models` (no auth)
+
+OpenAI-compatible model listing with FITT extensions:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "fitt-smart",
+      "object": "model",
+      "created": 1777497338,
+      "owned_by": "fitt",
+      "fitt_backend": "openrouter",
+      "fitt_resolved_model": "anthropic/claude-sonnet-4.5",
+      "fitt_fallback": null
+    }
+  ]
+}
+```
+
+### `GET /health` (no auth)
+
+`{"status": "ok"}` while the process is alive.
+
+### `GET /ready` (no auth)
+
+Probes every alias's primary + fallback. Returns 200 when every alias
+has at least one reachable backend, 503 otherwise with the list of
+failing aliases.
+
+## Failure handling
+
+| Upstream behavior                      | Gateway response                                  |
+|----------------------------------------|---------------------------------------------------|
+| 200 stream                             | Passthrough as SSE                                |
+| 200 non-stream                         | Passthrough as JSON                               |
+| Connection refused / timeout (primary) | Try fallback once; log failover                   |
+| Connection refused / timeout (both)    | 503 + body listing attempted backends             |
+| HTTP 429 (rate limited)                | 503 + `Retry-After` header                        |
+| HTTP 529 (vendor overloaded)           | 503 + `Retry-After: 30`                           |
+| HTTP 4xx (other)                       | Pass through with same status                     |
+| HTTP 5xx (other)                       | 502 + body preserving upstream message            |
+| Mid-stream connection drop             | SSE stream ends with `[ERROR]` event              |
+| Unknown alias                          | 400 + body listing available aliases              |
+| Concrete model id instead of alias     | 400 + body explaining alias requirement           |
+| Invalid / missing Bearer token         | 401 (no backend call)                             |
+
+## `fitt` CLI
+
+Installed alongside the gateway (`pip install -e .` also exposes
+`fitt`).
+
+```
+fitt cost                  # MTD spend aggregated from gateway.log
+fitt cost --month 2026-03  # specific month
+fitt status                # aliases + current reachability
+fitt config check          # validate config + secrets without starting
+```
+
+`fitt cost` reads `~/.fitt/logs/gateway.log*` — the logs are the
+source of truth, no separate database.
+
+## Environment variables
+
+| Variable              | Purpose                                               |
+|-----------------------|-------------------------------------------------------|
+| `FITT_HOME`           | Override `~/.fitt`. Used by tests and the service install. |
+| `FITT_CONFIG_PATH`    | Override the config file location.                    |
+| `FITT_SECRETS_PATH`   | Override the secrets file location.                   |
+
+The service installer sets `FITT_HOME` to `%USERPROFILE%\.fitt`
+explicitly so the service reads the right files regardless of how
+Windows spawns the process.
+
+## Troubleshooting
+
+### The gateway says "secrets.yaml not found"
+
+You haven't copied the templates into `~/.fitt/`. See the "Quick
+install" section.
+
+### `Get-Service FITTGateway` shows the service running but curl /health hangs
+
+Firewall rule likely wrong. Run:
+
+```powershell
+Get-NetFirewallRule -DisplayName 'FITT Gateway (Private only)' | Format-List
+netstat -an | findstr :8080
+```
+
+- The firewall rule should exist and target Private profile.
+- `netstat` should show `0.0.0.0:8080` in LISTENING state.
+
+If Windows thinks Tailscale's network is Public, change it in
+Settings → Network → Tailscale → Set as Private.
+
+### 401 Unauthorized from my IDE
+
+Four likely causes, check in order:
+
+1. IDE config is missing the `Authorization: Bearer <token>` header
+   entirely. In Continue, the "API key" field sets this.
+2. Token in the IDE doesn't match any `allowed_tokens.token` in
+   `secrets.yaml`.
+3. You edited `secrets.yaml` but didn't restart the gateway.
+   Windows service: `Restart-Service FITTGateway`.
+4. Trailing whitespace in the token. Regenerate with
+   `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+
+### /ready returns 503 with "fitt-default" failing
+
+The laptop's Ollama isn't reachable from the desktop. Check:
+
+1. Laptop is awake and Tailscale is connected:
+   `tailscale ping <laptop-name>`.
+2. Ollama is running on the laptop:
+   `curl http://<laptop-tailscale-ip>:11434/api/tags` from the
+   desktop should return JSON.
+3. If step 2 fails: the laptop hasn't picked up
+   `OLLAMA_HOST=0.0.0.0`. Quit Ollama from the tray and restart it
+   after setting the env var.
+4. Endpoint in `config.yaml` matches the laptop's actual Tailscale IP.
+
+### Streaming responses appear garbled or delayed in the IDE
+
+Your client needs to enable streaming for the model. In Continue,
+`streaming: true` in the model config. Cursor does this automatically.
+
+### `fitt cost` shows $0 even though I used the cloud alias
+
+Token counts come from the upstream provider's usage data. Some
+providers return it only at end-of-stream, which Phase 1 doesn't fully
+wire up for streaming responses — the non-streaming path is accurate,
+but streaming responses may log `cost_usd: 0`. This is a known Phase 1
+limitation tracked in the roadmap.
+
+### The gateway starts but a few seconds later the service stops
+
+NSSM crash-loop protection. Check `~/.fitt/logs/service.stderr.log`
+and `~/.fitt/logs/gateway.log` for the underlying error. Common:
+missing `openrouter_api_key`, invalid YAML, port 8080 already bound.
+
+### How do I update the gateway without losing my config?
+
+```powershell
+cd home-ai-cluster
+git pull
+cd gateway
+.venv\Scripts\python -m pip install -e .
+Restart-Service FITTGateway
+```
+
+`~/.fitt/` is outside the repo and unaffected.
+
+## Architecture
 
 See [`../.kiro/specs/phase1-gateway/design.md`](../.kiro/specs/phase1-gateway/design.md)
-for architecture and the failure-handling table.
+for the full design document: architecture diagram, module breakdown,
+design decisions with rationale, correctness properties, and the
+testing strategy.

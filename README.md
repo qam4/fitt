@@ -26,7 +26,8 @@ Early scaffolding. Currently at Phase 0 complete, Phase 1 spec'd.
 
 **Getting ready to run it:**
 
-- [`docs/accounts-setup.md`](./docs/accounts-setup.md) — external accounts you need (OpenRouter, Tailscale, etc.) and what to collect before starting.
+- [`docs/prerequisites.md`](./docs/prerequisites.md) — software to install on each machine (Tailscale, Ollama, Python, NSSM) and in what order.
+- [`docs/accounts-setup.md`](./docs/accounts-setup.md) — external accounts (OpenRouter, optional Anthropic, Telegram bot) and what keys to collect.
 - [`configs/config.example.yaml`](./configs/config.example.yaml) — copy to `~/.fitt/config.yaml` and edit.
 - [`configs/secrets.example.yaml`](./configs/secrets.example.yaml) — copy to `~/.fitt/secrets.yaml`, fill in keys, restrict permissions.
 
