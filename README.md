@@ -18,18 +18,22 @@ Early scaffolding. Currently at Phase 0 complete, Phase 1 spec'd.
 
 ## Where to start
 
+**Setting it up (first time):**
+
+- [`docs/quickstart.md`](./docs/quickstart.md) — **start here.** One page, 10 steps, takes ~45 minutes.
+
 **Reading the design:**
 
 - [`FITT_ROADMAP.md`](./FITT_ROADMAP.md) — the outer shell. Guiding principles, phase sequencing, and draft specs for later phases.
 - [`FITT_PRD.md`](./FITT_PRD.md) — the original PRD that seeded the design.
-- [`.kiro/specs/phase1-gateway/`](./.kiro/specs/phase1-gateway/) — the first full Kiro-style spec (`requirements.md`, `design.md`, `tasks.md`). This is what gets implemented next.
+- [`.kiro/specs/phase1-gateway/`](./.kiro/specs/phase1-gateway/) — the first full Kiro-style spec (`requirements.md`, `design.md`, `tasks.md`).
 
-**Getting ready to run it:**
+**Reference (dive in as needed):**
 
-- [`docs/prerequisites.md`](./docs/prerequisites.md) — software to install on each machine (Tailscale, Ollama, Python, NSSM) and in what order.
-- [`docs/accounts-setup.md`](./docs/accounts-setup.md) — external accounts (OpenRouter, optional Anthropic, Telegram bot) and what keys to collect.
-- [`configs/config.example.yaml`](./configs/config.example.yaml) — copy to `~/.fitt/config.yaml` and edit.
-- [`configs/secrets.example.yaml`](./configs/secrets.example.yaml) — copy to `~/.fitt/secrets.yaml`, fill in keys, restrict permissions.
+- [`docs/prerequisites.md`](./docs/prerequisites.md) — software to install on each machine (Tailscale, Ollama, Python, NSSM).
+- [`docs/accounts-setup.md`](./docs/accounts-setup.md) — external accounts (OpenRouter, optional Anthropic, Telegram).
+- [`gateway/README.md`](./gateway/README.md) — full gateway reference (config, HTTP API, CLI, failure handling, troubleshooting).
+- [`configs/config.example.yaml`](./configs/config.example.yaml) and [`configs/secrets.example.yaml`](./configs/secrets.example.yaml) — template files you copy to `~/.fitt/`.
 
 ## Design commitments
 

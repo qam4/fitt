@@ -12,6 +12,13 @@ Anthropic optional) based on an alias the client asks for.
 
 ## Before you start
 
+First-time setup? Follow [`../docs/quickstart.md`](../docs/quickstart.md)
+end to end — it walks through Tailscale, Ollama, this gateway, and
+your IDE in ~45 minutes. This README is the reference for once you
+already have it running.
+
+If you prefer to work piece by piece:
+
 1. [`../docs/prerequisites.md`](../docs/prerequisites.md) — Tailscale,
    Ollama + `OLLAMA_HOST=0.0.0.0`, Python 3.11+, NSSM.
 2. [`../docs/accounts-setup.md`](../docs/accounts-setup.md) —
