@@ -1,0 +1,51 @@
+# Secrets — never commit
+secrets.yaml
+*.env
+.env
+
+# Local FITT runtime dir (if ever symlinked/copied in)
+.fitt/
+logs/
+*.log
+
+# Databases
+*.db
+*.sqlite*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Node (for future frontends)
+node_modules/
+.pnpm-store/
+
+# Models — too big for git
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# OS
+Thumbs.db
+desktop.ini
