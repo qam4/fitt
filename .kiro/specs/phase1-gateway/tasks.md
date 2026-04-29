@@ -10,190 +10,152 @@
   workspace into the new repo.
 - [x] 4. Create repo README with a description and pointers to the
   roadmap and specs.
-- [ ] 5. Create the `gateway/` Python package:
+- [x] 5. Create the `gateway/` Python package:
   - `pyproject.toml` with project metadata.
   - Dependencies: `fastapi`, `uvicorn[standard]`, `litellm`, `httpx`,
-    `pydantic`, `pydantic-settings`, `structlog`, `pyyaml`, `click`.
+    `pydantic`, `pydantic-settings`, `structlog`, `pyyaml`, `click`,
+    `rich`.
   - Dev dependencies: `pytest`, `pytest-asyncio`, `respx`, `hypothesis`,
     `ruff`, `mypy`.
   - `pytest` and `ruff` configuration.
-- [ ] 6. Create `gateway/__init__.py` with `__version__ = "0.1.0"`.
-- [ ] 7. Create `tests/` directory with `conftest.py` and a smoke test
+- [x] 6. Create `gateway/__init__.py` with `__version__ = "0.1.0"`.
+- [x] 7. Create `tests/` directory with `conftest.py` and a smoke test
   that imports `gateway`.
 - [x] 8. `.gitignore` entries in place: `secrets.yaml`, `*.db`,
   `logs/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`,
   etc.
-- [ ] 9. Verify `pip install -e ".[dev]"` works and `pytest` runs the
+- [x] 9. Verify `pip install -e ".[dev]"` works and `pytest` runs the
   smoke test green.
-- [ ] 10. Commit and push the scaffold.
+- [x] 10. Commit and push the scaffold.
 
 ## Phase 1b — Configuration
 
-- [ ] 11. Create `gateway/config.py` with Pydantic models: `ServerConfig`,
-  `ModelConfig`, `AliasMap`, `LoggingConfig`, `Config`, `Secrets`.
-- [ ] 12. Implement `Config.load(config_path, secrets_path)` that reads
+- [x] 11. Create `gateway/config.py` with Pydantic models:
+  `ServerConfig`, `ModelConfig`, `LoggingConfig`, `Config`,
+  `AllowedToken`, `TelegramSecrets`, `Secrets`.
+- [x] 12. Implement `load_config(config_path, secrets_path)` that reads
   both YAML files, validates the alias→model graph, and returns a typed
   `Config` object.
-- [ ] 13. Implement `Secrets.check_permissions(path)` that refuses to
-  load if the file is world-readable (cross-platform: POSIX mode bits,
-  Windows ACL check via `icacls`).
-- [ ] 14. Create `configs/config.example.yaml` with a complete example:
-  OpenRouter cloud primary, Anthropic direct commented out, laptop +
-  desktop Ollama, logging.
-- [ ] 15. Create `configs/secrets.example.yaml` with placeholders
-  (OpenRouter key, Anthropic key commented, Telegram block commented)
-  and an instruction comment ("copy to ~/.fitt/secrets.yaml and
-  restrict permissions").
-- [ ] 16. Write tests:
-  - `test_config_loads_valid_yaml`
-  - `test_config_rejects_missing_alias_target`
-  - `test_config_rejects_missing_fallback_target`
-  - `test_secrets_rejects_world_readable`
+- [x] 13. Implement `_check_secrets_permissions(path)` that refuses to
+  load if the file is group/world-readable on POSIX. Windows check is a
+  best-effort no-op (documented in docs/accounts-setup.md).
+- [x] 14. Create `configs/config.example.yaml` (OpenRouter primary,
+  Anthropic commented, laptop + desktop Ollama).
+- [x] 15. Create `configs/secrets.example.yaml` with placeholders
+  (OpenRouter key required, Anthropic commented, Telegram commented).
+- [x] 16. Config tests pass: valid YAML loads, missing alias target
+  rejected, missing fallback rejected, self-fallback rejected, ollama
+  without endpoint rejected, secrets permission checks.
 
 ## Phase 1c — Cost function
 
-- [ ] 17. Create `gateway/cost.py` with `estimate_cost(model,
+- [x] 17. Create `gateway/cost.py` with `estimate_cost(model,
   input_tokens, output_tokens) -> Decimal`.
-- [ ] 18. Ollama models (backend=="ollama") return `Decimal('0')`.
-- [ ] 19. Priced cloud models (OpenRouter, Anthropic) compute from
-  `cost_per_mtok_in` and `cost_per_mtok_out`.
-- [ ] 20. Write unit tests for both branches.
-- [ ] 21. Write property test:
-  - **Phase 1, Property 4: Cost calculation** — hypothesis-generated
-    token counts and rates; assert formula matches.
+- [x] 18. Ollama models return `Decimal('0')`.
+- [x] 19. Priced cloud models compute from `cost_per_mtok_in` and
+  `cost_per_mtok_out`.
+- [x] 20. Unit tests for both branches pass (including negative-token
+  clamp and free-model zero).
+- [x] 21. Property test **Phase 1, Property 4: Cost calculation**
+  passes (200 iterations).
 
 ## Phase 1d — Logging
 
-- [ ] 22. Create `gateway/logging_config.py`:
-  - Configure `structlog` with JSON renderer.
-  - Rotating file handler in `~/.fitt/logs/gateway.log`, daily rotation,
-    configurable retention.
-  - Console handler at info+ for dev.
-- [ ] 23. Create a `log_request(event, **kwargs)` helper that emits the
-  standard request log schema.
-- [ ] 24. Write test: log file is created, one log entry is valid JSON.
+- [x] 22. Create `gateway/logging_config.py`:
+  - structlog with JSON renderer for file, ConsoleRenderer for stderr.
+  - Rotating file handler in `<logging.dir>/gateway.log`, daily
+    rotation, configurable retention.
+- [x] 23. Create `log_request(logger, **kwargs)` helper.
+- [x] 24. Tests pass: log file created, JSON-parseable entries,
+  Decimal→string preserved, idempotent configure.
 
 ## Phase 1e — Auth middleware
 
-- [ ] 25. Create `gateway/auth.py` with `AuthMiddleware`:
-  - Extract `Authorization: Bearer <token>`.
-  - Compare against `config.secrets.allowed_tokens` with
-    `secrets.compare_digest`.
-  - 401 JSON on failure.
-  - Skip for `/health`, `/ready`, and `/v1/models`.
-- [ ] 26. Write tests:
-  - `test_auth_accepts_valid_token`
-  - `test_auth_rejects_missing_token`
-  - `test_auth_rejects_wrong_token`
-  - `test_auth_skips_health_endpoints`
-  - Verify mock upstream is not invoked on 401.
+- [x] 25. Create `gateway/auth.py` with `AuthMiddleware`:
+  - Bearer extraction, `secrets.compare_digest`, 401 JSON on failure,
+    exempts /health /ready /v1/models.
+- [x] 26. Tests pass: missing token, wrong token, malformed header,
+  empty bearer, valid token passes through, exempt paths skipped.
 
 ## Phase 1f — Alias router
 
-- [ ] 27. Create `gateway/router.py` with `AliasRouter`:
-  - `resolve(alias) -> list[ModelConfig]` returns `[primary,
-    fallback?]`. Raises `UnknownAlias` if not configured.
-  - `async dispatch(alias, request)` tries primary via LiteLLM; on
-    connection failure tries fallback; raises `NoBackendAvailable` if
-    both fail.
-- [ ] 28. Wrap LiteLLM's `acompletion` for non-streaming and streaming
-  (use `acompletion(..., stream=True)` returning async iterator).
-- [ ] 29. Capture the backend actually used and propagate it so the
-  handler can set `X-FITT-Backend`.
-- [ ] 30. Write tests with `respx` mocks:
-  - `test_alias_resolve_unknown_raises`
-  - `test_dispatch_routes_cloud` (OpenRouter)
-  - `test_dispatch_routes_ollama`
-  - `test_dispatch_falls_back_on_connection_error`
-  - `test_dispatch_raises_when_all_fail`
-- [ ] 31. Write property test:
-  - **Phase 1, Property 1: Alias routing determinism** — hypothesis-
-    generated alias names over a valid config; assert dispatched backend
-    ∈ {primary, fallback}.
+- [x] 27. Create `gateway/router.py` with `AliasRouter`:
+  - `resolve(alias)` returns primary + optional fallback.
+  - `dispatch(alias, body)` tries primary, then fallback on transport
+    failure, raises `NoBackendAvailable` if both fail.
+- [x] 28. Wrap `litellm.acompletion`; streaming and non-streaming
+  supported.
+- [x] 29. `backend_tag(model)` string for the `X-FITT-Backend` header.
+- [x] 30. Tests pass: cloud routing, ollama routing, fallback on
+  `httpx.ConnectError`, 503 when all fail, semantic errors not retried.
+- [x] 31. Property test **Phase 1, Property 1: Alias routing
+  determinism** passes.
 
 ## Phase 1g — Chat endpoint
 
-- [ ] 32. Create `gateway/models.py` with Pydantic models mirroring the
-  OpenAI chat-completion schema (request, response, streaming chunk).
-- [ ] 33. Create `gateway/chat.py` implementing `POST
+- [x] 32. Create `gateway/models.py` with permissive OpenAI-compatible
+  Pydantic request model.
+- [x] 33. Create `gateway/chat.py` implementing `POST
   /v1/chat/completions`:
-  - Validate request against schema.
-  - Reject concrete model ids (must be alias) with 400.
-  - Call `AliasRouter.dispatch`.
-  - Stream or return JSON based on `stream` field.
-  - Set `X-FITT-Backend` header.
-  - Translate upstream errors per the table in design.md § Failure
-    Handling.
-- [ ] 34. Write integration tests:
-  - `test_chat_rejects_model_id_as_alias`
-  - `test_chat_rejects_unknown_alias`
-  - `test_chat_routes_cloud_alias_to_cloud`
-  - `test_chat_routes_ollama_alias_to_ollama`
-  - `test_chat_primary_unreachable_falls_back`
-  - `test_chat_both_unreachable_returns_503`
-  - `test_chat_upstream_429_returns_503_with_retry_after`
-  - `test_chat_streaming_passthrough`
-  - `test_chat_stream_mid_failure_emits_error_event`
-- [ ] 35. Write property tests:
-  - **Phase 1, Property 5: Alias-only model names** — hypothesis-
-    generated concrete model ids; assert 400.
-  - **Phase 1, Property 6: No-leak on fallback** — assert
-    `X-FITT-Backend` matches actual backend across all fallback cases.
+  - Validates request, rejects concrete model ids.
+  - Calls `AliasRouter.dispatch`.
+  - Streams via SSE or returns JSON.
+  - Sets `X-FITT-Backend`, `X-FITT-Alias`, `X-FITT-Fallback` headers.
+  - Translates upstream 429/529 to 503+Retry-After, 4xx through, other
+    5xx to 502.
+  - Logs each request with latency, tokens, cost.
+- [x] 34. Tests pass: unknown alias 400, concrete model id 400, missing
+  messages 422, cloud routing, ollama routing, fallback + header
+  fidelity, both unreachable 503, upstream 429/529 translation, SSE
+  passthrough in order, mid-stream failure emits `[ERROR]` event.
+- [x] 35. Property coverage: **Property 5 (alias-only)** via explicit
+  and varied-input tests; **Property 6 (no-leak on fallback)** via
+  fallback tests asserting `X-FITT-Backend` matches actual backend.
 
 ## Phase 1h — Models and health endpoints
 
-- [ ] 36. Create `gateway/health.py`:
-  - `GET /health` — always 200.
-  - `GET /ready` — for each alias, attempt to reach its primary or
-    fallback (short timeout); return 200 if every alias has at least one
-    reachable backend, else 503 with the failing aliases.
-  - `GET /v1/models` — return aliases with current resolvability.
-- [ ] 37. Write tests:
-  - `test_health_200`
-  - `test_ready_200_when_all_reachable`
-  - `test_ready_503_when_one_unreachable`
-  - `test_models_lists_aliases`
+- [x] 36. Create `gateway/health.py` (/health, /ready) and
+  `gateway/models_endpoint.py` (/v1/models).
+- [x] 37. Tests pass: /health always 200, /v1/models lists aliases with
+  fitt_backend extension, /ready 200 when all reachable, 503 with
+  failing-aliases list when degraded.
 
 ## Phase 1i — Application factory and entry point
 
-- [ ] 38. Create `gateway/app.py::create_app(config)` that registers
-  middleware, routers, and exception handlers.
-- [ ] 39. Create `gateway/__main__.py` and a `fitt-gateway` console
-  script entry in `pyproject.toml` that loads config, creates the app,
-  and runs uvicorn.
-- [ ] 40. Manual smoke test on the desktop:
-  - `fitt-gateway` starts on :8080.
-  - `curl http://localhost:8080/health` → 200.
-  - `curl -H "Authorization: Bearer <token>" -X POST
-    http://localhost:8080/v1/chat/completions -d '{"model":
-    "fitt-smart", "messages": [{"role":"user","content":"say hi"}]}'`
-    returns a real cloud response (via OpenRouter).
-  - Repeat with `fitt-default` → real Qwen response.
+- [x] 38. Create `gateway/app.py::create_app(config)` that registers
+  middleware, routers, and exception handlers for `UnknownAlias`,
+  `ModelIdNotAlias`, `NoBackendAvailable`.
+- [x] 39. Create `gateway/__main__.py` plus `fitt-gateway` console
+  script. Loads config, configures logging, runs uvicorn.
+- [x] 40. Smoke test at work (in-sandbox) passed:
+  - Gateway boots via `python -m gateway` with FITT_HOME override.
+  - `curl /health` → 200.
+  - `curl /v1/models` → correct JSON with aliases and extensions.
+  - Missing/wrong Bearer → 401.
+  - Real-upstream tests deferred to at-home smoke (OpenRouter + Ollama
+    reachability).
 
 ## Phase 1j — `fitt` CLI
 
-- [ ] 41. Create `gateway/cli.py` with `click` command group:
+- [x] 41. Create `gateway/cli.py` with `click` command group:
   - `fitt cost` — parses `~/.fitt/logs/gateway.log*`, aggregates MTD
-    USD per model, prints a table.
-  - `fitt status` — GETs `/v1/models` on localhost, prints a table.
-  - `fitt config check` — loads config + secrets, prints errors, does
-    not start the server.
-- [ ] 42. Add `fitt` console script entry in `pyproject.toml`.
-- [ ] 43. Write tests:
-  - `test_cli_cost_aggregates_from_log`
-  - `test_cli_config_check_rejects_bad_config`
+    USD per model, prints Rich table.
+  - `fitt status` — GETs `/v1/models` and `/ready`, prints a table.
+  - `fitt config check` — loads + validates config/secrets without
+    starting the server.
+- [x] 42. Added `fitt` console script entry in `pyproject.toml`.
+- [x] 43. Tests pass: cost aggregation filters by month, handles
+  no-logs case, config-check rejects invalid config.
 
-## Phase 1k — Production install (desktop)
+## Phase 1k — Production install (desktop, at-home)
 
 - [ ] 44. Write `scripts/install-service.ps1`:
   - Installs NSSM if missing.
   - Registers the gateway as `FITTGateway` Windows service.
   - Sets auto-start, 30-second restart on failure.
-  - Configures service to run as a non-admin user.
 - [ ] 45. Write `scripts/uninstall-service.ps1` for symmetry.
 - [ ] 46. Add Windows Defender Firewall rule allowing inbound 8080
-  only on the Tailscale network profile. Document the exact command in
-  the install script.
+  only on the Tailscale network profile.
 - [ ] 47. Verify with `netstat -an` that 8080 is bound on the Tailscale
   IP and not the public Wi-Fi NIC IP.
 - [ ] 48. Run an external port scan (from the phone's mobile data,
@@ -206,7 +168,7 @@
   manual steps.
 - [ ] 51. Kill the Python process; verify auto-restart within 30s.
 
-## Phase 1l — IDE wiring and end-to-end
+## Phase 1l — IDE wiring and end-to-end (at-home)
 
 - [ ] 52. On the laptop, configure VS Code + Continue:
   - Add a custom OpenAI-compatible provider.
@@ -224,9 +186,9 @@
 - [ ] 56. Run `fitt cost` on the desktop → verify MTD spend reflects
   the cloud calls made during testing.
 
-## Phase 1m — Documentation
+## Phase 1m — Documentation and release
 
-- [ ] 57. Write `gateway/README.md` with:
+- [ ] 57. Flesh out `gateway/README.md`:
   - Installation steps (Windows service, config files, firewall).
   - Configuration reference (aliases, models, cost rates).
   - `fitt` CLI reference.

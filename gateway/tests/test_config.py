@@ -1,0 +1,233 @@
+"""Tests for config and secrets loading.
+
+Covers Phase 1 acceptance criteria 2.4, 2.6, 3.6 and the spec's
+unit-test list for config + secrets.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from textwrap import dedent
+
+import pytest
+
+from gateway.config import (
+    Config,
+    Secrets,
+    default_config_path,
+    default_secrets_path,
+    load_config,
+    load_secrets,
+)
+from gateway.errors import ConfigError, SecretsPermissionError
+
+# --------------------------------------------------------------- helpers
+
+
+def _valid_config_yaml() -> str:
+    return dedent(
+        """
+        server:
+          host: 0.0.0.0
+          port: 8080
+          log_level: info
+
+        aliases:
+          fitt-default: qwen-coder-big
+          fitt-smart:   openrouter-sonnet
+          fitt-fast:    qwen-coder-small
+
+        models:
+          - id: openrouter-sonnet
+            backend: openrouter
+            model: anthropic/claude-sonnet-4.5
+            cost_per_mtok_in:  3.00
+            cost_per_mtok_out: 15.00
+
+          - id: qwen-coder-big
+            backend: ollama
+            endpoint: http://localhost:11434
+            model: qwen2.5-coder:14b
+            fallback: qwen-coder-small
+
+          - id: qwen-coder-small
+            backend: ollama
+            endpoint: http://localhost:11434
+            model: qwen2.5-coder:7b
+
+        logging:
+          dir: /tmp/fitt-logs
+          retention_days: 30
+        """
+    ).strip()
+
+
+def _valid_secrets_yaml() -> str:
+    return dedent(
+        """
+        allowed_tokens:
+          - name: personal
+            token: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+        openrouter_api_key: sk-or-test-123
+        """
+    ).strip()
+
+
+def _write(path: Path, content: str, *, secure: bool = False) -> Path:
+    path.write_text(content, encoding="utf-8")
+    if secure and os.name != "nt":
+        path.chmod(0o600)
+    return path
+
+
+# --------------------------------------------------------------- config tests
+
+
+def test_config_loads_valid_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cp = _write(tmp_path / "config.yaml", _valid_config_yaml())
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+
+    cfg = load_config(cp, sp)
+    assert isinstance(cfg, Config)
+    assert cfg.server.port == 8080
+    assert set(cfg.alias_names()) == {"fitt-default", "fitt-smart", "fitt-fast"}
+    assert cfg.secrets is not None
+    assert cfg.secrets.openrouter_api_key == "sk-or-test-123"
+
+
+def test_config_rejects_missing_alias_target(tmp_path: Path) -> None:
+    # fitt-smart points at a non-existent model id
+    bad = _valid_config_yaml().replace("openrouter-sonnet", "does-not-exist", 1)
+    cp = _write(tmp_path / "config.yaml", bad)
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(cp, sp)
+    assert "does-not-exist" in str(exc.value)
+
+
+def test_config_rejects_missing_fallback_target(tmp_path: Path) -> None:
+    bad = _valid_config_yaml().replace("fallback: qwen-coder-small", "fallback: not-a-real-id")
+    cp = _write(tmp_path / "config.yaml", bad)
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(cp, sp)
+    assert "not-a-real-id" in str(exc.value)
+
+
+def test_config_rejects_self_fallback(tmp_path: Path) -> None:
+    bad = _valid_config_yaml().replace("fallback: qwen-coder-small", "fallback: qwen-coder-big")
+    cp = _write(tmp_path / "config.yaml", bad)
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(cp, sp)
+    assert "fallback" in str(exc.value)
+
+
+def test_config_rejects_ollama_without_endpoint(tmp_path: Path) -> None:
+    # Strip the `endpoint: ...` line from the first ollama model.
+    lines = _valid_config_yaml().splitlines()
+    filtered = []
+    dropped = False
+    for line in lines:
+        if not dropped and "endpoint: http://localhost:11434" in line:
+            dropped = True
+            continue
+        filtered.append(line)
+    assert dropped, "test fixture sanity: endpoint line should have been present"
+    bad = "\n".join(filtered)
+
+    cp = _write(tmp_path / "config.yaml", bad)
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(cp, sp)
+    assert "endpoint" in str(exc.value)
+
+
+def test_config_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError) as exc:
+        load_config(tmp_path / "does-not-exist.yaml", load_secrets_too=False)
+    assert "not found" in str(exc.value)
+
+
+def test_alias_resolution_with_fallback(tmp_path: Path) -> None:
+    cp = _write(tmp_path / "config.yaml", _valid_config_yaml())
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+    cfg = load_config(cp, sp)
+
+    chain = cfg.resolve_alias("fitt-default")
+    assert [m.id for m in chain] == ["qwen-coder-big", "qwen-coder-small"]
+
+
+def test_alias_resolution_without_fallback(tmp_path: Path) -> None:
+    cp = _write(tmp_path / "config.yaml", _valid_config_yaml())
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+    cfg = load_config(cp, sp)
+
+    chain = cfg.resolve_alias("fitt-smart")
+    assert [m.id for m in chain] == ["openrouter-sonnet"]
+
+
+def test_alias_resolve_unknown_raises(tmp_path: Path) -> None:
+    cp = _write(tmp_path / "config.yaml", _valid_config_yaml())
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+    cfg = load_config(cp, sp)
+
+    with pytest.raises(KeyError):
+        cfg.resolve_alias("fitt-bogus")
+
+
+# --------------------------------------------------------------- secrets tests
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission check only")
+def test_secrets_rejects_world_readable(tmp_path: Path) -> None:
+    sp = tmp_path / "secrets.yaml"
+    sp.write_text(_valid_secrets_yaml(), encoding="utf-8")
+    sp.chmod(0o644)  # readable by others
+
+    with pytest.raises(SecretsPermissionError):
+        load_secrets(sp)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission check only")
+def test_secrets_accepts_0600(tmp_path: Path) -> None:
+    sp = tmp_path / "secrets.yaml"
+    sp.write_text(_valid_secrets_yaml(), encoding="utf-8")
+    sp.chmod(0o600)
+
+    secrets = load_secrets(sp)
+    assert isinstance(secrets, Secrets)
+
+
+def test_secrets_api_key_lookup(tmp_path: Path) -> None:
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+    secrets = load_secrets(sp)
+    assert secrets.api_key_for("openrouter") == "sk-or-test-123"
+    assert secrets.api_key_for("anthropic") is None
+    assert secrets.api_key_for("ollama") is None
+
+
+# ------------------------------------------------------------ default path tests
+
+
+def test_default_paths_respect_fitt_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FITT_HOME", str(tmp_path))
+    assert default_config_path() == tmp_path / "config.yaml"
+    assert default_secrets_path() == tmp_path / "secrets.yaml"
+
+
+def test_default_paths_respect_explicit_envs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    custom_cfg = tmp_path / "other.yaml"
+    custom_secrets = tmp_path / "s.yaml"
+    monkeypatch.setenv("FITT_CONFIG_PATH", str(custom_cfg))
+    monkeypatch.setenv("FITT_SECRETS_PATH", str(custom_secrets))
+    assert default_config_path() == custom_cfg
+    assert default_secrets_path() == custom_secrets
