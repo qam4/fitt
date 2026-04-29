@@ -42,9 +42,10 @@
             │                   │                  │
             ▼                   ▼                  ▼
    ┌────────────────┐   ┌─────────────────┐  ┌────────────────┐
-   │ Anthropic API  │   │ Ollama @ laptop │  │ Ollama @       │
-   │ (Sonnet, Opus) │   │ (Qwen 14B)      │  │ desktop        │
-   │                │   │ via Tailscale   │  │ (Qwen 7B)      │
+   │ OpenRouter     │   │ Ollama @ laptop │  │ Ollama @       │
+   │ (free + paid)  │   │ (Qwen 14B)      │  │ desktop        │
+   │ Anthropic etc. │   │ via Tailscale   │  │ (Qwen 7B)      │
+   │ (disabled)     │   │                 │  │                │
    └────────────────┘   └─────────────────┘  └────────────────┘
 ```
 
@@ -53,13 +54,14 @@
 ### Decision 1: LiteLLM as the dispatcher
 
 LiteLLM handles the OpenAI-compatible shape in and out, and natively
-supports Anthropic and Ollama. This removes the need to write per-backend
-client code. Cost: an extra dependency. Benefit: when a new backend
-matters (Gemini, Bedrock, vLLM), it's a config line.
+supports OpenRouter, Anthropic, Google Gemini, Ollama, and dozens of
+other providers. This removes the need to write per-backend client code.
+Cost: an extra dependency. Benefit: when a new backend matters (new
+cloud provider, vLLM, a self-hosted Llama), it's a config line.
 
-Alternative considered: hit Anthropic SDK and Ollama HTTP directly. More
-code, more places to fix when the OpenAI schema drifts, no real benefit.
-Rejected.
+Alternative considered: hit provider SDKs and Ollama HTTP directly.
+More code, more places to fix when the OpenAI schema drifts, no real
+benefit. Rejected.
 
 ### Decision 2: Aliases separate from model IDs
 
@@ -68,16 +70,17 @@ aliases to concrete models. When Qwen 3 Coder ships, update one config
 line; every client gets the upgrade.
 
 The discipline matters: **no client ever sends `model: qwen2.5-coder:14b`
-or `model: claude-sonnet-4-5` directly.** This is enforced by the router
-— concrete model IDs in the request field are rejected.
+or `model: openrouter/anthropic/claude-sonnet-4.5` directly.** This is
+enforced by the router — concrete model IDs in the request field are
+rejected.
 
 ### Decision 3: No database in Phase 1
 
 The original PRD draft included a SQLite usage DB and a cost-cap
 middleware. Cut. Reasons:
 
-- Anthropic console has a built-in per-key monthly spend cap. That's the
-  real safety net.
+- OpenRouter and Anthropic each have built-in per-key monthly spend
+  caps set in their own dashboards. Those are the real safety net.
 - Logs with per-request cost + a `fitt cost` CLI that reads them gives
   you visibility without a DB.
 - Every subsystem is a subsystem to maintain.
@@ -108,14 +111,14 @@ Phase 10 can migrate to Docker if the service surface grows.
 ### Decision 6: Single-level fallback only
 
 `fitt-default` → `qwen-coder-big` (laptop), fallback → `qwen-coder-small`
-(desktop). That's it. No cascade beyond one level, no "try Claude if both
-Ollamas are down." Reasons:
+(desktop). That's it. No cascade beyond one level, no "try OpenRouter
+if both Ollamas are down." Reasons:
 
 - The common failure mode is "laptop is asleep." One-level fallback
   handles it.
 - Multi-level chains tempt implicit costly failovers (Qwen dies →
-  suddenly you're spending Claude money). Explicit per-request alias
-  choice is safer.
+  suddenly you're spending cloud money without asking). Explicit
+  per-request alias choice is safer.
 
 ## Module Design
 
@@ -201,9 +204,9 @@ Used by the logger. Never written to disk separately — the log is the DB.
     "ts": "2026-04-29T20:12:34Z",
     "event": "chat.completion",
     "alias": "fitt-smart",
-    "model": "claude-sonnet-4-5",
-    "backend": "anthropic",
-    "backend_actual": "anthropic",
+    "model": "openrouter/anthropic/claude-sonnet-4.5",
+    "backend": "openrouter",
+    "backend_actual": "openrouter",
     "latency_ms": 1420,
     "input_tokens": 532,
     "output_tokens": 284,
@@ -240,7 +243,12 @@ v0 subcommands:
 
 ## Configuration Format
 
-`~/.fitt/config.yaml`:
+The repo contains `configs/config.example.yaml` and
+`configs/secrets.example.yaml` as templates. Users copy these to
+`~/.fitt/config.yaml` and `~/.fitt/secrets.yaml` and fill in their
+values. The repo never contains real values.
+
+**`~/.fitt/config.yaml`** (non-secret, user-specific):
 
 ```yaml
 server:
@@ -249,30 +257,43 @@ server:
   log_level: info
   log_bodies: false          # flip to true for debug
 
+# Aliases: logical role names clients ask for.
+# Swapping the underlying model is a config-only change.
 aliases:
-  fitt-default: qwen-coder-big
-  fitt-smart:   claude-sonnet
-  fitt-fast:    qwen-coder-small
+  fitt-default: qwen-coder-big      # everyday coding turns (local)
+  fitt-smart:   openrouter-sonnet   # hard turns (cloud)
+  fitt-fast:    qwen-coder-small    # cheap helpers (local)
 
+# Concrete models. `backend` + `model` map to LiteLLM's provider naming.
 models:
-  - id: claude-sonnet
-    backend: anthropic
-    model: claude-sonnet-4-5
+  # --- Cloud: OpenRouter (primary cloud backend, free-tier friendly) ---
+  - id: openrouter-sonnet
+    backend: openrouter
+    model: anthropic/claude-sonnet-4.5      # via OpenRouter
     cost_per_mtok_in:  3.00
     cost_per_mtok_out: 15.00
 
-  - id: claude-opus
-    backend: anthropic
-    model: claude-opus-4-5
-    cost_per_mtok_in:  15.00
-    cost_per_mtok_out: 75.00
+  - id: openrouter-qwen-free
+    backend: openrouter
+    model: qwen/qwen-2.5-coder-32b-instruct:free
+    cost_per_mtok_in:  0
+    cost_per_mtok_out: 0
 
+  # --- Cloud: direct Anthropic (disabled by default; uncomment to use) ---
+  # - id: claude-sonnet-direct
+  #   backend: anthropic
+  #   model: claude-sonnet-4-5
+  #   cost_per_mtok_in:  3.00
+  #   cost_per_mtok_out: 15.00
+
+  # --- Local: Ollama on laptop (primary local backend) ---
   - id: qwen-coder-big
     backend: ollama
-    endpoint: http://100.x.y.z:11434   # laptop Tailscale IP
+    endpoint: http://100.x.y.z:11434        # laptop Tailscale IP
     model: qwen2.5-coder:14b
     fallback: qwen-coder-small
 
+  # --- Local: Ollama on desktop (fallback for laptop-asleep case) ---
   - id: qwen-coder-small
     backend: ollama
     endpoint: http://localhost:11434
@@ -283,14 +304,33 @@ logging:
   retention_days: 30
 ```
 
-`~/.fitt/secrets.yaml` (mode 0600, never in git):
+**`~/.fitt/secrets.yaml`** (mode 0600, never in git):
 
 ```yaml
-anthropic_api_key: sk-ant-xxx
+# --- Gateway-facing: tokens clients present to FITT ---
 allowed_tokens:
   - name: personal
     token: <long random string, 32+ chars>
+
+# --- Outbound: keys FITT uses when calling upstreams ---
+openrouter_api_key: sk-or-v1-xxxxxxxxxxxxx
+
+# Anthropic: uncomment if you enable a direct Anthropic model above.
+# anthropic_api_key: sk-ant-xxxxxxxxxxxxx
+
+# --- Telegram (reserved for Phase 3; unused in Phase 1) ---
+# Populate now if you want to touch this file only once.
+# telegram:
+#   bot_token: 123456:ABC-xxxxxxxxxxxxx
+#   allowlist_user_ids:
+#     - 123456789   # your Telegram user ID; see @userinfobot
 ```
+
+**LiteLLM provider naming**: `backend: openrouter` means model strings
+follow `openrouter/<provider>/<model>` format, which LiteLLM resolves to
+the OpenRouter API. `backend: anthropic` uses LiteLLM's `anthropic/`
+prefix. `backend: ollama` uses `ollama/<model>` with the `endpoint` set
+as the base URL.
 
 ## Tools and Dependencies
 
@@ -321,9 +361,10 @@ Dev:
   on failure.
 - Bearer tokens: 32+ characters, generated with `secrets.token_urlsafe`.
   Compared with `secrets.compare_digest`.
-- Anthropic API key never logged. Token counts and alias names logged;
-  bodies only with explicit opt-in.
-- Anthropic spend cap set in the Anthropic console on the API key — the
+- All cloud API keys (OpenRouter, Anthropic) never logged. Token counts
+  and alias names logged; bodies only with explicit opt-in.
+- Per-provider spend caps set in each provider's dashboard
+  (OpenRouter's credit balance, Anthropic's console spend limit) — the
   authoritative limit.
 
 ## Failure Handling (explicit behaviors)
@@ -334,7 +375,7 @@ Dev:
 | Backend HTTP 200 non-stream | Passthrough as JSON |
 | Backend connection refused / timeout | Try fallback; if fallback also fails, 503 with body |
 | Backend HTTP 429 (rate limited) | 503 + `Retry-After: <seconds>` |
-| Backend HTTP 529 (Claude overloaded) | 503 + `Retry-After: 30` |
+| Backend HTTP 529 (vendor overloaded) | 503 + `Retry-After: 30` |
 | Backend HTTP 5xx (other) | 502 + body preserving upstream message |
 | Backend HTTP 4xx (bad request) | Pass through with same status |
 | Mid-stream connection drop | Terminate stream with `[ERROR]` SSE event |
@@ -415,13 +456,13 @@ request, not the primary.
 
 ### Integration Tests (with mocked upstreams via `respx`)
 
-- `test_chat_routes_anthropic_alias_to_anthropic` — mock Anthropic,
-  verify hit.
+- `test_chat_routes_cloud_alias_to_cloud` — mock OpenRouter, verify
+  hit.
 - `test_chat_routes_ollama_alias_to_ollama` — mock Ollama, verify hit.
 - `test_chat_primary_unreachable_falls_back` — primary 503, fallback
   200; response has `X-FITT-Backend` = fallback.
 - `test_chat_both_unreachable_returns_503` — both 503; response 503.
-- `test_chat_upstream_429_returns_503_with_retry_after` — Anthropic
+- `test_chat_upstream_429_returns_503_with_retry_after` — OpenRouter
   returns 429; gateway returns 503 + Retry-After.
 - `test_chat_streaming_passthrough` — mock streaming; verify byte
   sequence.
@@ -441,9 +482,9 @@ request, not the primary.
 
 ### Manual / Smoke Tests (post-install)
 
-- From laptop: `curl -H "Authorization: Bearer <token>" ...` — round-trip
-  a real Claude call, a real Ollama call, and verify the
-  `X-FITT-Backend` header.
+- From laptop: `curl -H "Authorization: Bearer <token>" ...` —
+  round-trip a real cloud call (OpenRouter), a real Ollama call, and
+  verify the `X-FITT-Backend` header.
 - From phone (Tailscale): same `curl`, confirm reachability over the
   mesh.
 - External port scan from outside Tailscale: confirm 8080 closed.

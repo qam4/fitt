@@ -12,11 +12,12 @@ This roadmap is both the outer shell **and** the draft specs. Each phase contain
 2. **Spec-driven from Phase 1 onward.** Manual bootstrap stops when the LLM can follow specs. After that, every phase is written as a Kiro spec.
 3. **Use mature tools; don't reinvent.** LiteLLM, Ollama, Tailscale, FastAPI, Anthropic SDK, MCP where they fit. Build the integration, not the components.
 4. **Each phase leaves something usable.** Not "foundational work for later phases." Each phase is demoable on its own.
-5. **Claude for hard turns, local for the rest.** No local-only purity. The goal is escaping *limits*, not eliminating cloud entirely.
+5. **Claude (or any cloud model) for hard turns, local for the rest.** No local-only purity. The goal is escaping *limits*, not eliminating cloud entirely.
 6. **Security scales with risk.** Read-only tools: relaxed. Shell and filesystem writes: approval-gated. Home-automation and external comms: hard deny-list + audit.
 7. **Models are configuration, not architecture.** LLMs improve monthly. The design never couples to a specific model — clients name logical roles (`fitt-default`, `fitt-smart`), config binds roles to current best-in-class models. Swapping is a config edit.
 8. **The agent is honest about its capabilities.** When a request requires a tool the agent doesn't have, it explicitly says what's missing and recommends how to add it. Hallucinating an action, or silently producing a lesser answer when a tool would have given a better one, is a bug.
 9. **Live with it before extending it.** After each phase ships, use FITT for at least two weeks before starting the next phase. Your real pain points — not the roadmap's assumptions — drive what comes next. This is the single biggest protection against building features you won't use.
+10. **Shareable by construction.** No personal info, machine-specific paths, or secrets ever land in the repo. The repo contains code + `.example` templates; every user brings their own `~/.fitt/config.yaml`, `~/.fitt/secrets.yaml`, and `~/.fitt/` runtime directory. When someone else decides to try FITT, they should need only: clone, install, copy templates, fill in their values. Zero code edits to "make it about me."
 
 ---
 

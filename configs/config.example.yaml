@@ -1,0 +1,91 @@
+# FITT Gateway — example configuration
+#
+# Copy this file to ~/.fitt/config.yaml and edit with your values.
+# Do NOT put secrets (API keys, tokens) in this file — those go in
+# ~/.fitt/secrets.yaml.
+#
+# Design principle: clients name *aliases* like `fitt-smart`, never
+# concrete model IDs. Swapping models is a config-only change.
+
+server:
+  # Binding host. 0.0.0.0 + OS firewall rule restricting to the
+  # Tailscale interface is the recommended setup.
+  host: 0.0.0.0
+  port: 8080
+  log_level: info
+  # log_bodies: true enables request/response body logging for debug.
+  # Default is false — bodies contain user prompts, keep them out of
+  # the log in normal operation.
+  log_bodies: false
+
+# ------------------------------------------------------------------
+# Aliases
+# ------------------------------------------------------------------
+# Logical role names that clients ask for. Every client (IDE, phone,
+# future Telegram bot) names one of these; the router resolves each
+# alias to the `models:` entry below.
+aliases:
+  fitt-default: qwen-coder-big      # everyday coding turns (local)
+  fitt-smart:   openrouter-sonnet   # hard turns (cloud)
+  fitt-fast:    qwen-coder-small    # cheap helpers (local)
+
+# ------------------------------------------------------------------
+# Models
+# ------------------------------------------------------------------
+# Each entry is a concrete model configuration. `id` is referenced by
+# aliases and by `fallback`. `backend` + `model` map to LiteLLM's
+# provider naming convention.
+models:
+
+  # --- Cloud: OpenRouter (primary cloud backend) ---
+  # OpenRouter proxies many providers through one API key and supports
+  # free-tier models. Get a key at https://openrouter.ai/keys.
+  #
+  # Free alternative model example (no cost): comment out the paid
+  # Sonnet and change the alias target to `openrouter-qwen-free`.
+
+  - id: openrouter-sonnet
+    backend: openrouter
+    model: anthropic/claude-sonnet-4.5   # via OpenRouter
+    cost_per_mtok_in:  3.00
+    cost_per_mtok_out: 15.00
+
+  - id: openrouter-qwen-free
+    backend: openrouter
+    model: qwen/qwen-2.5-coder-32b-instruct:free
+    cost_per_mtok_in:  0
+    cost_per_mtok_out: 0
+
+  # --- Cloud: direct Anthropic (disabled by default) ---
+  # Uncomment the block below AND add `anthropic_api_key` to
+  # secrets.yaml if you want to hit Anthropic directly (usually only
+  # worth it for prompt caching or enterprise features).
+  #
+  # - id: claude-sonnet-direct
+  #   backend: anthropic
+  #   model: claude-sonnet-4-5
+  #   cost_per_mtok_in:  3.00
+  #   cost_per_mtok_out: 15.00
+
+  # --- Local: Ollama on the laptop (high-VRAM compute) ---
+  # Replace 100.x.y.z with your laptop's Tailscale IP.
+  # `ollama` must be running and `OLLAMA_HOST=0.0.0.0` set on the
+  # laptop so the desktop can reach it.
+  - id: qwen-coder-big
+    backend: ollama
+    endpoint: http://100.x.y.z:11434
+    model: qwen2.5-coder:14b
+    fallback: qwen-coder-small
+
+  # --- Local: Ollama on the desktop (always-on fallback) ---
+  - id: qwen-coder-small
+    backend: ollama
+    endpoint: http://localhost:11434
+    model: qwen2.5-coder:7b
+
+# ------------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------------
+logging:
+  dir: ~/.fitt/logs
+  retention_days: 30

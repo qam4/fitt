@@ -2,14 +2,14 @@
 
 ## Phase 1a — Repo and Scaffold
 
-- [ ] 1. Create private GitHub repo `home-ai-cluster` (or chosen name).
-  On the desktop, clone it locally.
-- [ ] 2. Move `FITT_ROADMAP.md` and the PRD (rename to `FITT_PRD.md`)
+- [x] 1. Create private GitHub repo `home-ai-cluster`. On the desktop,
+  clone it locally.
+- [x] 2. Move `FITT_ROADMAP.md` and the PRD (rename to `FITT_PRD.md`)
   from the chess-coaching workspace into the new repo root.
-- [ ] 3. Copy `.kiro/specs/phase1-gateway/` from the chess-coaching
+- [x] 3. Copy `.kiro/specs/phase1-gateway/` from the chess-coaching
   workspace into the new repo.
-- [ ] 4. Create repo README with one-line description and a pointer to
-  `FITT_ROADMAP.md`.
+- [x] 4. Create repo README with a description and pointers to the
+  roadmap and specs.
 - [ ] 5. Create the `gateway/` Python package:
   - `pyproject.toml` with project metadata.
   - Dependencies: `fastapi`, `uvicorn[standard]`, `litellm`, `httpx`,
@@ -20,8 +20,9 @@
 - [ ] 6. Create `gateway/__init__.py` with `__version__ = "0.1.0"`.
 - [ ] 7. Create `tests/` directory with `conftest.py` and a smoke test
   that imports `gateway`.
-- [ ] 8. Add `.gitignore` entries: `~/.fitt`, `secrets.yaml`, `*.db`,
-  `logs/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`.
+- [x] 8. `.gitignore` entries in place: `secrets.yaml`, `*.db`,
+  `logs/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`,
+  etc.
 - [ ] 9. Verify `pip install -e ".[dev]"` works and `pytest` runs the
   smoke test green.
 - [ ] 10. Commit and push the scaffold.
@@ -36,11 +37,13 @@
 - [ ] 13. Implement `Secrets.check_permissions(path)` that refuses to
   load if the file is world-readable (cross-platform: POSIX mode bits,
   Windows ACL check via `icacls`).
-- [ ] 14. Create `configs/config.example.yaml` with a complete example
-  (aliases, Claude + two Ollama models, logging).
-- [ ] 15. Create `configs/secrets.example.yaml` with placeholders and
-  an instruction comment ("copy to ~/.fitt/secrets.yaml and restrict
-  permissions").
+- [ ] 14. Create `configs/config.example.yaml` with a complete example:
+  OpenRouter cloud primary, Anthropic direct commented out, laptop +
+  desktop Ollama, logging.
+- [ ] 15. Create `configs/secrets.example.yaml` with placeholders
+  (OpenRouter key, Anthropic key commented, Telegram block commented)
+  and an instruction comment ("copy to ~/.fitt/secrets.yaml and
+  restrict permissions").
 - [ ] 16. Write tests:
   - `test_config_loads_valid_yaml`
   - `test_config_rejects_missing_alias_target`
@@ -52,8 +55,8 @@
 - [ ] 17. Create `gateway/cost.py` with `estimate_cost(model,
   input_tokens, output_tokens) -> Decimal`.
 - [ ] 18. Ollama models (backend=="ollama") return `Decimal('0')`.
-- [ ] 19. Anthropic models compute from `cost_per_mtok_in` and
-  `cost_per_mtok_out`.
+- [ ] 19. Priced cloud models (OpenRouter, Anthropic) compute from
+  `cost_per_mtok_in` and `cost_per_mtok_out`.
 - [ ] 20. Write unit tests for both branches.
 - [ ] 21. Write property test:
   - **Phase 1, Property 4: Cost calculation** — hypothesis-generated
@@ -99,7 +102,7 @@
   handler can set `X-FITT-Backend`.
 - [ ] 30. Write tests with `respx` mocks:
   - `test_alias_resolve_unknown_raises`
-  - `test_dispatch_routes_anthropic`
+  - `test_dispatch_routes_cloud` (OpenRouter)
   - `test_dispatch_routes_ollama`
   - `test_dispatch_falls_back_on_connection_error`
   - `test_dispatch_raises_when_all_fail`
@@ -124,7 +127,7 @@
 - [ ] 34. Write integration tests:
   - `test_chat_rejects_model_id_as_alias`
   - `test_chat_rejects_unknown_alias`
-  - `test_chat_routes_anthropic_alias_to_anthropic`
+  - `test_chat_routes_cloud_alias_to_cloud`
   - `test_chat_routes_ollama_alias_to_ollama`
   - `test_chat_primary_unreachable_falls_back`
   - `test_chat_both_unreachable_returns_503`
@@ -164,7 +167,7 @@
   - `curl -H "Authorization: Bearer <token>" -X POST
     http://localhost:8080/v1/chat/completions -d '{"model":
     "fitt-smart", "messages": [{"role":"user","content":"say hi"}]}'`
-    returns a real Claude response.
+    returns a real cloud response (via OpenRouter).
   - Repeat with `fitt-default` → real Qwen response.
 
 ## Phase 1j — `fitt` CLI
@@ -196,8 +199,9 @@
 - [ ] 48. Run an external port scan (from the phone's mobile data,
   outside Tailscale) against the desktop's public IP; confirm 8080
   closed.
-- [ ] 49. Set an Anthropic-console spend cap on the API key (the
-  authoritative limit).
+- [ ] 49. Set a per-provider spend cap in the provider dashboard
+  (OpenRouter credit balance as a hard ceiling; Anthropic console spend
+  limit if/when direct Anthropic is enabled).
 - [ ] 50. Reboot desktop; verify gateway reachable within 60s without
   manual steps.
 - [ ] 51. Kill the Python process; verify auto-restart within 30s.
@@ -210,15 +214,15 @@
   - API key: the Bearer token.
   - Models: `fitt-default`, `fitt-smart`, `fitt-fast`.
 - [ ] 53. In Continue's chat, send a short message using `fitt-smart`
-  → verify Claude responds, check `X-FITT-Backend: anthropic` in the
-  network tab.
+  → verify the cloud model responds, check `X-FITT-Backend: openrouter`
+  (or the configured cloud backend).
 - [ ] 54. Send a message using `fitt-default` → verify Qwen responds
   via laptop Ollama.
 - [ ] 55. Disable Ollama on the laptop (`ollama stop`); send
   `fitt-default` again → verify failover to desktop Ollama, with
-  `X-FITT-Backend: ollama-desktop` (or equivalent).
-- [ ] 56. Run `fitt cost` on the desktop → verify MTD spend reflects the
-  Claude calls made during testing.
+  `X-FITT-Backend: ollama` (pointing at the desktop endpoint).
+- [ ] 56. Run `fitt cost` on the desktop → verify MTD spend reflects
+  the cloud calls made during testing.
 
 ## Phase 1m — Documentation
 
@@ -236,7 +240,7 @@
 ## Exit Criteria
 
 - From the laptop IDE, a chat request using `fitt-smart` flows: IDE
-  → Tailscale → desktop gateway → Anthropic → back. Streaming works.
+  → Tailscale → desktop gateway → OpenRouter → back. Streaming works.
 - A request using `fitt-default` hits the laptop Ollama.
 - Ollama down on laptop → automatic fallback to desktop Ollama, header
   reflects reality.
@@ -244,6 +248,8 @@
 - `fitt cost` shows real spend.
 - External port scan confirms 8080 not exposed outside Tailscale.
 - All tests pass; ruff and mypy clean.
+- No personal values committed to the repo; `secrets.yaml` and user
+  `config.yaml` live only in `~/.fitt/`.
 
 ## Non-Goals (repeated from requirements)
 
