@@ -28,8 +28,15 @@ import httpx
 from rich.console import Console
 from rich.table import Table
 
-from .config import default_config_path, default_secrets_path, fitt_home, load_config
+from .config import (
+    Config,
+    default_config_path,
+    default_secrets_path,
+    fitt_home,
+    load_config,
+)
 from .errors import ConfigError
+from .memory import MemoryStore
 
 # Force a wide console width so long model names aren't truncated in
 # narrow terminals (and in CI/pytest runners where width is tiny).
@@ -197,6 +204,92 @@ def config_check(config_file: Path | None, secrets_file: Path | None) -> None:
     _console.print(f"  secrets: {sp}")
     _console.print(f"  aliases: {', '.join(cfg.alias_names())}")
     _console.print(f"  models:  {', '.join(m.id for m in cfg.models)}")
+
+
+# --------------------------------------------------------------- fitt memory
+
+
+def _open_memory(config_path: Path | None, secrets_path: Path | None) -> tuple[Config, MemoryStore]:
+    cp = config_path or default_config_path()
+    sp = secrets_path or default_secrets_path()
+    cfg = load_config(cp, sp, load_secrets_too=False)
+    store = MemoryStore(
+        identity_dir=cfg.memory.identity_dir,
+        sessions_dir=cfg.memory.sessions_dir,
+        max_history_chars=cfg.memory.max_history_chars,
+        enabled=cfg.memory.enabled,
+    )
+    return cfg, store
+
+
+@main.group("memory")
+def memory_group() -> None:
+    """Inspect and manipulate FITT's persistent memory."""
+
+
+@memory_group.command("show")
+@click.option("--session", default="main", help="Session id (default: main)")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def memory_show(session: str, config_file: Path | None) -> None:
+    """Print the identity + history that would be injected on the
+    next chat request for this session."""
+    _, store = _open_memory(config_file, None)
+    if not store.enabled:
+        _console.print("[yellow]Memory is disabled in config.[/yellow]")
+        sys.exit(0)
+    ctx = store.load_context(session)
+
+    if ctx.system_prefix:
+        _console.print("[bold]-- System prefix (identity) --[/bold]")
+        _console.print(ctx.system_prefix)
+        _console.print("")
+
+    if ctx.history_messages:
+        _console.print("[bold]-- History messages --[/bold]")
+        for msg in ctx.history_messages:
+            role = msg["role"]
+            colour = "cyan" if role == "user" else "green"
+            _console.print(f"[{colour}]{role}[/{colour}]: {msg['content']}")
+        _console.print("")
+    else:
+        _console.print("[dim]No history for today.[/dim]")
+
+    if ctx.truncated_bytes:
+        _console.print(
+            f"[yellow]{ctx.truncated_bytes} bytes truncated (budget: {store._max} chars).[/yellow]"
+        )
+
+
+@memory_group.command("append")
+@click.option("--session", default="main", help="Session id (default: main)")
+@click.option("--user", "user_msg", required=True, help="User content")
+@click.option("--assistant", "assistant_msg", required=True, help="Assistant content")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def memory_append(
+    session: str,
+    user_msg: str,
+    assistant_msg: str,
+    config_file: Path | None,
+) -> None:
+    """Manually append a user/assistant turn to today's history.
+
+    Useful for seeding context or writing regression tests.
+    """
+    _, store = _open_memory(config_file, None)
+    if not store.enabled:
+        _console.print("[red]Memory is disabled in config.[/red]")
+        sys.exit(1)
+    store.append_turn(session, user_msg, assistant_msg)
+    _console.print(f"[green]Appended to {store.history_path(session)}.[/green]")
+
+
+@memory_group.command("path")
+@click.option("--session", default="main", help="Session id (default: main)")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def memory_path(session: str, config_file: Path | None) -> None:
+    """Print the on-disk path of today's history file for this session."""
+    _, store = _open_memory(config_file, None)
+    _console.print(str(store.history_path(session)))
 
 
 if __name__ == "__main__":

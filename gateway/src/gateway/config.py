@@ -98,6 +98,29 @@ class LoggingConfig(BaseModel):
         return v
 
 
+class MemoryConfig(BaseModel):
+    """Phase 2 memory settings.
+
+    All fields are optional; defaults produce a working memory layer
+    under FITT_HOME. Set enabled=false to revert to Phase 1 behaviour
+    (stateless chat, no identity injection, no persistence).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_history_chars: int = 24_000
+    identity_dir: Path = Field(default_factory=lambda: fitt_home() / "identity")
+    sessions_dir: Path = Field(default_factory=lambda: fitt_home() / "sessions")
+
+    @field_validator("identity_dir", "sessions_dir", mode="before")
+    @classmethod
+    def _expand(cls, v: object) -> object:
+        if isinstance(v, str):
+            return Path(v).expanduser()
+        return v
+
+
 class Config(BaseModel):
     """Top-level configuration loaded from config.yaml."""
 
@@ -107,6 +130,7 @@ class Config(BaseModel):
     aliases: dict[str, str]
     models: list[ModelConfig]
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     # Populated after secrets load. Not serialised.
     secrets: Secrets | None = Field(default=None, exclude=True)

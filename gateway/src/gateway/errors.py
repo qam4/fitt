@@ -50,3 +50,18 @@ class ModelIdNotAlias(GatewayError):
             f"{model!r} looks like a concrete model id, not an alias. "
             f"Use one of: {', '.join(available_aliases)}"
         )
+
+
+class UnknownSession(GatewayError):
+    """Raised when a request names a session id that isn't configured."""
+
+    def __init__(self, session_id: str, available: list[str]) -> None:
+        self.session_id = session_id
+        self.available = available
+        super().__init__(
+            f"Unknown session {session_id!r}. Available: {', '.join(available) or '(none)'}"
+        )
+
+
+class MemoryDisabled(GatewayError):
+    """Raised when a memory operation is attempted while memory is disabled."""

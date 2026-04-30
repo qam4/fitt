@@ -14,6 +14,7 @@ from gateway.config import (
     AllowedToken,
     Config,
     LoggingConfig,
+    MemoryConfig,
     ModelConfig,
     Secrets,
     ServerConfig,
@@ -23,8 +24,16 @@ PERSONAL_TOKEN = "TEST_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 WRONG_TOKEN = "NOT_THE_RIGHT_TOKEN_XXXXXXXXXXXXXXXXXXXXXXXX"
 
 
-def build_test_config(tmp_path: Path) -> Config:
-    """Build a complete in-memory Config for tests (no YAML files)."""
+def build_test_config(tmp_path: Path, *, memory_enabled: bool = False) -> Config:
+    """Build a complete in-memory Config for tests (no YAML files).
+
+    By default memory is disabled so Phase 1 tests don't have to deal
+    with identity files and history. Phase 2 tests pass
+    ``memory_enabled=True`` and get a memory layer rooted under
+    ``tmp_path/fitt``.
+    """
+    fitt_home = tmp_path / "fitt"
+    fitt_home.mkdir(exist_ok=True)
     cfg = Config(
         server=ServerConfig(host="127.0.0.1", port=8080),
         aliases={
@@ -55,6 +64,12 @@ def build_test_config(tmp_path: Path) -> Config:
             ),
         ],
         logging=LoggingConfig(dir=tmp_path / "logs", retention_days=7),
+        memory=MemoryConfig(
+            enabled=memory_enabled,
+            max_history_chars=24_000,
+            identity_dir=fitt_home / "identity",
+            sessions_dir=fitt_home / "sessions",
+        ),
     )
     cfg.secrets = Secrets(
         allowed_tokens=[AllowedToken(name="personal", token=PERSONAL_TOKEN)],

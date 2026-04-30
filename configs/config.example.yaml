@@ -89,3 +89,19 @@ models:
 logging:
   dir: ~/.fitt/logs
   retention_days: 30
+
+# ------------------------------------------------------------------
+# Memory (Phase 2)
+# ------------------------------------------------------------------
+# Persistent memory: identity files always injected + today's
+# conversation history per session. All on-disk, plain markdown.
+# Set enabled: false to revert to stateless Phase 1 behaviour.
+memory:
+  enabled: true
+  # Approximate character budget for history injected into each
+  # request. ~4 chars per token, so 24000 chars is ~6000 tokens.
+  # If today's log exceeds this, the oldest turns are dropped from
+  # the prompt (the file itself is not truncated).
+  max_history_chars: 24000
+  identity_dir: ~/.fitt/identity
+  sessions_dir: ~/.fitt/sessions

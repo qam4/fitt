@@ -465,6 +465,12 @@ allowed_tokens:
 - A built-in tool `list_capabilities` lets the agent enumerate tools at runtime.
 - A `fitt capability-gaps` CLI prints the backlog grouped by frequency.
 
+**Lessons (MeshClaw-style self-learning):**
+- `learn_add`, `learn_list`, `learn_remove` MCP tools that append/remove entries in `~/.fitt/lessons.md`.
+- Lessons get injected into the system prompt alongside identity on every request.
+- When the user says "no, actually use X instead of Y", the agent calls `learn_add` so the correction sticks across sessions.
+- `fitt learn` CLI provides a non-chat interface for direct edits.
+
 **Design sketch:**
 - `gateway/tools.py` — MCP client bootstrap and server supervisor (restart on crash).
 - `gateway/tool_registry.py` — source of truth for loaded tools, descriptions, allow rules.
@@ -609,12 +615,13 @@ Not a single weekend. Never ends.
 - Secondary compute node: desktop's 3070 as Ollama fallback.
 - Backups: nightly snapshot of memory + audit log to NAS.
 - Weekly audit log review.
-- Cost-cap enforcement middleware if the Anthropic-console limit ever proves insufficient.
+- Cost-cap enforcement middleware if provider-dashboard limits ever prove insufficient.
 - Optional custom dashboard at `localhost:7777` (only if Open WebUI turns out not to cover what you want).
 - Multi-project context improvements.
 - Skills system if markdown grows unwieldy.
 - Regression-test harness for agent behavior (record/replay common prompts across model upgrades).
 - Productization decision.
+- **Self-evolving skills (speculative):** MeshClaw pattern where recurring corrections or tool-call sequences get synthesised into new skill files. Revisit after Phases 4–6 produce enough usage data to tell whether there are real patterns worth codifying vs. noise. May never be worth it for single-user use; flagged here so we notice if it becomes obvious.
 
 ---
 

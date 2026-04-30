@@ -12,25 +12,38 @@ from fastapi.responses import JSONResponse
 from . import __version__
 from .auth import AuthMiddleware
 from .config import Config
-from .errors import ModelIdNotAlias, NoBackendAvailable, UnknownAlias
+from .errors import (
+    ModelIdNotAlias,
+    NoBackendAvailable,
+    UnknownAlias,
+    UnknownSession,
+)
+from .memory import MemoryStore
 
 
 def create_app(config: Config) -> FastAPI:
     """Build the gateway FastAPI app.
 
-    Routes are registered later (health, models, chat) as each submodule
-    is implemented. This function is what both production (``__main__``)
-    and tests use.
+    Routes are registered here (health, models, chat). This factory
+    is what both production (``__main__``) and tests use.
     """
     app = FastAPI(
         title="FITT Gateway",
         version=__version__,
-        # We use our own OpenAI-compatible schema; FastAPI's auto-docs
-        # can still be useful during development.
         docs_url="/docs",
         redoc_url=None,
     )
     app.state.config = config
+
+    # Memory store lives for the lifetime of the app. It reads the
+    # identity files fresh on every request, so editing them takes
+    # effect without a restart.
+    app.state.memory = MemoryStore(
+        identity_dir=config.memory.identity_dir,
+        sessions_dir=config.memory.sessions_dir,
+        max_history_chars=config.memory.max_history_chars,
+        enabled=config.memory.enabled,
+    )
 
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)
@@ -77,14 +90,26 @@ def create_app(config: Config) -> FastAPI:
             },
         )
 
-    # Routers — imported lazily to keep import graph acyclic.
+    @app.exception_handler(UnknownSession)
+    async def _handle_unknown_session(_: Request, exc: UnknownSession) -> JSONResponse:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "type": "unknown_session",
+                    "message": str(exc),
+                    "available": exc.available,
+                }
+            },
+        )
+
+    # Routers - imported lazily to keep import graph acyclic.
     from .health import router as health_router
     from .models_endpoint import router as models_router
 
     app.include_router(health_router)
     app.include_router(models_router)
 
-    # Chat router is imported here once implemented.
     try:
         from .chat import router as chat_router
 
