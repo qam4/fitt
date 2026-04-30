@@ -17,7 +17,7 @@ from hypothesis import strategies as st
 from gateway.errors import NoBackendAvailable, UnknownAlias
 from gateway.router import AliasRouter, backend_tag
 
-from ._fixtures import build_test_config
+from ._fixtures import build_openai_backend_config, build_test_config
 
 
 class _FakeModelResponse:
@@ -175,6 +175,62 @@ def test_backend_tag_ollama(tmp_path: Path) -> None:
     cfg = build_test_config(tmp_path)
     m = next(m for m in cfg.models if m.id == "qwen-big")
     assert backend_tag(m) == "ollama:http://laptop.tailnet:11434"
+
+
+def test_backend_tag_openai(tmp_path: Path) -> None:
+    cfg = build_openai_backend_config(tmp_path)
+    m = cfg.models[0]
+    assert backend_tag(m) == "openai:minimaxai/minimax-m2"
+
+
+# ---------- dispatch: generic openai-compatible backend -----------
+
+
+async def test_dispatch_routes_openai_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Generic `openai` backend sends openai/<model> + api_base + api_key."""
+    cfg = build_openai_backend_config(tmp_path)
+    r = AliasRouter(cfg)
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any) -> _FakeModelResponse:
+        captured.update(kwargs)
+        return _FakeModelResponse()
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake_acompletion)
+
+    result = await r.dispatch("fitt-huge", {"messages": [{"role": "user", "content": "hi"}]})
+
+    assert captured["model"] == "openai/minimaxai/minimax-m2"
+    assert captured["api_base"] == "https://integrate.api.nvidia.com/v1"
+    assert captured["api_key"] == "nvapi-test-xxxxx"
+    assert result.model_used.id == "nvidia-minimax"
+    assert result.fallback_used is False
+    assert result.response is not None
+
+
+async def test_dispatch_openai_backend_without_key_omits_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Local OpenAI-compatible endpoints (LM Studio, vLLM) often need no key."""
+    cfg = build_openai_backend_config(tmp_path)
+    assert cfg.secrets is not None
+    cfg.secrets.api_keys = {}  # drop the key
+    r = AliasRouter(cfg)
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any) -> _FakeModelResponse:
+        captured.update(kwargs)
+        return _FakeModelResponse()
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake_acompletion)
+
+    await r.dispatch("fitt-huge", {"messages": [{"role": "user", "content": "hi"}]})
+
+    assert captured["model"] == "openai/minimaxai/minimax-m2"
+    assert captured["api_base"] == "https://integrate.api.nvidia.com/v1"
+    assert "api_key" not in captured
 
 
 # ---------- property test (Phase 1, Property 1) -------------------

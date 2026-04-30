@@ -72,9 +72,9 @@ aliases:
 
 models:
   - id: <string>
-    backend: openrouter | anthropic | ollama
+    backend: openrouter | anthropic | ollama | openai
     model:   <upstream model name, LiteLLM convention>
-    endpoint: <URL>          # required for ollama
+    endpoint: <URL>          # required for ollama and openai
     cost_per_mtok_in:  <USD>
     cost_per_mtok_out: <USD>
     fallback: <another model id, optional>
@@ -83,6 +83,12 @@ logging:
   dir: ~/.fitt/logs
   retention_days: 30
 ```
+
+The `openai` backend is the generic OpenAI-compatible dispatcher:
+use it for Nvidia Build, Groq, Together, Fireworks, LM Studio, a
+local vLLM server, and anything else that speaks the OpenAI schema.
+It requires `endpoint` and picks up its API key from
+`secrets.api_keys.<model-id>` (below).
 
 **Client discipline:** the `model` field of a chat-completion request
 MUST be one of the `aliases` keys. Concrete names like
@@ -100,6 +106,12 @@ openrouter_api_key: sk-or-v1-...
 
 # Optional; uncomment if you enable the `claude-...-direct` model.
 # anthropic_api_key: sk-ant-...
+
+# Per-model keys for `backend: openai` entries (Nvidia Build, Groq,
+# Together, ...). Map key = the model's `id`; value = that provider's
+# API key. Local endpoints that don't need auth can be omitted.
+# api_keys:
+#   nvidia-minimax-m2: nvapi-...
 
 # Reserved for Phase 3.
 # telegram:

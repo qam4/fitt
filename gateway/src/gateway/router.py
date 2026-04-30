@@ -64,6 +64,16 @@ def _litellm_kwargs(model: ModelConfig, secrets_key: str | None) -> dict[str, An
             kwargs["model"] = f"anthropic/{model.model}"
             if secrets_key:
                 kwargs["api_key"] = secrets_key
+        case "openai":
+            # Generic OpenAI-compatible endpoint: Nvidia Build,
+            # Groq, Together, LM Studio, vLLM, and anything else
+            # that speaks the OpenAI schema. LiteLLM uses the
+            # "openai/<model>" prefix with an explicit api_base.
+            kwargs["model"] = f"openai/{model.model}"
+            assert model.endpoint
+            kwargs["api_base"] = model.endpoint
+            if secrets_key:
+                kwargs["api_key"] = secrets_key
     return kwargs
 
 
@@ -132,7 +142,7 @@ class AliasRouter:
 
         for idx, candidate in enumerate(chain):
             attempted_ids.append(candidate.id)
-            key = secrets.api_key_for(candidate.backend)
+            key = secrets.api_key_for(candidate.backend, model_id=candidate.id)
             kwargs = _litellm_kwargs(candidate, key)
             call_kwargs = {**body, **kwargs}
 

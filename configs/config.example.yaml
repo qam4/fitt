@@ -56,6 +56,24 @@ models:
     cost_per_mtok_in:  0
     cost_per_mtok_out: 0
 
+  # --- Cloud: Nvidia Build (free tier, OpenAI-compatible) ---
+  # Nvidia hosts a number of open-weight models behind an
+  # OpenAI-compatible API at integrate.api.nvidia.com. Sign up at
+  # https://build.nvidia.com/ for a free key (prefixed `nvapi-`) and
+  # add it to secrets.yaml under `api_keys.<model-id>`. Then bind an
+  # alias (e.g. fitt-huge) to the model id you uncomment.
+  #
+  # The `backend: openai` value is the generic OpenAI-compatible
+  # backend; it works for Groq, Together, Fireworks, LM Studio, a
+  # local vLLM server, and anything else that speaks the same schema.
+  #
+  # - id: nvidia-minimax-m2
+  #   backend: openai
+  #   model: minimaxai/minimax-m2
+  #   endpoint: https://integrate.api.nvidia.com/v1
+  #   cost_per_mtok_in:  0
+  #   cost_per_mtok_out: 0
+
   # --- Cloud: direct Anthropic (disabled by default) ---
   # Uncomment the block below AND add `anthropic_api_key` to
   # secrets.yaml if you want to hit Anthropic directly (usually only

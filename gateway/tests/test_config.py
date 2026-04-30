@@ -149,6 +149,29 @@ def test_config_rejects_ollama_without_endpoint(tmp_path: Path) -> None:
     assert "endpoint" in str(exc.value)
 
 
+def test_config_rejects_openai_backend_without_endpoint(tmp_path: Path) -> None:
+    """Generic `openai` backend needs an explicit endpoint URL."""
+    bad = dedent(
+        """
+        aliases:
+          fitt-huge: nvidia-minimax
+
+        models:
+          - id: nvidia-minimax
+            backend: openai
+            model: minimaxai/minimax-m2
+        """
+    ).strip()
+    cp = _write(tmp_path / "config.yaml", bad)
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(cp, sp)
+    msg = str(exc.value)
+    assert "endpoint" in msg
+    assert "openai" in msg
+
+
 def test_config_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as exc:
         load_config(tmp_path / "does-not-exist.yaml", load_secrets_too=False)
@@ -211,6 +234,30 @@ def test_secrets_api_key_lookup(tmp_path: Path) -> None:
     assert secrets.api_key_for("openrouter") == "sk-or-test-123"
     assert secrets.api_key_for("anthropic") is None
     assert secrets.api_key_for("ollama") is None
+
+
+def test_secrets_api_key_for_openai_backend(tmp_path: Path) -> None:
+    """Generic OpenAI-compatible backend keys are looked up by model id."""
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: personal
+            token: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+        api_keys:
+          nvidia-minimax: nvapi-xyz
+          groq-llama:     gsk-abc
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    secrets = load_secrets(sp)
+
+    assert secrets.api_key_for("openai", model_id="nvidia-minimax") == "nvapi-xyz"
+    assert secrets.api_key_for("openai", model_id="groq-llama") == "gsk-abc"
+    # Unknown model id: None, not a KeyError.
+    assert secrets.api_key_for("openai", model_id="unknown-id") is None
+    # No model id passed: None (caller didn't identify the model).
+    assert secrets.api_key_for("openai") is None
 
 
 # ------------------------------------------------------------ default path tests

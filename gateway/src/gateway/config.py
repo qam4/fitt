@@ -52,7 +52,7 @@ def default_secrets_path() -> Path:
 
 # ---------------------------------------------------------------- model schema
 
-Backend = Literal["openrouter", "anthropic", "ollama"]
+Backend = Literal["openrouter", "anthropic", "ollama", "openai"]
 
 
 class ModelConfig(BaseModel):
@@ -63,15 +63,19 @@ class ModelConfig(BaseModel):
     id: str
     backend: Backend
     model: str  # The upstream model identifier (LiteLLM's model string)
-    endpoint: str | None = None  # Required for ollama
+    endpoint: str | None = None  # Required for ollama and openai
     cost_per_mtok_in: Decimal = Decimal("0")
     cost_per_mtok_out: Decimal = Decimal("0")
     fallback: str | None = None  # Another model id in this config
 
     @model_validator(mode="after")
-    def _ollama_requires_endpoint(self) -> ModelConfig:
-        if self.backend == "ollama" and not self.endpoint:
-            raise ValueError(f"model {self.id!r}: ollama backend requires 'endpoint'")
+    def _endpoint_required_for_local_backends(self) -> ModelConfig:
+        # Ollama and the generic 'openai' backend both require an
+        # endpoint URL. 'openai' is used for any OpenAI-compatible
+        # provider we don't have a dedicated backend for (Nvidia
+        # Build, Groq, Together, LM Studio, vLLM, ...).
+        if self.backend in ("ollama", "openai") and not self.endpoint:
+            raise ValueError(f"model {self.id!r}: backend {self.backend!r} requires 'endpoint'")
         return self
 
 
@@ -209,14 +213,27 @@ class Secrets(BaseModel):
     allowed_tokens: list[AllowedToken]
     openrouter_api_key: str | None = None
     anthropic_api_key: str | None = None
+    # Per-model keys for generic OpenAI-compatible backends (Nvidia
+    # Build, Groq, Together, Fireworks, ...). Keyed by the model's
+    # ``id`` in config.yaml. Populate only for backends that need
+    # authentication; endpoints like a local vLLM or LM Studio
+    # usually don't.
+    api_keys: dict[str, str] = Field(default_factory=dict)
     telegram: TelegramSecrets | None = None
 
-    def api_key_for(self, backend: Backend) -> str | None:
+    def api_key_for(self, backend: Backend, *, model_id: str | None = None) -> str | None:
         match backend:
             case "openrouter":
                 return self.openrouter_api_key
             case "anthropic":
                 return self.anthropic_api_key
+            case "openai":
+                # Generic OpenAI-compatible backends look up their
+                # key by the model's id so one key per provider is
+                # easy to manage.
+                if model_id is None:
+                    return None
+                return self.api_keys.get(model_id)
             case "ollama":
                 return None
 
