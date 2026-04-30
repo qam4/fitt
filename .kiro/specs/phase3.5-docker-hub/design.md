@@ -482,44 +482,73 @@ script.
 
 ## Quickstart changes
 
-Restructure Part A into two lettered sub-paths:
+Rewrite Part A around the single Docker hub path. Inside it, two
+install flavors so QNAP users get a GUI-first experience without
+losing the SSH path:
 
-- **Part A.1 — Windows hub** (current content, unchanged).
-- **Part A.2 — Docker hub** (new, the QNAP path).
+- **A.1 — Container Station "Applications"** (recommended for
+  QNAP and any user already comfortable with a container GUI).
+- **A.2 — `docker compose up -d` via SSH** (any host with Docker;
+  also works on QNAP).
 
-Part B (Satellites) and Part C (Clients) are unchanged regardless
-of which A the user chose. The doc opens with a small decision box:
+Part B (Satellites) and C (Clients) are unchanged - they don't
+care how the hub was installed.
 
-> Pick one:
-> - **A.1** if your hub is Windows and you want the NSSM service path.
-> - **A.2** if your hub is Linux, macOS, or a QNAP/Synology NAS, and
->   you prefer Docker.
+### A.1 outline (Container Station GUI)
 
-Part A.2 is shorter than A.1 because Docker absorbs most of the
-install complexity. Rough outline:
+1. Install Tailscale on the NAS (App Center or native).
+2. SSH in once to create `/share/FITT/`, drop `config.yaml`,
+   `secrets.yaml`, `.env` files in place, `chmod 0600` secrets.
+   (Documented because the GUI can't create a
+   permission-restricted file. One-time SSH, not a recurring
+   requirement.)
+3. Container Station -> Applications -> Create.
+4. Paste the contents of `docker-compose.yml`, or point at the
+   file on the share.
+5. Click Create. Wait for three containers to show "Running."
+6. Verify `/health` from a browser over Tailscale.
 
-1. Install Docker / Container Station (link out).
+Fallback note for older QTS / Container Station versions: if the
+GUI rejects `depends_on: condition: service_healthy`, replace the
+two `depends_on:` blocks with the simple list form
+(`depends_on: [gateway]`). The bot and Open WebUI retry
+connections anyway, so the net effect is a few extra log lines at
+startup.
+
+### A.2 outline (SSH + compose)
+
+1. Install Docker.
 2. Install Tailscale on the host.
-3. Create OpenRouter account (same as A.1 step 2).
-4. Clone repo, create `.env`, fill in `FITT_HOME` and
+3. Clone repo, `cp .env.example .env`, fill in `FITT_HOME` and
    `FITT_BEARER_TOKEN`.
-5. Copy `configs/*.example.yaml` to `$FITT_HOME`, fill in.
-6. `chmod 0600 $FITT_HOME/secrets.yaml`.
-7. `docker compose up -d`.
-8. Verify `/health` on `:8080` and Open WebUI on `:3000`.
+4. Copy `configs/*.example.yaml` to `$FITT_HOME`, fill in.
+5. `chmod 0600 $FITT_HOME/secrets.yaml`.
+6. `docker compose up -d`.
+7. Verify `/health` on `:8080` and Open WebUI on `:3000`.
 
-A separate appendix "Developing on the NAS" covers the VS Code
-Remote-SSH + override.yml workflow. Intended for maintainers, not
-first-time installers.
+A.2 is shorter and faster, and is what the maintainer uses for
+iteration. A.1 matches the Container Station workflow QNAP users
+already know from Jellyfin, Plex, and friends.
+
+A separate appendix "Developing on FITT" covers the laptop-local
+dev overlay workflow. Intended for maintainers, not first-time
+installers.
+
+The existing `install-service.ps1` / `install-telegram-bot.ps1`
+scripts live on in `scripts/` without documentation pointing at
+them. The quickstart does not mention them. If someone looking at
+the repo history finds them and wants to try the NSSM path, that's
+fine; it is not a supported configuration.
 
 ## Rollout and migration
 
 ### Order of ops
 
 1. Land the Dockerfiles and compose changes in one commit.
-2. Land the quickstart restructure in a second commit.
-3. Leave the Windows path completely untouched. Do not retire
-   `install-service.ps1`.
+2. Land the quickstart rewrite in a second commit.
+3. Leave `install-service.ps1` and `install-telegram-bot.ps1` in
+   place, unreferenced from the new docs. They become legacy the
+   moment this phase ships.
 4. Delete `install-open-webui.ps1` and its uninstall sibling. The
    compose file subsumes them. Note this in the commit message so
    people searching git history find the replacement.

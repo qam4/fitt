@@ -47,9 +47,11 @@ the machine with the GPU is the right choice and shouldn't change.
    Docker hub copies their `~/.fitt/` directory to the new host and
    starts the stack. Identity, sessions, memory, and logs are all
    markdown/JSON on disk and fully portable.
-5. **Windows service path stays working.** The `install-service.ps1`
-   / NSSM path stays supported for users who want it. New path is
-   additive.
+5. **Windows service path is legacy, not maintained.** The
+   existing `install-service.ps1` and `install-telegram-bot.ps1`
+   remain in the tree but are not exercised or documented in the
+   new quickstart. They either keep working by accident or they
+   don't; we don't spend effort keeping them green.
 6. **Dev loop on the NAS.** A developer can edit the gateway on
    their laptop with VS Code Remote-SSH, have the running container
    pick up source changes via bind-mount + `--reload`, and commit
@@ -73,19 +75,49 @@ the machine with the GPU is the right choice and shouldn't change.
 
 ## User stories
 
-### U1 — First install on a QNAP
+### U1 — First install on a QNAP via Container Station GUI
 
-> As a home lab user with a QNAP NAS, I want to bring up the whole
-> FITT hub with one `docker compose up -d`, reading my config from
-> a bind-mounted share, so that my NAS is my hub.
+> As a QNAP user comfortable with Container Station for apps like
+> Jellyfin, I want to install FITT without memorizing SSH commands.
+> I'll happily paste a compose file into the Container Station
+> "Applications" panel, but I don't want to click through the
+> "Create Container" wizard three times.
 
 Acceptance:
-- `docker compose up -d` succeeds with just a `config.yaml` and
-  `secrets.yaml` in the bind-mounted directory.
+- Container Station's "Applications" -> "Create" accepts our
+  `docker-compose.yml` as-is, with no hand-editing.
+- All three services come up from that one form submission.
 - `curl http://<nas-tailscale-ip>:8080/health` returns 200 within
-  45 seconds of `up -d`.
-- Open WebUI reachable at `:3000`, Telegram bot responds to
-  `/start` in the app.
+  45 seconds of the Create click.
+- The dashboard groups the three containers under one application
+  name (`fitt`) so start/stop/logs are managed together.
+
+### U1b — First install via SSH
+
+> As a user who prefers the terminal, or who wants the faster
+> iteration loop, I want `docker compose up -d` at the repo root
+> to bring up the whole hub.
+
+Acceptance:
+- A fresh SSH session with Docker installed: `git clone`,
+  `cp .env.example .env`, edit, `docker compose up -d` produces
+  the same stack as U1.
+- `curl http://<host-ip>:8080/health` returns 200 within 45s.
+- Open WebUI reachable at `:3000`.
+
+### U1c — depends_on health condition compatibility
+
+> As an operator, I do not want the install to fail on QTS /
+> Container Station versions that don't fully honor
+> `depends_on: condition: service_healthy`.
+
+Acceptance:
+- If `condition: service_healthy` is rejected or ignored, the bot
+  and Open WebUI still come up and eventually connect to the
+  gateway once it's ready (they retry; the gateway's own
+  healthcheck keeps Docker's state accurate).
+- Documented in the quickstart: if the Container Station GUI
+  parse errors on a `condition:` key, drop it and proceed.
 
 ### U2 — Migrate from a Windows hub
 
@@ -103,17 +135,22 @@ Acceptance:
 - Existing Continue IDE config only needs `apiBase` updated to the
   new host's Tailscale IP.
 
-### U3 — Windows hub still works
+### U3 — Single install path going forward
 
-> As an existing Windows-hub user, I do not want this phase to
-> change my install or break my setup.
+> As the author and any future user, I want one install path (the
+> Docker one) so I don't pay the cost of maintaining two ways to
+> do the same thing.
 
 Acceptance:
-- `install-service.ps1 -SetupVenv` on a clean Windows host still
-  produces a working hub.
-- Existing Telegram bot and Open WebUI install scripts still work.
-- Quickstart Part A (Windows) is unchanged except for a cross-
-  reference to Part A.2 (Docker).
+- Quickstart documents only the Docker hub install. No Windows
+  service path in the docs.
+- `install-service.ps1` and `install-telegram-bot.ps1` remain in
+  `scripts/` as legacy files. No code or config changes in this
+  phase are required to keep them working, and if they break as
+  a side effect of other work, they stay broken until someone
+  files it as a bug.
+- The Docker path works on Windows + Docker Desktop, Linux, and
+  macOS, so no OS loses access to FITT.
 
 ### U4 — Iteration loop on the laptop
 
@@ -160,12 +197,10 @@ In scope:
 - Root `docker-compose.yml` with all three services
 - A dev `docker-compose.override.yml.example` for the hot-reload
   workflow in U4
-- Quickstart restructure: Part A.1 (Windows), Part A.2 (Docker),
-  shared Part B (Satellites) and Part C (Clients)
-- Short "dev on the NAS" notes in the gateway README
-- Retire `install-open-webui.ps1` (compose handles Open WebUI now),
-  keep `install-service.ps1` and `install-telegram-bot.ps1` for the
-  Windows path
+- Quickstart rewritten around the single Docker hub path. Parts B
+  (Satellites) and C (Clients) carry over unchanged.
+- Short "dev on the laptop" notes in the gateway README
+- Retire `install-open-webui.ps1` (compose handles Open WebUI now)
 
 Out of scope (future phases):
 - Image publishing to a registry (manual `docker compose build` on
@@ -173,6 +208,11 @@ Out of scope (future phases):
 - Admin web UI
 - Multi-host deployments
 - Backup automation (a cron snapshot of `~/.fitt/` is enough for v0)
+- **Active maintenance of `install-service.ps1` /
+  `install-telegram-bot.ps1`.** They stay in the tree for anyone
+  who finds them useful, but they are not covered by the quickstart,
+  not in the acceptance criteria, and not kept green as the rest of
+  the code moves. Treat as archived.
 
 ## Risks and open questions
 
@@ -224,8 +264,26 @@ Decision: set `logging.options.max-size=10m` and
 Container Station's GUI can modify containers in ways that diverge
 from the compose file.
 
-Decision: document "use `docker compose` via SSH, treat the GUI as
-read-only" in the quickstart.
+Decision: the install uses Container Station's "Applications" ->
+"Create from compose" flow, not the per-container "Create
+Container" wizard. That keeps the compose file as the source of
+truth. The per-container GUI is read-only for us; modifications
+there are documented as "will be lost on next `docker compose up`."
+
+### R5b — depends_on: condition support
+
+Some QTS / Container Station versions accept
+`depends_on: condition: service_healthy`, some reject it, some
+parse it but ignore the condition.
+
+Decision: keep `condition: service_healthy` in the canonical
+compose file because it's correct and works on current Docker
+Engine. Document the fallback in the quickstart: if Container
+Station errors on parse, replace the `depends_on:` blocks with
+the simple list form (`depends_on: [gateway]`). The bot and Open
+WebUI retry their connections anyway, so the net effect is a few
+extra log lines at startup and no behaviour difference after
+~10 seconds.
 
 ### R6 — Image arch
 
@@ -240,9 +298,9 @@ single-arch builds on the target host work fine.
 
 Phase 3.5 is done when:
 
-1. A fresh user with a Linux or macOS box (or QNAP with Container
-   Station) can clone the repo, fill in `config.yaml` and
-   `secrets.yaml` under a chosen directory, run
+1. A fresh user with a Linux, macOS, QNAP + Container Station, or
+   Windows + Docker Desktop box can clone the repo, fill in
+   `config.yaml` and `secrets.yaml` under a chosen directory, run
    `docker compose up -d`, and hit `/health` from their Tailscale
    network within one minute.
 2. All existing gateway and telegram-bot tests still pass
@@ -251,7 +309,7 @@ Phase 3.5 is done when:
    stack, hits `/health` and `/v1/models` through the gateway
    container, and tears down cleanly. (Skipped in CI if Docker
    isn't available.)
-4. The quickstart renders cleanly with the Windows path and Docker
-   path side by side and one link hand-off between them.
+4. The quickstart is a single linear path (Hub via Docker -> Satellites
+   -> Clients). No Windows service path in the docs.
 5. The author's QNAP hub has been running for at least 3 days
    without the author having to SSH in to fix anything.
