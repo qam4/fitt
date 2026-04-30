@@ -1,0 +1,14 @@
+# Force LF on files that tools expect to be LF regardless of host OS.
+gateway/uv.lock text eol=lf
+*.py text eol=lf
+pyproject.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# PowerShell is happiest with CRLF on Windows.
+*.ps1 text eol=crlf
+
+# Images and other binaries.
+*.png binary
+*.jpg binary
+*.ico binary

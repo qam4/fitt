@@ -42,6 +42,11 @@ fitt = "gateway.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/gateway"]
 
+[tool.uv]
+# Pin the Python interpreter uv fetches/uses. uv honours this when
+# creating .venv/ on `uv sync`. Keep aligned with requires-python above.
+required-version = ">=0.5"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

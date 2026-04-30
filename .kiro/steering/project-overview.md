@@ -1,0 +1,98 @@
+---
+inclusion: always
+description: FITT overview - what it is, the two-machine split, guiding principles
+---
+
+# FITT - Project Overview
+
+**FITT** (Fred Industries Two Thousand) is a self-hosted, spec-driven
+personal AI assistant with persistent memory, agentic tools, and
+multi-interface reach. It runs on a two-machine GPU cluster
+(iBUYPOWER desktop "Hub" + Acer Predator laptop "Compute") connected
+by Tailscale.
+
+Repository: `qam4/home-ai-cluster` (private).
+
+Key documents (read in this order when context needed):
+
+- `README.md` - landing page
+- `FITT_ROADMAP.md` - guiding principles, phase plan, inline drafts
+  for phases 2-10
+- `FITT_PRD.md` - original product requirements
+- `docs/quickstart.md` - the one install doc, end-to-end
+- `.kiro/specs/phase<N>-<name>/` - active spec when working on a
+  phase, three files: `requirements.md`, `design.md`, `tasks.md`
+
+## Two machines
+
+| Role    | Machine            | Runs                                 |
+|---------|--------------------|--------------------------------------|
+| Hub     | Always-on desktop  | FITT gateway, fallback Ollama (small) |
+| Compute | Laptop (bigger GPU) | Primary Ollama (bigger model)        |
+
+Tailscale is the trust boundary. The gateway exposes HTTP on
+`:8080`, bound to the Tailscale interface only (via Windows Defender
+Firewall on the Hub).
+
+## Phase plan (summary)
+
+0. Bootstrap (Ollama + IDE + local LLM) - DONE
+1. Gateway v0 (OpenAI-compatible HTTP daemon, alias routing,
+   Ollama + OpenRouter) - IN AT-HOME VERIFICATION
+2. Memory v0 (identity + today's conversation log as markdown)
+3. Telegram + Open WebUI (phone/browser interfaces)
+4. Agentic tools (via MCP, approval-gated)
+5. Retro-AI integration (launch/monitor RL training via FITT)
+6. Autonomy (cron + heartbeat)
+7. Memory v1 (RAG, compaction, cross-project)
+8. Voice (Faster-Whisper STT + Piper/Kokoro TTS) - optional
+9. Home Assistant agent ("Alexa-like" half of the vision)
+10. Hardening - ongoing
+
+## Guiding principles (from the roadmap)
+
+1. Reach the inflection point fast.
+2. Spec-driven from Phase 1 onward.
+3. Use mature tools; don't reinvent. (LiteLLM, Ollama, Tailscale,
+   FastAPI, uv, MCP.)
+4. Each phase leaves something usable.
+5. Cloud models for hard turns, local for the rest.
+6. Security scales with risk.
+7. Models are configuration, not architecture. Clients name
+   logical aliases (`fitt-default`, `fitt-smart`), config binds
+   aliases to concrete models.
+8. The agent is honest about its capabilities. When a tool is
+   missing, say what's missing and how to add it.
+9. Live with it before extending it. Two weeks of real use between
+   phases.
+10. Shareable by construction. No personal values, secrets, or
+    machine-specific paths in the repo. Users bring their own
+    `~/.fitt/` directory.
+
+## Architecture highlights
+
+- **Gateway** (Phase 1): FastAPI daemon on the Hub, runs as a
+  Windows service via NSSM. OpenAI-compatible
+  `POST /v1/chat/completions`. Bearer-token auth. Routes via
+  LiteLLM to OpenRouter or Ollama based on alias.
+- **Memory** (Phase 2+): markdown-first, three layers - identity
+  (always injected), project context (swap by cwd), daily history
+  (time-decayed).
+- **Tools** (Phase 4+): MCP servers, with an approval-gate
+  middleware in the gateway and a tamper-resistant deny list.
+- **Interfaces**: IDE (Continue, Cursor, Kiro) via the
+  OpenAI-compatible endpoint. Later: Telegram, Open WebUI, voice.
+
+## Spec convention
+
+Every phase from Phase 1 onward has a three-file spec under
+`.kiro/specs/phase<N>-<name>/`:
+
+- `requirements.md` - user stories with numbered acceptance
+  criteria.
+- `design.md` - architecture, modules, design decisions with
+  rationale, correctness properties, testing strategy.
+- `tasks.md` - checkboxed implementation tasks in sub-phases.
+
+Inline drafts in `FITT_ROADMAP.md` get promoted to proper three-file
+specs when a phase actually starts.

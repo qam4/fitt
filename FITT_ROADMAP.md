@@ -10,7 +10,7 @@ This roadmap is both the outer shell **and** the draft specs. Each phase contain
 
 1. **Reach the inflection point fast.** The first goal is making a local LLM usable from the IDE so the LLM can help build everything else. Everything before that is manual.
 2. **Spec-driven from Phase 1 onward.** Manual bootstrap stops when the LLM can follow specs. After that, every phase is written as a Kiro spec.
-3. **Use mature tools; don't reinvent.** LiteLLM, Ollama, Tailscale, FastAPI, Anthropic SDK, MCP where they fit. Build the integration, not the components.
+3. **Use mature tools; don't reinvent.** LiteLLM, Ollama, Tailscale, FastAPI, uv, MCP where they fit. Build the integration, not the components.
 4. **Each phase leaves something usable.** Not "foundational work for later phases." Each phase is demoable on its own.
 5. **Claude (or any cloud model) for hard turns, local for the rest.** No local-only purity. The goal is escaping *limits*, not eliminating cloud entirely.
 6. **Security scales with risk.** Read-only tools: relaxed. Shell and filesystem writes: approval-gated. Home-automation and external comms: hard deny-list + audit.

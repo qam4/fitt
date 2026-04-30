@@ -11,7 +11,10 @@
 
     Also creates a Windows Defender Firewall rule that allows inbound
     TCP 8080 on the Private network profile only (Tailscale registers
-    as Private). The public profile remains blocked.
+    as Private). The Public profile remains blocked.
+
+    The gateway is executed by the Python inside the repo's venv at
+    gateway\.venv\Scripts\python.exe. The venv is managed by uv.
 
     Run from an elevated PowerShell prompt.
 
@@ -21,25 +24,39 @@
 .PARAMETER Port
     TCP port the gateway listens on. Default: 8080.
 
+.PARAMETER SetupVenv
+    When set, runs `uv sync` in the gateway directory before
+    registering the service. Creates the venv and installs deps if
+    missing; updates deps if present. Requires uv to be on PATH.
+
 .PARAMETER PythonExe
-    Full path to the Python interpreter to run. Default: the Python
-    currently on PATH.
+    Escape hatch for users who manage their own Python environment.
+    Must point at a Python interpreter where `pip install -e .` has
+    already been run against the gateway package. For the default
+    `uv sync`-managed flow, leave this unset.
 
 .PARAMETER WorkingDir
-    Path to the gateway source checkout. Default: the parent of this
-    script's directory.
+    Path to the repo root. Default: the parent of this script's
+    directory.
 
 .EXAMPLE
+    # Standard install: uv sync creates the venv, then register service.
+    .\install-service.ps1 -SetupVenv
+
+.EXAMPLE
+    # Install against an already-synced venv (from a prior `uv sync`).
     .\install-service.ps1
 
 .EXAMPLE
-    .\install-service.ps1 -Port 8443 -PythonExe C:\Python311\python.exe
+    # Advanced: point at a Python you manage yourself.
+    .\install-service.ps1 -PythonExe C:\envs\fitt\Scripts\python.exe
 #>
 
 [CmdletBinding()]
 param(
     [string]$ServiceName = 'FITTGateway',
     [int]$Port = 8080,
+    [switch]$SetupVenv,
     [string]$PythonExe,
     [string]$WorkingDir
 )
@@ -65,12 +82,74 @@ function Resolve-DefaultWorkingDir {
     Split-Path -Parent $PSScriptRoot
 }
 
-function Resolve-DefaultPython {
-    $cmd = Get-Command python.exe -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        throw "python.exe not found on PATH. Pass -PythonExe explicitly or install Python 3.11+."
+function Get-VenvPython {
+    param([string]$RepoRoot)
+    Join-Path $RepoRoot 'gateway\.venv\Scripts\python.exe'
+}
+
+function Invoke-UvSync {
+    param([string]$RepoRoot)
+
+    # uv sync creates gateway\.venv\ if missing, downloads a
+    # compatible Python interpreter if needed, and installs the
+    # gateway package plus its dependencies from pyproject.toml.
+    # Idempotent: re-running on an already-synced venv is fast.
+    $uv = Get-Command uv.exe -ErrorAction SilentlyContinue
+    if (-not $uv) {
+        throw @"
+-SetupVenv requires uv on PATH. Install uv with:
+    winget install --id=astral-sh.uv -e
+or:
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+Then re-run this script.
+"@
     }
-    return $cmd.Source
+    Write-Step "Running 'uv sync' in gateway\"
+    Push-Location (Join-Path $RepoRoot 'gateway')
+    try {
+        & uv.exe sync
+        if ($LASTEXITCODE -ne 0) {
+            throw "uv sync failed with exit code $LASTEXITCODE. See output above."
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+function Resolve-Python {
+    param(
+        [string]$RepoRoot,
+        [string]$ExplicitPythonExe,
+        [bool]$DoSetupVenv
+    )
+
+    # Explicit -PythonExe wins. Used only by advanced users who manage
+    # their own environment.
+    if ($ExplicitPythonExe) {
+        if (-not (Test-Path $ExplicitPythonExe)) {
+            throw "Python interpreter not found at: $ExplicitPythonExe"
+        }
+        return $ExplicitPythonExe
+    }
+
+    # Otherwise the contract is: use gateway\.venv\Scripts\python.exe.
+    # The -SetupVenv path guarantees it exists; without the flag we
+    # require the user to have run `uv sync` themselves already.
+    if ($DoSetupVenv) {
+        Invoke-UvSync -RepoRoot $RepoRoot
+    }
+
+    $venvPython = Get-VenvPython -RepoRoot $RepoRoot
+    if (-not (Test-Path $venvPython)) {
+        throw @"
+Expected Python at:
+    $venvPython
+
+Run 'uv sync' in the gateway\ directory first, or re-run this script
+with -SetupVenv to do it automatically. See docs\quickstart.md.
+"@
+    }
+    return $venvPython
 }
 
 function Assert-NssmPresent {
@@ -79,6 +158,7 @@ function Assert-NssmPresent {
         throw @"
 NSSM is required but not on PATH.
 Install via one of:
+  winget install NSSM.NSSM
   choco install nssm
   scoop install nssm
   Download: https://nssm.cc/download
@@ -91,19 +171,44 @@ function Assert-FittHome {
     $fittHome = Join-Path $env:USERPROFILE '.fitt'
     if (-not (Test-Path $fittHome)) {
         throw @"
-~/.fitt does not exist. Before installing the service:
+~\.fitt does not exist. Before installing the service:
   1. mkdir $fittHome
-  2. Copy configs/config.example.yaml  -> $fittHome\config.yaml
-  3. Copy configs/secrets.example.yaml -> $fittHome\secrets.yaml
+  2. Copy configs\config.example.yaml  -> $fittHome\config.yaml
+  3. Copy configs\secrets.example.yaml -> $fittHome\secrets.yaml
   4. Edit both to fill in real values.
+  5. icacls "$fittHome\secrets.yaml" /inheritance:r /grant:r "`$(`$env:USERNAME):F"
 "@
     }
     foreach ($f in @('config.yaml', 'secrets.yaml')) {
         if (-not (Test-Path (Join-Path $fittHome $f))) {
-            throw "Missing $fittHome\$f - copy from configs/$($f -replace '\.yaml$', '.example.yaml') first."
+            throw "Missing $fittHome\$f - copy from configs\$($f -replace '\.yaml$', '.example.yaml') first."
         }
     }
     return $fittHome
+}
+
+function Assert-GatewayImportable {
+    param([string]$Python)
+
+    # Catch the single most common install-time failure up front: the
+    # Python we're about to register cannot `import gateway`. Without
+    # this check, NSSM would register the service, try to start it,
+    # the process would exit immediately, and the user would see only
+    # SERVICE_PAUSED with nothing obvious in the logs.
+    & $Python -c "import gateway; print(gateway.__version__)" 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw @"
+The Python interpreter at:
+    $Python
+cannot import the 'gateway' package.
+
+If you used -SetupVenv, something went wrong during uv sync; check
+the output above.
+
+If you passed -PythonExe manually, run `pip install -e .` into that
+environment against the gateway\ directory.
+"@
+    }
 }
 
 function Stop-ExistingService {
@@ -131,9 +236,9 @@ function Install-FittService {
     New-Item -ItemType Directory -Force $logDir | Out-Null
 
     Write-Step "Registering service '$Name'."
-    # We run `python -m gateway`, which is the same code path as
-    # `fitt-gateway` but avoids depending on the console script path
-    # being present in the service's PATH.
+    # Run `python -m gateway` rather than the `fitt-gateway` console
+    # script. Both work, but invoking the module avoids depending on
+    # the Scripts\ dir being on the service's PATH.
     & $Nssm install $Name $Python '-m' 'gateway' | Out-Null
     & $Nssm set $Name AppDirectory (Join-Path $RepoRoot 'gateway') | Out-Null
     & $Nssm set $Name DisplayName 'FITT Gateway' | Out-Null
@@ -145,8 +250,8 @@ function Install-FittService {
     & $Nssm set $Name AppRestartDelay 30000 | Out-Null
     & $Nssm set $Name AppThrottle 5000 | Out-Null
 
-    # Log NSSM's own stdout/stderr (not the gateway's - that's handled
-    # by structlog) to files under ~/.fitt/logs.
+    # NSSM's own stdout/stderr capture (the gateway writes its own
+    # structured logs via structlog to gateway.log).
     & $Nssm set $Name AppStdout (Join-Path $logDir 'service.stdout.log') | Out-Null
     & $Nssm set $Name AppStderr (Join-Path $logDir 'service.stderr.log') | Out-Null
     & $Nssm set $Name AppStdoutCreationDisposition 4 | Out-Null  # append
@@ -155,7 +260,9 @@ function Install-FittService {
     & $Nssm set $Name AppRotateOnline 1 | Out-Null
     & $Nssm set $Name AppRotateBytes 10485760 | Out-Null  # 10 MB
 
-    # Environment.
+    # Service environment. FITT_HOME pins the config/secrets
+    # directory; PYTHONUNBUFFERED makes stdout/stderr flush promptly
+    # so NSSM's capture files stay current.
     $envBlock = "FITT_HOME=$FittHome`0" + "PYTHONUNBUFFERED=1`0"
     & $Nssm set $Name AppEnvironmentExtra $envBlock | Out-Null
 
@@ -167,7 +274,8 @@ function Install-FittService {
 function Ensure-FirewallRule {
     param([int]$Port, [string]$Name = 'FITT Gateway (Private only)')
 
-    # Remove any prior rule with the same name so re-runs are idempotent.
+    # Remove any prior rule with the same display name so re-runs are
+    # idempotent.
     Remove-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue
 
     Write-Step "Adding firewall rule '$Name' - allow TCP $Port inbound, Private profile only."
@@ -182,18 +290,29 @@ function Ensure-FirewallRule {
 }
 
 function Test-Gateway {
-    param([int]$Port)
-    try {
-        $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" `
-            -UseBasicParsing -TimeoutSec 5
-        if ($r.StatusCode -eq 200) {
-            Write-Host "[ok] /health responded 200." -ForegroundColor Green
-        } else {
-            Write-Warning "/health responded $($r.StatusCode); check the service log."
+    param([int]$Port, [int]$TimeoutSeconds = 45)
+
+    # On first boot Python imports litellm, pydantic, etc. which can
+    # take 15-30 seconds. Poll /health for up to the timeout before
+    # warning.
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastError = $null
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" `
+                -UseBasicParsing -TimeoutSec 3
+            if ($r.StatusCode -eq 200) {
+                Write-Host "[ok] /health responded 200." -ForegroundColor Green
+                return
+            }
+            $lastError = "status=$($r.StatusCode)"
+        } catch {
+            $lastError = $_.Exception.Message
         }
-    } catch {
-        Write-Warning "/health did not respond yet: $_. The service may still be starting - check ~/.fitt/logs."
+        Start-Sleep -Seconds 2
     }
+    Write-Warning "/health did not respond within ${TimeoutSeconds}s (last error: $lastError)."
+    Write-Warning "The service may still be starting slowly. Check ~\.fitt\logs\gateway.log and try curl http://localhost:$Port/health in a moment."
 }
 
 # ---------------------------------------------------------------- main
@@ -201,14 +320,17 @@ function Test-Gateway {
 Assert-Elevated
 
 if (-not $WorkingDir) { $WorkingDir = Resolve-DefaultWorkingDir }
-if (-not $PythonExe)  { $PythonExe  = Resolve-DefaultPython }
+$python = Resolve-Python -RepoRoot $WorkingDir `
+                        -ExplicitPythonExe $PythonExe `
+                        -DoSetupVenv:$SetupVenv
 $nssm = Assert-NssmPresent
 $fittHome = Assert-FittHome
+Assert-GatewayImportable -Python $python
 
 Write-Step "Installing FITT Gateway service."
 Write-Host "  ServiceName:  $ServiceName"
 Write-Host "  Port:         $Port"
-Write-Host "  PythonExe:    $PythonExe"
+Write-Host "  PythonExe:    $python"
 Write-Host "  WorkingDir:   $WorkingDir"
 Write-Host "  FittHome:     $fittHome"
 Write-Host "  NSSM:         $nssm"
@@ -217,7 +339,7 @@ Stop-ExistingService -Name $ServiceName
 Install-FittService `
     -Name $ServiceName `
     -Nssm $nssm `
-    -Python $PythonExe `
+    -Python $python `
     -RepoRoot $WorkingDir `
     -FittHome $fittHome `
     -Port $Port

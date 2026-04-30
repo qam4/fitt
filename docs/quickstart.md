@@ -1,14 +1,12 @@
 # FITT Quickstart
 
-> One page, start to finish. From nothing to a working gateway reachable
-> from your laptop's IDE in about 45 minutes.
+> One page, start to finish. From nothing to a working gateway
+> reachable from your laptop's IDE in about 30 minutes.
 
-This doc walks straight through the setup in order. For deeper
-reference, see:
-
-- [`prerequisites.md`](./prerequisites.md) — per-machine software checklist
-- [`accounts-setup.md`](./accounts-setup.md) — external accounts
-- [`../gateway/README.md`](../gateway/README.md) — full gateway reference
+This is the only install doc. If you want to set up FITT, read this
+top to bottom and do each step. For architecture and design, see
+[`../FITT_ROADMAP.md`](../FITT_ROADMAP.md). For gateway internals
+after install, see [`../gateway/README.md`](../gateway/README.md).
 
 ---
 
@@ -23,13 +21,13 @@ Your phone and IDE are clients.
 
 ---
 
-## Step 1 — Tailscale on every device (5 min)
+## Step 1 - Tailscale on every device (5 min)
 
 Needed on: **Hub, Compute, phone.**
 
 ```powershell
 # Skip if already installed. Otherwise:
-winget install tailscale.tailscale     # or download from tailscale.com
+winget install --id=tailscale.tailscale -e     # or download from tailscale.com
 ```
 
 Sign in on all three with the same account. Verify:
@@ -38,22 +36,27 @@ Sign in on all three with the same account. Verify:
 tailscale status
 ```
 
-All three devices should show IPs in `100.x.x.x`. **Note the Hub's IP
-and the Compute's IP — you'll use them in step 5.**
+All three devices should show IPs in `100.x.x.x`. **Note the Hub's
+IP and the Compute's IP - you'll use them in step 5.**
+
+Tailscale's default ACL already allows every device on your tailnet
+to reach every other device. Don't tighten ACLs unless you know
+exactly which ports to allow.
 
 ---
 
-## Step 2 — Ollama on Compute (10 min)
+## Step 2 - Ollama on Compute (10 min)
 
 On the **laptop**:
 
 1. Install Ollama ([ollama.com/download](https://ollama.com/download)).
-2. Set `OLLAMA_HOST=0.0.0.0` — **critical**, or the Hub can't reach it:
-   - Windows Settings → "Edit the system environment variables" →
-     Environment Variables → New **User variable**.
+2. Set `OLLAMA_HOST=0.0.0.0` - **critical**, or the Hub can't reach
+   it:
+   - Windows Settings -> "Edit the system environment variables" ->
+     Environment Variables -> New **User variable**.
    - Name: `OLLAMA_HOST`, Value: `0.0.0.0`.
-   - Right-click the Ollama tray icon → Quit, then restart Ollama so
-     it picks up the env var.
+   - Right-click the Ollama tray icon -> Quit, then restart Ollama
+     so it picks up the env var.
 3. Pull the primary model:
 
    ```powershell
@@ -66,79 +69,109 @@ On the **laptop**:
    curl http://<compute-tailscale-ip>:11434/api/tags
    ```
 
-   JSON response = good. Connection refused = step 2's env var didn't
-   take.
+   JSON response = good. Connection refused = step 2.2's env var
+   didn't take.
 
 ---
 
-## Step 3 — Ollama on Hub (5 min)
+## Step 3 - Ollama on Hub (5 min)
 
 On the **desktop** (Hub):
 
 1. Install Ollama, same as step 2.
-2. Set `OLLAMA_HOST=0.0.0.0` too (lets you query it from elsewhere if
-   you ever want).
+2. Set `OLLAMA_HOST=0.0.0.0` too (lets you query it from elsewhere
+   if you ever want).
 3. Pull the fallback model:
 
    ```powershell
    ollama pull qwen2.5-coder:7b
    ```
 
+Smaller model, fits the Hub's 8 GB VRAM comfortably. Used as the
+fallback when Compute is asleep.
+
 ---
 
-## Step 4 — External account: OpenRouter (3 min)
+## Step 4 - Cloud LLM account: OpenRouter (3 min)
+
+FITT uses OpenRouter as its cloud backend - one API key gives access
+to many models (Claude, GPT, Gemini, open-source) with a free tier.
 
 1. Go to [openrouter.ai](https://openrouter.ai) and sign in with
    GitHub or Google.
-2. [openrouter.ai/keys](https://openrouter.ai/keys) → **Create Key**.
-   Name it `fitt-gateway`.
+2. [openrouter.ai/keys](https://openrouter.ai/keys) -> **Create
+   Key**. Name it `fitt-gateway`.
 3. Copy the key (starts with `sk-or-v1-...`). You'll paste it in
    step 6.
 
-Optional: add $10 at [openrouter.ai/credits](https://openrouter.ai/credits)
-for higher free-model limits (1000/day vs 50/day). Not required.
+Optional: add $10 at
+[openrouter.ai/credits](https://openrouter.ai/credits) for higher
+free-model limits (1000/day vs 50/day). Not required for v0.
+
+### Optional: Anthropic direct (skip for v0)
+
+The gateway supports direct Anthropic access as an alternate cloud
+backend, but v0 uses OpenRouter. Revisit later only if OpenRouter's
+Claude routes stop meeting your needs. Then:
+
+1. Sign up at [console.anthropic.com](https://console.anthropic.com).
+2. Set a monthly spend limit (Usage limits -> Monthly limit).
+3. API Keys -> Create Key.
+4. Uncomment `anthropic_api_key` in `~/.fitt/secrets.yaml` and the
+   `claude-sonnet-direct` block in `~/.fitt/config.yaml`.
 
 ---
 
-## Step 5 — Gateway install on Hub (10 min)
+## Step 5 - Install uv and NSSM on Hub (5 min)
 
 On the **desktop**.
 
-### 5.1 Python 3.11+
+### 5.1 Install uv
+
+uv manages Python, the virtual environment, and dependencies in one
+tool. You don't install Python yourself - uv downloads a compatible
+one when it needs to.
 
 ```powershell
-python --version        # need 3.11 or newer
+winget install --id=astral-sh.uv -e
 ```
 
-If missing: [python.org/downloads](https://www.python.org/downloads/),
-check "Add Python to PATH".
-
-### 5.2 NSSM (service wrapper)
+Or the official installer (use if winget is unavailable):
 
 ```powershell
-choco install nssm
-# or scoop install nssm
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Restart your shell so `uv` is on PATH, then verify:
+
+```powershell
+uv --version
+```
+
+uv does not put a `python.exe` on PATH, so it doesn't conflict with
+any existing Python install, pyenv, conda, etc.
+
+### 5.2 Install NSSM
+
+NSSM wraps the gateway as a proper Windows service with auto-restart.
+
+```powershell
+winget install --id=NSSM.NSSM -e
+# or: choco install nssm
+# or: scoop install nssm
 # or grab the binary from https://nssm.cc/download and put it on PATH
 ```
 
-### 5.3 Clone and install the gateway
+### 5.3 Clone the repo
 
 ```powershell
 cd $env:USERPROFILE
 gh repo clone qam4/home-ai-cluster
-cd home-ai-cluster\gateway
-
-python -m venv .venv
-.venv\Scripts\python -m pip install --upgrade pip
-.venv\Scripts\python -m pip install -e .
 ```
-
-Don't `pip install -e ".[dev]"` on a clean install — that pulls test
-deps you don't need for running the service.
 
 ---
 
-## Step 6 — Config and secrets (10 min)
+## Step 6 - Config and secrets on Hub (10 min)
 
 Still on the Hub.
 
@@ -172,7 +205,7 @@ Everything else can stay default. Save.
 ### 6.3 Generate a Bearer token
 
 ```powershell
-python -c "import secrets; print(secrets.token_urlsafe(32))"
+uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
 Copy the long random string that prints.
@@ -188,42 +221,63 @@ Paste in:
 - The Bearer token from 6.3 into `allowed_tokens[0].token`.
 - The OpenRouter key from step 4 into `openrouter_api_key`.
 
-Leave the Anthropic and Telegram blocks commented out for now. Save.
+Leave the Anthropic and Telegram blocks commented out. Save.
 
 ### 6.5 Lock down permissions
 
 ```powershell
-icacls "$env:USERPROFILE\.fitt\secrets.yaml" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
+icacls "$env:USERPROFILE\.fitt\secrets.yaml" /inheritance:r /grant:r "$($env:USERNAME):F"
+```
+
+This removes inherited ACEs and grants full control to just you. If
+you later see `PermissionError: [Errno 13]` loading the gateway, the
+ACL ended up wrong. Reset with:
+
+```powershell
+icacls "$env:USERPROFILE\.fitt\secrets.yaml" /reset
+icacls "$env:USERPROFILE\.fitt\secrets.yaml" /inheritance:r /grant:r "$($env:USERNAME):F"
 ```
 
 ### 6.6 Sanity check
 
 ```powershell
 cd $env:USERPROFILE\home-ai-cluster\gateway
-.venv\Scripts\python -m gateway.cli config check
+uv sync
+uv run fitt config check
 ```
 
-Should print `Configuration OK.` with your aliases and models listed.
-If it errors, fix what it points at and re-run.
+`uv sync` creates `gateway\.venv`, downloads a Python if needed, and
+installs the gateway's dependencies. Subsequent runs are fast.
+
+`uv run fitt config check` should print `Configuration OK.` with
+your aliases and models listed. If it errors, fix what it points at
+and re-run.
 
 ---
 
-## Step 7 — Install as a Windows service (5 min)
+## Step 7 - Install as a Windows service (5 min)
 
-Open an **elevated** PowerShell (right-click → Run as administrator).
+Open an **elevated** PowerShell (right-click -> Run as administrator).
 
 ```powershell
 cd $env:USERPROFILE\home-ai-cluster
-.\scripts\install-service.ps1
+.\scripts\install-service.ps1 -SetupVenv
 ```
 
-This:
+`-SetupVenv` runs `uv sync` inside this elevated shell, guaranteeing
+the service points at the right Python regardless of your user PATH.
+Without `-SetupVenv`, the script expects step 6.6's `uv sync` to
+have already run and simply uses the existing `gateway\.venv`.
 
-- registers `FITTGateway` via NSSM with auto-start and 30-second
-  restart on failure,
-- adds a Windows Defender Firewall rule (TCP 8080, Private profile
-  only),
-- runs a `/health` probe and reports the result.
+The script:
+
+- Verifies the venv's Python can actually `import gateway`. Fails
+  fast with a clear error if not.
+- Registers `FITTGateway` via NSSM with auto-start and 30-second
+  restart on failure.
+- Adds a Windows Defender Firewall rule (TCP 8080, Private profile
+  only).
+- Polls `/health` for up to 45 seconds and reports the result.
 
 Verify:
 
@@ -234,82 +288,102 @@ curl http://localhost:8080/v1/models          # should list your aliases
 curl http://<hub-tailscale-ip>:8080/health    # same, over Tailscale
 ```
 
+**First boot takes 15-30 seconds** while Python imports LiteLLM,
+pydantic, etc. If `/health` doesn't respond immediately, wait a bit
+and retry; NSSM will restart the process if it actually crashed.
+
 ---
 
-## Step 8 — Wire up your IDE (5 min)
+## Step 8 - Wire up your IDE (5 min)
 
 On the **laptop**, in VS Code.
 
 ### 8.1 Install Continue
 
-Install the **Continue** extension from the marketplace if not
-already.
+Install the **Continue** extension from the marketplace.
 
-### 8.2 Configure a custom OpenAI-compatible provider
+### 8.2 Add FITT aliases to Continue's config.yaml
 
-Open Continue's config (Ctrl+Shift+P → "Continue: Open Config") and
-add under `models`:
+Continue stores its configuration at
+`%USERPROFILE%\.continue\config.yaml` on Windows
+(`~/.continue/config.yaml` on POSIX). Open it in your editor and add
+two model entries under `models:`:
 
-```json
-{
-  "title": "FITT smart (Claude via OpenRouter)",
-  "provider": "openai",
-  "model": "fitt-smart",
-  "apiBase": "http://<hub-tailscale-ip>:8080/v1",
-  "apiKey": "<your-bearer-token-from-6.3>"
-},
-{
-  "title": "FITT default (local Qwen)",
-  "provider": "openai",
-  "model": "fitt-default",
-  "apiBase": "http://<hub-tailscale-ip>:8080/v1",
-  "apiKey": "<your-bearer-token-from-6.3>"
-}
+```yaml
+models:
+  - name: FITT smart (Claude via OpenRouter)
+    provider: openai
+    apiBase: http://<hub-tailscale-ip>:8080/v1
+    apiKey: <your-bearer-token-from-6.3>
+    model: fitt-smart
+    roles:
+      - chat
+      - edit
+      - apply
+
+  - name: FITT default (local Qwen)
+    provider: openai
+    apiBase: http://<hub-tailscale-ip>:8080/v1
+    apiKey: <your-bearer-token-from-6.3>
+    model: fitt-default
+    roles:
+      - chat
+      - edit
+      - apply
 ```
+
+`provider: openai` plus `apiBase` points Continue at any
+OpenAI-compatible server, which the gateway is. Despite the name,
+this does not mean "send to OpenAI.com" - Continue uses `openai` as
+the generic identifier for any backend that speaks the OpenAI HTTP
+API shape.
+
+You can also reach `config.yaml` through the UI: click the Continue
+icon in the VS Code sidebar, click the gear (settings) icon at the
+top-right of the Continue panel, then the **Configs** tab.
 
 ### 8.3 Test a chat
 
-In Continue's chat pane:
+Reload Continue (close and reopen the panel, or reload the VS Code
+window). In Continue's chat pane:
 
 - Select **FITT smart** from the model dropdown.
-- Ask "what's 2+2?" — a real cloud model should answer.
-- Switch to **FITT default** — the laptop's Ollama should answer.
+- Ask "what's 2+2?" - a real cloud model should answer.
+- Switch to **FITT default** - the laptop's Ollama should answer.
 
 ---
 
-## Step 9 — Verify end to end (5 min)
+## Step 9 - Verify end to end (5 min)
 
 On the Hub:
 
 ```powershell
-# How the gateway looks to the world right now
-.venv\Scripts\python -m gateway.cli status
-
-# Did those test chats land?
-.venv\Scripts\python -m gateway.cli cost
+cd $env:USERPROFILE\home-ai-cluster\gateway
+uv run fitt status          # aliases + current reachability
+uv run fitt cost            # month-to-date spend
 ```
 
-From your **phone** (on Tailscale, not mobile data):
+From your **phone** (on Tailscale, not mobile data), open in browser:
 
 ```
 http://<hub-tailscale-ip>:8080/v1/models
 ```
 
-Open in browser. Should return JSON. If you can see this from the
-phone, the full stack is working.
+Should return JSON. If you can see this from the phone, the full
+stack is working.
 
-From your **phone on mobile data** (off the tailnet), run:
+From your **phone on mobile data** (off the tailnet), try:
 
 ```
-https://<hub-public-ip>:8080/
+http://<hub-public-ip>:8080/
 ```
 
 Should **fail** to connect. If it succeeds, the firewall rule is
-wrong — revisit step 7.
+wrong - revisit step 7.
 
 ---
 
-## Step 10 — Resilience checks (5 min)
+## Step 10 - Resilience checks (5 min)
 
 On the Hub, elevated PowerShell:
 
@@ -319,12 +393,32 @@ Restart-Computer
 # After reboot, from anywhere on Tailscale:
 curl http://<hub-tailscale-ip>:8080/health      # should respond within 60s
 
-# Crash test — find the PID, kill it, watch NSSM restart
+# Crash test - find the PID, kill it, watch NSSM restart
 Get-Process python | Where-Object { $_.Path -like "*home-ai-cluster*" }
 Stop-Process -Id <pid>
 Start-Sleep -Seconds 35
 curl http://localhost:8080/health               # should respond again
 ```
+
+---
+
+## Telegram bot (optional, used in Phase 3)
+
+Phase 1 doesn't read Telegram credentials, but you can populate them
+now so you don't have to touch `secrets.yaml` again when Phase 3
+ships.
+
+1. On Telegram, message `@BotFather`. `/newbot`, follow prompts.
+   Save the bot token (looks like `123456:ABC-...`).
+2. On Telegram, message `@userinfobot` to get your numeric user ID.
+3. Edit `~/.fitt/secrets.yaml` and uncomment the Telegram block:
+
+   ```yaml
+   telegram:
+     bot_token: 123456:ABC-xxxxxxxxxxxxx
+     allowlist_user_ids:
+       - 123456789
+   ```
 
 ---
 
@@ -336,27 +430,33 @@ What you have now:
   local Ollama and OpenRouter.
 - IDE chat on the laptop that can reach it.
 - One Bearer token, one config, swappable models.
-- Logs in `~/.fitt/logs/gateway.log` (tail with your favorite tool).
-- Cost visibility with `fitt cost`.
+- Logs in `~/.fitt/logs/gateway.log`.
+- Cost visibility with `uv run fitt cost`.
 
-Next: live with it for two weeks before starting Phase 2 (memory) —
+Next: live with it for two weeks before starting Phase 2 (memory) -
 see [`../FITT_ROADMAP.md`](../FITT_ROADMAP.md) guiding principle 9.
+
+---
 
 ## Troubleshooting
 
-If something's wrong, `gateway/README.md` has a dedicated
-troubleshooting section: auth 401, `/ready` 503, streaming cost=0,
-service crash loops, firewall issues, update workflow.
+`gateway/README.md` has a dedicated troubleshooting section: auth
+401, `/ready` 503, streaming cost=0, service crash loops, firewall
+issues, update workflow.
 
-## Common slip-ups (you've been warned)
+## Common slip-ups
 
 - **`OLLAMA_HOST=0.0.0.0`** not taking effect on the laptop: you
   changed the env var but didn't restart Ollama.
 - **Firewall rule on Public profile**: Windows marked your Tailscale
-  interface as Public. Settings → Network → Tailscale → Private.
-- **Trailing whitespace in the Bearer token**: copy-paste ate a space.
-  Regenerate with the one-liner in 6.3.
+  interface as Public. Settings -> Network -> Tailscale -> Private.
+- **Trailing whitespace in the Bearer token**: copy-paste ate a
+  space. Regenerate with the one-liner in 6.3.
 - **Wrong Tailscale IP in `config.yaml`**: your laptop got a new IP
   after sleep/wake. Use MagicDNS (hostnames) if this happens often.
-- **`pip install -e .` fails**: you're missing Python 3.11+, or pip
-  itself is outdated (`python -m pip install --upgrade pip`).
+- **`uv sync` fails with network errors**: uv downloads Python +
+  deps from the internet; corporate proxies or flaky Wi-Fi can trip
+  it up. Retry, or set `UV_HTTP_TIMEOUT=120`.
+- **`install-service.ps1` reports "Expected Python at ... \gateway\.venv\..."**:
+  run `uv sync` in `gateway\` first, or re-run the script with
+  `-SetupVenv`.

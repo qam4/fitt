@@ -1,6 +1,6 @@
 # home-ai-cluster
 
-> **FITT** — *Fred Industries Two Thousand.* A self-hosted, spec-driven personal AI with persistent memory, agentic tools, and multi-interface reach. Built gradually on a two-machine GPU cluster, demoable at every phase.
+> **FITT** - *Fred Industries Two Thousand.* A self-hosted, spec-driven personal AI with persistent memory, agentic tools, and multi-interface reach. Built gradually on a two-machine GPU cluster, demoable at every phase.
 
 ## What this is
 
@@ -14,26 +14,15 @@ A private project to build an always-on personal AI assistant that:
 
 ## Status
 
-Early scaffolding. Currently at Phase 0 complete, Phase 1 spec'd.
+Phase 0 complete, Phase 1 in at-home verification.
 
-## Where to start
+## Docs
 
-**Setting it up (first time):**
-
-- [`docs/quickstart.md`](./docs/quickstart.md) — **start here.** One page, 10 steps, takes ~45 minutes.
-
-**Reading the design:**
-
-- [`FITT_ROADMAP.md`](./FITT_ROADMAP.md) — the outer shell. Guiding principles, phase sequencing, and draft specs for later phases.
-- [`FITT_PRD.md`](./FITT_PRD.md) — the original PRD that seeded the design.
-- [`.kiro/specs/phase1-gateway/`](./.kiro/specs/phase1-gateway/) — the first full Kiro-style spec (`requirements.md`, `design.md`, `tasks.md`).
-
-**Reference (dive in as needed):**
-
-- [`docs/prerequisites.md`](./docs/prerequisites.md) — software to install on each machine (Tailscale, Ollama, Python, NSSM).
-- [`docs/accounts-setup.md`](./docs/accounts-setup.md) — external accounts (OpenRouter, optional Anthropic, Telegram).
-- [`gateway/README.md`](./gateway/README.md) — full gateway reference (config, HTTP API, CLI, failure handling, troubleshooting).
-- [`configs/config.example.yaml`](./configs/config.example.yaml) and [`configs/secrets.example.yaml`](./configs/secrets.example.yaml) — template files you copy to `~/.fitt/`.
+- **Install it:** [`docs/quickstart.md`](./docs/quickstart.md) - one page, ~30 minutes, start to finish.
+- **How it works:** [`gateway/README.md`](./gateway/README.md) - config reference, HTTP API, CLI, troubleshooting.
+- **Why it's built this way:** [`FITT_ROADMAP.md`](./FITT_ROADMAP.md) - guiding principles and phased plan.
+- **Original vision:** [`FITT_PRD.md`](./FITT_PRD.md) - the product requirements document that seeded the design.
+- **Active spec:** [`.kiro/specs/phase1-gateway/`](./.kiro/specs/phase1-gateway/) - three-file Kiro spec (requirements / design / tasks).
 
 ## Design commitments
 
@@ -45,8 +34,8 @@ Early scaffolding. Currently at Phase 0 complete, Phase 1 spec'd.
 
 Specs follow the three-file Kiro convention:
 
-- `requirements.md` — user stories with numbered acceptance criteria.
-- `design.md` — architecture, modules, design decisions with rationale, correctness properties, testing strategy.
-- `tasks.md` — checkboxed implementation tasks, organized into sub-phases.
+- `requirements.md` - user stories with numbered acceptance criteria.
+- `design.md` - architecture, modules, design decisions with rationale, correctness properties, testing strategy.
+- `tasks.md` - checkboxed implementation tasks, organized into sub-phases.
 
 When a phase's inline draft in `FITT_ROADMAP.md` is ready to implement, it gets promoted into a proper three-file spec under `.kiro/specs/<phase>/`.

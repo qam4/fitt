@@ -24,8 +24,8 @@
 - [x] 8. `.gitignore` entries in place: `secrets.yaml`, `*.db`,
   `logs/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`,
   etc.
-- [x] 9. Verify `pip install -e ".[dev]"` works and `pytest` runs the
-  smoke test green.
+- [x] 9. Verify `uv sync` creates the venv and `uv run pytest` runs the
+  suite green.
 - [x] 10. Commit and push the scaffold.
 
 ## Phase 1b — Configuration
@@ -38,7 +38,7 @@
   `Config` object.
 - [x] 13. Implement `_check_secrets_permissions(path)` that refuses to
   load if the file is group/world-readable on POSIX. Windows check is a
-  best-effort no-op (documented in docs/accounts-setup.md).
+  best-effort no-op (documented in docs/quickstart.md).
 - [x] 14. Create `configs/config.example.yaml` (OpenRouter primary,
   Anthropic commented, laptop + desktop Ollama).
 - [x] 15. Create `configs/secrets.example.yaml` with placeholders
@@ -197,9 +197,9 @@
   - Failure-handling table.
   - Troubleshooting section (auth 401, /ready 503, streaming cost=0,
     service crash loop, update workflow).
-- [x] 57a. Create `docs/prerequisites.md` listing software to install
-  on each machine (Tailscale, Ollama + `OLLAMA_HOST=0.0.0.0`, Python,
-  NSSM) with the right order of operations.
+- [x] 57a. Consolidated setup docs into `docs/quickstart.md` - one
+  end-to-end guide covering Tailscale, Ollama + `OLLAMA_HOST=0.0.0.0`,
+  uv, NSSM, accounts, secrets, service install, and IDE wiring.
 - [ ] 58. Update `FITT_ROADMAP.md`: mark Phase 1 complete, note any
   deviations from the spec. (After at-home smoke.)
 - [ ] 59. Commit and push. Tag the repo `v0.1.0-phase1`. (After

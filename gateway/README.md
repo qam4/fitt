@@ -10,84 +10,50 @@ Anthropic optional) based on an alias the client asks for.
 - **One daemon, many interfaces**: IDE (VS Code + Continue / Cursor /
   Kiro), Telegram (later), Open WebUI (later), curl.
 
-## Before you start
+## Install
 
-First-time setup? Follow [`../docs/quickstart.md`](../docs/quickstart.md)
-end to end — it walks through Tailscale, Ollama, this gateway, and
-your IDE in ~45 minutes. This README is the reference for once you
-already have it running.
+Follow [`../docs/quickstart.md`](../docs/quickstart.md). One page,
+10 steps, start to finish. This README is the *reference* for when
+you already have the gateway running.
 
-If you prefer to work piece by piece:
+## Running locally during development
 
-1. [`../docs/prerequisites.md`](../docs/prerequisites.md) — Tailscale,
-   Ollama + `OLLAMA_HOST=0.0.0.0`, Python 3.11+, NSSM.
-2. [`../docs/accounts-setup.md`](../docs/accounts-setup.md) —
-   OpenRouter API key, Bearer token, optional Telegram + Anthropic.
-
-Without these, the gateway will start but won't be able to reach the
-laptop's Ollama or OpenRouter.
-
-## Quick install (desktop, Windows, as a service)
-
-From an **elevated** PowerShell prompt, at the repo root:
-
-```powershell
-# 1. Seed ~/.fitt with config and secrets.
-mkdir $env:USERPROFILE\.fitt
-Copy-Item configs\config.example.yaml  $env:USERPROFILE\.fitt\config.yaml
-Copy-Item configs\secrets.example.yaml $env:USERPROFILE\.fitt\secrets.yaml
-# Edit both. Put real Tailscale IPs in config.yaml; real keys in secrets.yaml.
-notepad $env:USERPROFILE\.fitt\config.yaml
-notepad $env:USERPROFILE\.fitt\secrets.yaml
-
-# 2. Lock down the secrets file so only you can read it.
-icacls "$env:USERPROFILE\.fitt\secrets.yaml" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
-
-# 3. Create a venv and install the gateway.
-cd gateway
-python -m venv .venv
-.venv\Scripts\python -m pip install --upgrade pip
-.venv\Scripts\python -m pip install -e .
-cd ..
-
-# 4. Install as a Windows service.
-.\scripts\install-service.ps1
-```
-
-The install script:
-
-- registers `FITTGateway` via NSSM (auto-start at boot, 30-second
-  restart on failure),
-- adds a Windows Defender Firewall rule for TCP 8080 on Private
-  profile only (Tailscale is Private),
-- runs a `/health` probe to confirm it's up.
-
-Verify:
-
-```powershell
-Get-Service FITTGateway
-curl http://localhost:8080/health
-```
-
-Uninstall with `.\scripts\uninstall-service.ps1`.
-
-## Dev install (no service, foreground process)
+Requires [uv](https://docs.astral.sh/uv/) on PATH
+(`winget install --id=astral-sh.uv -e`). See the quickstart for the
+full setup.
 
 ```powershell
 cd gateway
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[dev]"
-pytest                      # 64 tests, 2 POSIX-only skips on Windows
-
-# Run the gateway in the foreground.
-python -m gateway
+uv sync                     # first run: ~30 seconds; after: instant
+uv run pytest               # run the test suite
+uv run python -m gateway    # start the gateway in the foreground
 ```
+
+## Running the `fitt` CLI
+
+Inside the repo:
+
+```powershell
+cd gateway
+uv run fitt status          # aliases + current reachability
+uv run fitt cost            # MTD spend from gateway.log
+uv run fitt config check    # validate config + secrets without starting
+```
+
+Or install `fitt` as a global tool so you can run it from anywhere:
+
+```powershell
+cd gateway
+uv tool install --editable .
+fitt status   # works from any shell, any directory
+```
+
+Re-run `uv tool install --editable .` after `git pull` to refresh.
 
 ## Configuration
 
 Config lives in **`~/.fitt/config.yaml`** (non-secret) and
-**`~/.fitt/secrets.yaml`** (secret). The repo only ships `.example`
+**`~/.fitt/secrets.yaml`** (secret). The repo ships `.example`
 templates under `configs/`; real values never land in git.
 
 ### `config.yaml` structure
@@ -142,8 +108,8 @@ openrouter_api_key: sk-or-v1-...
 #     - 123456789
 ```
 
-Refuses to load if group/world-readable on POSIX. On Windows, run the
-`icacls` command shown above.
+Refuses to load if group/world-readable on POSIX. On Windows, see
+the `icacls` command in the quickstart.
 
 ## HTTP API
 
@@ -169,7 +135,7 @@ forwards the rest to the configured backend via LiteLLM.
 | Header              | Meaning                                              |
 |---------------------|------------------------------------------------------|
 | `X-FITT-Alias`      | The alias the client asked for.                      |
-| `X-FITT-Backend`    | The *actual* backend that served the request (e.g. `openrouter:anthropic/claude-sonnet-4.5` or `ollama:http://laptop:11434`). |
+| `X-FITT-Backend`    | The actual backend that served the request (e.g. `openrouter:anthropic/claude-sonnet-4.5` or `ollama:http://laptop:11434`). |
 | `X-FITT-Fallback`   | Present and `1` if the primary was down and fallback was used. |
 
 **Streaming:** set `stream: true`. The response is `text/event-stream`
@@ -225,21 +191,6 @@ failing aliases.
 | Concrete model id instead of alias     | 400 + body explaining alias requirement           |
 | Invalid / missing Bearer token         | 401 (no backend call)                             |
 
-## `fitt` CLI
-
-Installed alongside the gateway (`pip install -e .` also exposes
-`fitt`).
-
-```
-fitt cost                  # MTD spend aggregated from gateway.log
-fitt cost --month 2026-03  # specific month
-fitt status                # aliases + current reachability
-fitt config check          # validate config + secrets without starting
-```
-
-`fitt cost` reads `~/.fitt/logs/gateway.log*` — the logs are the
-source of truth, no separate database.
-
 ## Environment variables
 
 | Variable              | Purpose                                               |
@@ -254,10 +205,27 @@ Windows spawns the process.
 
 ## Troubleshooting
 
+### `uv sync` fails with a network error
+
+uv downloads Python + dependency wheels from the internet on first
+run. Corporate proxies, flaky Wi-Fi, or a stale DNS cache can break
+this. Retry, or set `UV_HTTP_TIMEOUT=120`.
+
+### `install-service.ps1` says "Expected Python at gateway\.venv\Scripts\python.exe"
+
+The venv hasn't been created. Either:
+
+```powershell
+cd gateway
+uv sync
+```
+
+or re-run the install script with `-SetupVenv` so it runs `uv sync`
+for you.
+
 ### The gateway says "secrets.yaml not found"
 
-You haven't copied the templates into `~/.fitt/`. See the "Quick
-install" section.
+You haven't copied the templates into `~/.fitt/`. See the quickstart.
 
 ### `Get-Service FITTGateway` shows the service running but curl /health hangs
 
@@ -272,7 +240,7 @@ netstat -an | findstr :8080
 - `netstat` should show `0.0.0.0:8080` in LISTENING state.
 
 If Windows thinks Tailscale's network is Public, change it in
-Settings → Network → Tailscale → Set as Private.
+Settings -> Network -> Tailscale -> Set as Private.
 
 ### 401 Unauthorized from my IDE
 
@@ -285,7 +253,7 @@ Four likely causes, check in order:
 3. You edited `secrets.yaml` but didn't restart the gateway.
    Windows service: `Restart-Service FITTGateway`.
 4. Trailing whitespace in the token. Regenerate with
-   `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+   `uv run python -c "import secrets; print(secrets.token_urlsafe(32))"`.
 
 ### /ready returns 503 with "fitt-default" failing
 
@@ -301,6 +269,15 @@ The laptop's Ollama isn't reachable from the desktop. Check:
    after setting the env var.
 4. Endpoint in `config.yaml` matches the laptop's actual Tailscale IP.
 
+### `PermissionError: [Errno 13]` on secrets.yaml
+
+The ACL on `secrets.yaml` ended up wrong. Reset:
+
+```powershell
+icacls "$env:USERPROFILE\.fitt\secrets.yaml" /reset
+icacls "$env:USERPROFILE\.fitt\secrets.yaml" /inheritance:r /grant:r "$($env:USERNAME):F"
+```
+
 ### Streaming responses appear garbled or delayed in the IDE
 
 Your client needs to enable streaming for the model. In Continue,
@@ -309,10 +286,10 @@ Your client needs to enable streaming for the model. In Continue,
 ### `fitt cost` shows $0 even though I used the cloud alias
 
 Token counts come from the upstream provider's usage data. Some
-providers return it only at end-of-stream, which Phase 1 doesn't fully
-wire up for streaming responses — the non-streaming path is accurate,
-but streaming responses may log `cost_usd: 0`. This is a known Phase 1
-limitation tracked in the roadmap.
+providers return it only at end-of-stream, which Phase 1 doesn't
+fully wire up for streaming responses - the non-streaming path is
+accurate, but streaming responses may log `cost_usd: 0`. Known
+Phase 1 limitation tracked in the roadmap.
 
 ### The gateway starts but a few seconds later the service stops
 
@@ -326,7 +303,7 @@ missing `openrouter_api_key`, invalid YAML, port 8080 already bound.
 cd home-ai-cluster
 git pull
 cd gateway
-.venv\Scripts\python -m pip install -e .
+uv sync
 Restart-Service FITTGateway
 ```
 
