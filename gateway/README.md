@@ -12,9 +12,9 @@ Anthropic optional) based on an alias the client asks for.
 
 ## Install
 
-Follow [`../docs/quickstart.md`](../docs/quickstart.md). One page,
-10 steps, start to finish. This README is the *reference* for when
-you already have the gateway running.
+Follow [`../docs/quickstart.md`](../docs/quickstart.md). Start to
+finish from any Docker host. This README is the *reference* for
+when you already have the gateway running.
 
 ## Running locally during development
 
@@ -236,13 +236,20 @@ failing aliases.
 
 | Variable              | Purpose                                               |
 |-----------------------|-------------------------------------------------------|
-| `FITT_HOME`           | Override `~/.fitt`. Used by tests and the service install. |
+| `FITT_HOME`           | Override `~/.fitt`. Used by tests, Docker, and the service install. |
 | `FITT_CONFIG_PATH`    | Override the config file location.                    |
 | `FITT_SECRETS_PATH`   | Override the secrets file location.                   |
 
-The service installer sets `FITT_HOME` to `%USERPROFILE%\.fitt`
-explicitly so the service reads the right files regardless of how
-Windows spawns the process.
+In the Docker compose path (which is the recommended install),
+`FITT_HOME` is set to `/fitt` inside the container and bind-mounted
+to whatever path you put in `.env` on the host (e.g.
+`/share/Public/fitt` on a QNAP). `FITT_CONFIG_PATH` and
+`FITT_SECRETS_PATH` are set explicitly in `docker-compose.yml` so
+the container doesn't guess.
+
+The legacy Windows service installer sets `FITT_HOME` to
+`%USERPROFILE%\.fitt` explicitly so the service reads the right
+files regardless of how Windows spawns the process.
 
 ## Troubleshooting
 
@@ -261,6 +268,35 @@ passes, the image is fine and the issue is in your real config or
 environment. If it fails, the build or the entrypoint is broken
 and the rest of the troubleshooting below won't help until you
 fix that first.
+
+### Docker: container exits immediately after `docker compose up`
+
+Three causes in order of likelihood:
+
+1. **`secrets.yaml` permissions are too open.** The gateway
+   refuses to load on POSIX if the file is group or world
+   readable. Logs will show `SecretsPermissionError`. Fix:
+   ```bash
+   chmod 0600 "$FITT_HOME/secrets.yaml"
+   docker compose restart gateway
+   ```
+
+2. **UID/GID mismatch on the bind mount.** The container runs as
+   `PUID:PGID` from `.env` (default `1000:1000`). If `$FITT_HOME`
+   on the host is owned by a different uid/gid, the gateway can
+   write logs but not session history (or vice versa). Logs will
+   show `PermissionError`. Fix: either `chown -R $PUID:$PGID
+   $FITT_HOME` on the host, or change `PUID`/`PGID` in `.env` to
+   match the host owner.
+
+3. **Invalid `config.yaml` or `secrets.yaml`.** Logs will show
+   `ConfigError` with the specific validation failure. Fix the
+   file and `docker compose restart gateway`.
+
+Read the logs:
+```bash
+docker compose logs --tail=50 gateway
+```
 
 ### `uv sync` fails with a network error
 

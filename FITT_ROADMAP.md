@@ -446,9 +446,14 @@ allowed_tokens:
 
 ---
 
-## Phase 3.5 — Docker-first Hub (Spec-driven, ~1 weekend)
+## Phase 3.5 — Docker-first Hub (Spec-driven, ~1 weekend) — CODE LANDED
 
 **Goal:** Make the hub portable. Same code, same config shape, running in containers on a QNAP NAS (or any Docker host) instead of as Windows services on a desktop.
+
+**Status:** All implementation tasks (1-7) landed on `main`. The
+QNAP pilot (task 8) is in progress on the author's TS-253Be.
+Phase 3.5 will flip to "shipped" once the hub has been running
+for 3 days without intervention.
 
 **What it builds:**
 

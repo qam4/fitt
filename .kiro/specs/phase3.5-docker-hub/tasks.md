@@ -1,124 +1,151 @@
 # Phase 3.5 — Docker-first Hub: Tasks
 
-Implementation order picked to keep the tree green at every commit.
-Each top-level task is a reviewable commit.
+Implementation order picked to keep the tree green at every
+commit. Each top-level task is a reviewable commit.
+
+Status legend: `[x]` done and on `main`, `[ ]` not yet.
 
 ## 1. Gateway image
 
-- [ ] 1a. Add `gateway/.dockerignore` excluding `.venv`, `__pycache__`,
-       `.pytest_cache`, `.mypy_cache`, `tests/`, `dist/`, `*.egg-info`.
-- [ ] 1b. Extract a `create_app()` factory in
-       `gateway/src/gateway/app.py` (already exists) and make
-       `gateway/__main__.py` a thin entrypoint that calls it plus
-       `uvicorn.run(...)`. No behaviour change.
-- [ ] 1c. Write `gateway/Dockerfile` (multi-stage, python:3.11-slim,
-       uv in builder, runtime has no uv).
-- [ ] 1d. Verify: `docker build -t fitt-gateway:local ./gateway`
-       succeeds on Linux/macOS. Image size < 200 MB.
-- [ ] 1e. Verify: `docker run --rm -e FITT_HOME=/tmp/nope
-       fitt-gateway:local python -c "import gateway; print('ok')"`
-       exits 0.
+- [x] 1a. Add `gateway/.dockerignore`.
+- [x] 1b. Add a zero-arg `create_app_from_env()` factory in
+       `gateway/src/gateway/app.py` for `uvicorn --factory` /
+       `--reload`. (Existing `create_app(config)` kept for tests.)
+- [x] 1c. Write `gateway/Dockerfile` (multi-stage,
+       python:3.11-slim, uv in builder, runtime has no uv,
+       non-root `fitt` user at uid/gid 1000, healthcheck on
+       `/health`).
+- [ ] 1d. Verify on a real Docker host: `docker build -t
+       fitt-gateway:local ./gateway` succeeds, image size
+       < 200 MB. (Sandbox has no daemon; deferred to pilot.)
 
 ## 2. Telegram bot image
 
-- [ ] 2a. Add `telegram-bot/.dockerignore`.
-- [ ] 2b. Write `telegram-bot/Dockerfile` mirroring the gateway's
-       shape.
-- [ ] 2c. Verify: `docker build -t fitt-telegram-bot:local
-       ./telegram-bot` succeeds.
+- [x] 2a. Add `telegram-bot/.dockerignore`.
+- [x] 2b. Write `telegram-bot/Dockerfile`. Build context must be
+       the repo root (not `./telegram-bot`) so `tool.uv.sources`
+       can resolve `../gateway`.
+- [ ] 2c. Verify on a real Docker host: `docker build -t
+       fitt-telegram-bot:local -f telegram-bot/Dockerfile .`
+       succeeds. (Deferred to pilot.)
 
 ## 3. Compose topology
 
-- [ ] 3a. Rewrite `docker-compose.yml` at repo root to define
-       `gateway`, `telegram-bot`, and `open-webui` services per
-       design.md. Pin Open WebUI to a specific stable tag.
-- [ ] 3b. Add `name: fitt` at the top of the compose file for clean
-       log prefixes.
-- [ ] 3c. Add `logging.options.max-size=10m, max-file=5` to each
-       service.
-- [ ] 3d. Add `.env.example` at repo root documenting `FITT_HOME`,
-       `PUID`, `PGID`, `FITT_BEARER_TOKEN`.
-- [ ] 3e. Add `.env` to `.gitignore` (verify it already is).
-- [ ] 3f. Remove the old Open-WebUI-only content from whatever
-       `docker-compose.yml` or `docker-compose.open-webui.yml` holds
-       it today. Confirm by grep that nothing else in the repo
-       refers to those retired script paths.
+- [x] 3a. Rewrite `docker-compose.yml` at repo root with gateway,
+       telegram-bot, and open-webui services per design.md.
+       Open WebUI pinned to `v0.3.35`.
+- [x] 3b. Added `name: fitt` at the top for clean log prefixes.
+- [x] 3c. Added `logging.options.max-size=10m, max-file=5` to
+       each service.
+- [x] 3d. Added `.env.example` at repo root with `FITT_HOME`,
+       `PUID`, `PGID`, `TZ`, `FITT_BEARER_TOKEN`.
+- [x] 3e. `.env` confirmed gitignored.
+- [x] 3f. Both bind mounts point under `$FITT_HOME`: one for the
+       gateway/bot pair, one for Open WebUI's own state.
 
 ## 4. Retire the Open WebUI install scripts
 
-- [ ] 4a. `git rm scripts/install-open-webui.ps1
-       scripts/uninstall-open-webui.ps1`.
-- [ ] 4b. Search the repo for any references to those script names;
-       update or remove.
-- [ ] 4c. Quickstart Part A.1 (Windows) updated: point users at the
-       compose path even on Windows for Open WebUI. (Phase 3 already
-       used compose for this, so the net change is removing the
-       `.ps1` wrapper.)
+- [x] 4a. Deleted `scripts/install-open-webui.ps1` and
+       `scripts/uninstall-open-webui.ps1`.
+- [x] 4b. Grep confirmed no remaining references inside the repo
+       other than historical spec/roadmap mentions.
 
 ## 5. Dev overlay
 
-- [ ] 5a. Write `docker-compose.override.yml.example` per design.md,
-       bind-mounting gateway source and running under
-       `uvicorn --reload`.
-- [ ] 5b. Add `docker-compose.override.yml` to `.gitignore`.
-- [ ] 5c. Document the "dev on the NAS" workflow (VS Code
-       Remote-SSH + override file + `docker compose logs -f gateway`)
-       in `gateway/README.md`. Short, one section.
+- [x] 5a. Wrote `docker-compose.override.yml.example` that
+       bind-mounts gateway/src (and telegram-bot/src), overrides
+       the gateway ENTRYPOINT with `uvicorn --factory --reload`
+       pointed at `create_app_from_env`.
+- [x] 5b. Added `docker-compose.override.yml` to `.gitignore`.
+- [x] 5c. Added a "Running the whole hub in Docker (on your
+       laptop)" section to `gateway/README.md` explaining the
+       hot-reload dev loop.
 
 ## 6. Smoke test
 
-- [ ] 6a. Write `scripts/smoke-compose.sh` per design.md.
-- [ ] 6b. Test it locally on Linux or macOS: fresh clone, fill in
-       placeholder values, run the script, confirm it passes.
-- [ ] 6c. Mention in `gateway/README.md` troubleshooting section as
-       the first thing to run when the stack misbehaves.
+- [x] 6a. Wrote `scripts/smoke-compose.sh` (POSIX bash, marked
+       +x in git's index). Builds gateway, brings it up with a
+       mktemp FITT_HOME, polls /health, checks /v1/models, tears
+       down.
+- [ ] 6b. Verify on a real Docker host: script passes on Linux
+       or macOS. (Deferred to pilot.)
+- [x] 6c. Pointed at the script from `gateway/README.md`'s
+       troubleshooting section as the first thing to run when a
+       compose install misbehaves.
 
-## 7. Quickstart restructure
+## 7. Quickstart rewrite
 
-- [ ] 7a. Split Part A into A.1 (Windows) and A.2 (Docker). Keep
-       the existing A content as A.1 verbatim.
-- [ ] 7b. Write A.2 following the outline in design.md: 8 steps,
-       ending at a working `/health` response.
-- [ ] 7c. Add the one-paragraph chooser at the top of Part A so
-       readers pick the right path immediately.
-- [ ] 7d. Add a small "Migrating from a Windows hub to a Docker
-       hub" section as an appendix to A.2.
-- [ ] 7e. Parts B (Satellites) and C (Clients) are unchanged;
-       verify cross-links still land.
+Rewritten around the Docker hub as the single supported path
+(not a two-flavor A.1/A.2 split as originally outlined - the
+Windows NSSM path became unmaintained legacy per discussion,
+so no point in documenting it alongside the Docker one).
 
-## 8. QNAP pilot
+- [x] 7a. Part A rewrites Steps 3-7 around install Docker, clone
+       repo, populate `$FITT_HOME`, write `.env`,
+       `docker compose up -d`, verify.
+- [x] 7b. Step 6 offers two equivalent flavors (6.A Container
+       Station GUI via "Applications", 6.B SSH + compose).
+- [x] 7c. Parts B (Satellites) and C (Clients) updated: restart
+       gateway is now `docker compose restart gateway`;
+       Telegram bot and Open WebUI in Part C are just "configure
+       and verify" since the containers were already started.
+- [x] 7d. Platform-neutral Tailscale and editor instructions
+       (Step 1, Step 11) so Linux/macOS/QNAP users aren't
+       reading PowerShell.
+- [x] 7e. Resilience checks and common slip-ups rewritten for
+       Docker (compose restart policy, uid/gid mismatch,
+       depends_on condition on older QTS).
+- [x] 7f. Added "Updating the hub" section with the
+       `git pull && docker compose build && docker compose up -d`
+       three-liner.
 
-(Manual, documented in spec review.)
+## 8. QNAP pilot (manual, author only)
 
-- [ ] 8a. Author: on the TS-253Be, create `/share/Public/fitt/`
-       (matching the existing app-data convention used for Jellyfin
-       / Plex), copy existing `~/.fitt/` content, chmod secrets.
+- [ ] 8a. On the TS-253Be, create `/share/Public/fitt/` matching
+       the existing Jellyfin/Plex app-data convention. Copy
+       existing `~/.fitt/` content over. `chmod 0600` secrets.
 - [ ] 8b. Clone the repo on the NAS.
-- [ ] 8c. Fill in `.env`.
-- [ ] 8d. `docker compose up -d`.
+- [ ] 8c. Fill in `.env` (`FITT_HOME`, `PUID`, `PGID`, `TZ`,
+       `FITT_BEARER_TOKEN`).
+- [ ] 8d. `docker compose up -d` (or Container Station
+       Applications -> Create).
 - [ ] 8e. Verify `/health`, `/v1/models`, Telegram `/start`,
        Open WebUI signup.
-- [ ] 8f. Switch Continue on the laptop to the NAS's Tailscale IP.
-- [ ] 8g. Live with it for 3 days. File any friction as follow-up
-       tasks.
+- [ ] 8f. Switch Continue on the laptop to the NAS's Tailscale
+       IP.
+- [ ] 8g. Live with it for 3 days. File any friction as
+       follow-up tasks.
 
 ## 9. Docs cleanup
 
-- [ ] 9a. Gateway README `config.yaml structure` section: mention
-       that `FITT_HOME` is set to `/fitt` in the Docker path.
-- [ ] 9b. Gateway README troubleshooting: add "Docker: container
-       exits immediately" entry that points at PUID/PGID and
-       secrets file permissions.
-- [ ] 9c. `FITT_ROADMAP.md`: note Phase 3.5 as completed in the
-       phase history once the pilot passes.
+- [x] 9a. Gateway README environment-variables section: notes
+       that `FITT_HOME=/fitt` in the container and is bind-mounted
+       from the host; `FITT_CONFIG_PATH` / `FITT_SECRETS_PATH`
+       set explicitly in the compose file.
+- [x] 9b. Gateway README troubleshooting: added "Docker:
+       container exits immediately after `docker compose up`"
+       entry covering secrets permissions, UID/GID mismatch, and
+       config validation errors.
+- [x] 9c. `FITT_ROADMAP.md`: Phase 3.5 marked "CODE LANDED" with
+       a status paragraph. Will flip to "shipped" after the pilot
+       passes.
+
+## Follow-up (not part of this phase)
+
+- [ ] After 2+ weeks on the Docker hub without the author wanting
+      to fall back, decide whether to retire
+      `install-service.ps1`, `install-telegram-bot.ps1`, and their
+      uninstall counterparts. If retired, do so as a deliberate
+      commit with context, not a drive-by cleanup.
 
 ## Definition of done
 
-- Fresh Linux, macOS, or QNAP host can `docker compose up -d` and
-  hit `/health` within 60 seconds of start.
+- Fresh Linux, macOS, or QNAP host can `docker compose up -d`
+  and hit `/health` within 60 seconds of start. **(pending
+  pilot)**
 - All existing tests pass (`uv run pytest` in gateway/ and
-  telegram-bot/).
-- Windows hub path (A.1) still works end-to-end.
+  telegram-bot/). **(verified: 123 + 33 green)**
+- Quickstart is a single linear path; no NSSM references in the
+  docs. **(done)**
 - Author has run for 3 days on the NAS without intervention.
-- Two commits: one for the Docker work, one for the quickstart
-  restructure. Cleanly reviewable.
+  **(pending pilot)**
