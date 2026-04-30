@@ -115,21 +115,29 @@ Acceptance:
 - Quickstart Part A (Windows) is unchanged except for a cross-
   reference to Part A.2 (Docker).
 
-### U4 — Developing on the NAS
+### U4 — Iteration loop on the laptop
 
-> As the maintainer, I want a tight iteration loop when working on
-> the gateway while it runs on my NAS, so I don't dread fixing
-> bugs.
+> As the maintainer, I want to iterate on the hub stack locally on
+> my laptop using the same images I deploy, so the "works on my
+> machine" case stays honest.
 
 Acceptance:
-- A `docker-compose.override.yml` (or equivalent) exists that:
+- A `docker-compose.override.yml.example` exists that:
   - Bind-mounts `./gateway/src` into the container.
-  - Runs the gateway under `uvicorn --reload` (or equivalent) so
-    source edits are picked up live.
-- VS Code Remote-SSH'd into the NAS, an edit to a gateway module
-  shows up in `docker compose logs -f gateway` within 2 seconds.
+  - Runs the gateway under `uvicorn --reload` so source edits are
+    picked up live.
+- Copied to `docker-compose.override.yml` locally, running
+  `docker compose up -d` on the laptop brings up the same three
+  services as on the NAS, pointing at a local `$FITT_HOME`.
 - Dependency changes (adding a package to `pyproject.toml`) require
   a rebuild; source-only changes do not.
+- The same override file works unchanged on the NAS for the rare
+  case when a bug only reproduces there.
+
+Note: the primary dev loop is the laptop. The NAS is a
+**deployment target**, not a workspace. Remote VS Code on the NAS
+is a diagnosis tool for NAS-specific issues, documented in the
+appendix but not required for feature work.
 
 ### U5 — Updates
 

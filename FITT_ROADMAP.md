@@ -30,7 +30,7 @@ Phase 0 (manual) ─┐
                   │                        ▼
                   │                   Phase 2.5 (sessions)
                   │                        │
-                  │                        ├─► Phase 3 (telegram)
+                  │                        ├─► Phase 3 (telegram) ─► Phase 3.5 (docker hub)
                   │                        │    │
                   │                        │    └─► Phase 8 (voice)
                   │                        │
@@ -443,6 +443,32 @@ allowed_tokens:
 - Open WebUI's own auth model (its signup/login) is separate from the gateway's Bearer token — lock down Open WebUI to allowlisted users independently.
 
 *Full three-file spec to be written when this phase starts.*
+
+---
+
+## Phase 3.5 — Docker-first Hub (Spec-driven, ~1 weekend)
+
+**Goal:** Make the hub portable. Same code, same config shape, running in containers on a QNAP NAS (or any Docker host) instead of as Windows services on a desktop.
+
+**What it builds:**
+
+- `gateway/Dockerfile` and `telegram-bot/Dockerfile` (multi-stage, uv-based, python:3.11-slim).
+- Root `docker-compose.yml` defining gateway + telegram-bot + open-webui as three services sharing a bind-mounted `$FITT_HOME`.
+- `docker-compose.override.yml.example` for a hot-reload dev loop on the laptop.
+- Quickstart Part A splits into A.1 (Windows/NSSM) and A.2 (Docker). Parts B and C unchanged.
+- Retires `install-open-webui.ps1` (compose subsumes it). Keeps `install-service.ps1` and `install-telegram-bot.ps1`.
+
+**Not in scope:**
+
+- **Satellites in Docker.** Ollama stays native — GPU passthrough overhead isn't worth it, and Phase 0's reasoning ("Docker buys us nothing here") still holds for satellites.
+- **Image publishing.** Phase 3.5 builds images on the target host. A future CI/CD phase flips to prebuilt images on GHCR.
+- **Admin web UI.** Separate future phase; Phase 3.5 only containerizes what exists.
+
+**Release pipeline (Shape 1):** build on the target host, deploy via `git pull && docker compose up -d`. Simplest possible. Two follow-up shapes documented in the spec for when the friction justifies the work: Shape 2 (GHCR + GitHub Actions) and Shape 3 (auto-deploy, probably never).
+
+**Exit criteria:** Author's TS-253Be runs the hub for 3 days without intervention. Phone, IDE, and Telegram all work via the NAS's Tailscale IP. Windows hub path still works on a fresh install.
+
+*Full spec: `.kiro/specs/phase3.5-docker-hub/`.*
 
 ---
 

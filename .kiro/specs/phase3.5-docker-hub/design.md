@@ -149,12 +149,18 @@ ENTRYPOINT ["python", "-m", "fitt_telegram_bot"]
 
 ```yaml
 # Compose v2 - no version key needed on modern Docker.
+name: fitt
+
 services:
   gateway:
+    # Phase 3.5 v0: build locally on each host.
     build:
       context: ./gateway
       dockerfile: Dockerfile
     image: fitt-gateway:local
+    # Phase 3.5+1 (Shape 2): uncomment to pull a prebuilt image and
+    # remove the `build:` block above. Tags are set by CI.
+    # image: ghcr.io/qam4/fitt-gateway:latest
     container_name: fitt-gateway
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
@@ -177,6 +183,9 @@ services:
       context: ./telegram-bot
       dockerfile: Dockerfile
     image: fitt-telegram-bot:local
+    # Phase 3.5+1 (Shape 2): uncomment to pull a prebuilt image and
+    # remove the `build:` block above.
+    # image: ghcr.io/qam4/fitt-telegram-bot:latest
     container_name: fitt-telegram-bot
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
@@ -242,13 +251,37 @@ FITT_BEARER_TOKEN=REPLACE_WITH_TOKEN_FROM_SECRETS_YAML
 Shipped as `.env.example`; added to `.gitignore` so real values
 never land in git.
 
-## Dev overlay (U4)
+## Development loop
+
+The primary dev loop runs on the **laptop**, not the NAS. Same
+compose file, same images, local `$FITT_HOME`. The NAS is a
+deployment target; SSH'ing in is a diagnosis activity, not an
+iteration activity.
+
+Three tiers of loop, picked based on what you're testing:
+
+- **Tier 1 — Native.** `uv run python -m gateway` on the laptop,
+  pointing at a local `~/.fitt-dev/`. Fastest feedback. Unit tests
+  and most feature work live here.
+- **Tier 2 — Laptop docker compose.** `docker compose up -d` on
+  the laptop with the dev overlay (below). Verifies the exact
+  image and environment that will run on the NAS. Catches
+  permission, networking, and base-image bugs before they hit
+  production.
+- **Tier 3 — NAS diagnosis (rare).** SSH to the NAS, read
+  `docker compose logs -f gateway`, optionally `docker exec -it
+  fitt-gateway /bin/bash`. Only when a bug fails to reproduce in
+  Tier 2. VS Code Remote-SSH works fine here but is not required.
+
+### Dev overlay
 
 `docker-compose.override.yml` is auto-applied by compose when
-present. We ship a `.example` so users opt in explicitly.
+present. We ship a `.example` so users opt in explicitly. It is
+intended for Tier 2 (laptop) first and foremost.
 
 ```yaml
-# docker-compose.override.yml.example  -- copy to docker-compose.override.yml
+# docker-compose.override.yml.example
+# Copy to docker-compose.override.yml for a hot-reload dev loop.
 services:
   gateway:
     # Bind-mount source so code edits are picked up without rebuild.
@@ -266,16 +299,115 @@ services:
     #   docker compose restart telegram-bot
 ```
 
-VS Code Remote-SSH'd into the NAS, saving a gateway file triggers
-uvicorn reload in ~1 second. Telegram bot changes still need a
-manual restart, which is a rare enough path that it's not worth
-adding watcher deps.
+Saving a gateway file triggers uvicorn reload in ~1 second.
+Telegram bot changes need a manual `docker compose restart
+telegram-bot`; rare enough that it's not worth adding watcher
+deps.
 
 Caveat: `create_app` factory does not exist today. `gateway/__main__`
 wires `app = FastAPI(...)` and runs uvicorn directly. Dev overlay
 will need either a `create_app()` factory (cleanest) or a compose
 command that invokes the module differently. Task item listed in
 `tasks.md`.
+
+## Release pipeline
+
+Three shapes of "how a code change reaches the NAS." Phase 3.5
+picks Shape 1 and documents the others so they're available when
+the friction justifies the work.
+
+### Shape 1 — Build on the target (Phase 3.5 v0)
+
+Workflow:
+
+```
+# Laptop
+git commit -am "gateway: fix X"
+git push
+
+# NAS (SSH)
+git pull
+docker compose build gateway
+docker compose up -d gateway
+```
+
+Pros: zero infrastructure. No registry account. No CI pipeline.
+Works on any host with Docker. Full transparency (you see the
+build).
+
+Cons: NAS CPU does the build (~30-60s on TS-253Be). No easy
+rollback beyond `git checkout <sha>`. Deploy requires SSH access.
+Each machine rebuilds the same image independently.
+
+Good enough for: one hub, one user, low deploy cadence. This is
+where Phase 3.5 ships.
+
+### Shape 2 — Pre-built images on a registry (next step when friction bites)
+
+Workflow:
+
+```
+# GitHub Actions on push to main:
+#   - docker buildx build --push gateway/
+#   - tagged as ghcr.io/qam4/fitt-gateway:<short-sha> and :latest
+
+# NAS
+docker compose pull
+docker compose up -d
+```
+
+Pros: build once, pull everywhere. Rollback is `image: ...:<old-sha>`
+in compose. Any Docker host can pull. Audit trail of every built
+image. Enables sharing images with other people / machines.
+
+Cons: GitHub Actions workflow to maintain. Push latency (~2-3 min).
+Registry thinking: tag discipline, retention policy.
+
+Trigger to move to Shape 2:
+- Deploying from something other than an SSH session (phone, second
+  laptop).
+- Deploying to more than one hub.
+- Wanting deterministic rollback.
+- Opening up for other people to run FITT.
+
+Registry decision: **GitHub Container Registry (ghcr.io)**.
+Rationale:
+- Code already on GitHub; one account, integrated permissions.
+- Free private packages with generous quotas.
+- No Docker Hub free-tier rate limits.
+- Packages appear in the repo's "Packages" tab, tied to source.
+
+Reserved image names:
+- `ghcr.io/qam4/fitt-gateway`
+- `ghcr.io/qam4/fitt-telegram-bot`
+
+The Phase 3.5 compose file references these names in commented-out
+form so switching from local build to registry pull is a two-line
+change per service.
+
+### Shape 3 — Auto-deploy (probably never, for this project)
+
+A tool like Watchtower or Diun polls the registry, pulls new
+images automatically, restarts containers. Push to main, NAS
+updates within 5 minutes, no human touch.
+
+Good for: fleet deployments, ops-at-scale, projects with strong
+CI/CD discipline.
+
+Bad for: single-user home labs, where deliberate deploys beat
+surprise restarts during a chat session.
+
+Documented here for completeness. Not planned.
+
+### What Phase 3.5 does concretely
+
+- Ships Shape 1. Builds on the target host. Scripts and quickstart
+  cover this path.
+- Reserves the GHCR image names in a commented compose block so
+  Shape 2 is a small edit away.
+- Does NOT add any CI/CD workflow yet.
+- Adds a roadmap entry for a future "hub CI/CD" phase that picks
+  up Shape 2 when the time comes.
 
 ## Interaction with existing configuration
 
