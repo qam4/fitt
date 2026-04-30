@@ -19,6 +19,7 @@ from .errors import (
     UnknownSession,
 )
 from .memory import MemoryStore
+from .sessions import SessionRegistry
 
 
 def create_app(config: Config) -> FastAPI:
@@ -44,6 +45,11 @@ def create_app(config: Config) -> FastAPI:
         max_history_chars=config.memory.max_history_chars,
         enabled=config.memory.enabled,
     )
+
+    # Session registry: same freshness guarantee. `fitt session new`
+    # from a separate shell is visible on the next request.
+    app.state.session_registry = SessionRegistry(config.memory.sessions_dir)
+    app.state.session_registry.ensure_main()
 
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)

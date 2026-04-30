@@ -35,7 +35,7 @@ from .logging_config import get_logger, log_request
 from .memory import LoadedContext, MemoryStore
 from .models import ChatCompletionRequest
 from .router import AliasRouter, backend_tag
-from .sessions import resolve_session_id
+from .sessions import SessionRegistry, resolve_session_id
 
 router = APIRouter()
 _log = get_logger("fitt.gateway.chat")
@@ -310,10 +310,11 @@ def _extract_assistant_text(response: Any) -> str:
 async def chat_completions(request: Request) -> Response:
     config: Config = request.app.state.config
     memory: MemoryStore = request.app.state.memory
+    session_registry: SessionRegistry = request.app.state.session_registry
     alias_router = AliasRouter(config)
 
     parsed = await _parse_request(request, config)
-    session_id = resolve_session_id(request)
+    session_id = resolve_session_id(request, session_registry)
     started = time.perf_counter()
 
     # ---- memory load + injection ---------------------------------

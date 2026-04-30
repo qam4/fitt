@@ -159,3 +159,134 @@ def test_cli_config_check_rejects_bad_config(tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "Configuration invalid" in result.output
+
+
+# --------------------------------------------------------------- fitt session
+
+
+def _write_session_config(tmp_path: Path) -> Path:
+    """Write a config.yaml that points memory/sessions at tmp_path."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent(
+            f"""
+            aliases:
+              fitt-default: qwen-big
+            models:
+              - id: qwen-big
+                backend: ollama
+                endpoint: http://localhost:11434
+                model: qwen2.5-coder:14b
+            memory:
+              enabled: true
+              identity_dir: {tmp_path / "identity"}
+              sessions_dir: {tmp_path / "sessions"}
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    return cfg
+
+
+def test_cli_session_list_shows_main(tmp_path: Path) -> None:
+    cfg = _write_session_config(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(fitt_cli, ["session", "list", "--config-file", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "main" in result.output
+
+
+def test_cli_session_new_valid(tmp_path: Path) -> None:
+    cfg = _write_session_config(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        fitt_cli,
+        ["session", "new", "retroai", "--name", "Retro AI", "--config-file", str(cfg)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Created" in result.output
+
+    # list should now show both
+    list_result = runner.invoke(fitt_cli, ["session", "list", "--config-file", str(cfg)])
+    assert "retroai" in list_result.output
+
+
+def test_cli_session_new_invalid_id(tmp_path: Path) -> None:
+    cfg = _write_session_config(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(fitt_cli, ["session", "new", "BAD-ID", "--config-file", str(cfg)])
+    assert result.exit_code == 1
+    assert "invalid" in result.output.lower()
+
+
+def test_cli_session_new_duplicate(tmp_path: Path) -> None:
+    cfg = _write_session_config(tmp_path)
+    runner = CliRunner()
+    runner.invoke(fitt_cli, ["session", "new", "foo", "--config-file", str(cfg)])
+    dup = runner.invoke(fitt_cli, ["session", "new", "foo", "--config-file", str(cfg)])
+    assert dup.exit_code == 1
+    assert "already" in dup.output.lower()
+
+
+def test_cli_session_rename(tmp_path: Path) -> None:
+    cfg = _write_session_config(tmp_path)
+    runner = CliRunner()
+    runner.invoke(fitt_cli, ["session", "new", "foo", "--config-file", str(cfg)])
+    result = runner.invoke(
+        fitt_cli,
+        ["session", "rename", "foo", "--name", "Foo Bar", "--config-file", str(cfg)],
+    )
+    assert result.exit_code == 0
+    list_result = runner.invoke(fitt_cli, ["session", "list", "--config-file", str(cfg)])
+    assert "Foo Bar" in list_result.output
+
+
+def test_cli_session_rename_main_refused(tmp_path: Path) -> None:
+    cfg = _write_session_config(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        fitt_cli,
+        ["session", "rename", "main", "--name", "nope", "--config-file", str(cfg)],
+    )
+    assert result.exit_code == 1
+
+
+def test_cli_session_archive_and_unarchive(tmp_path: Path) -> None:
+    cfg = _write_session_config(tmp_path)
+    runner = CliRunner()
+    runner.invoke(fitt_cli, ["session", "new", "foo", "--config-file", str(cfg)])
+
+    arch = runner.invoke(fitt_cli, ["session", "archive", "foo", "--config-file", str(cfg)])
+    assert arch.exit_code == 0
+
+    # list without --include-archived should not show foo
+    plain = runner.invoke(fitt_cli, ["session", "list", "--config-file", str(cfg)])
+    assert "foo" not in plain.output
+
+    # --include-archived should show it
+    with_arch = runner.invoke(
+        fitt_cli,
+        ["session", "list", "--include-archived", "--config-file", str(cfg)],
+    )
+    assert "foo" in with_arch.output
+
+    # unarchive restores
+    runner.invoke(fitt_cli, ["session", "unarchive", "foo", "--config-file", str(cfg)])
+    plain2 = runner.invoke(fitt_cli, ["session", "list", "--config-file", str(cfg)])
+    assert "foo" in plain2.output
+
+
+def test_cli_session_archive_main_refused(tmp_path: Path) -> None:
+    cfg = _write_session_config(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(fitt_cli, ["session", "archive", "main", "--config-file", str(cfg)])
+    assert result.exit_code == 1
+
+
+def test_cli_session_path(tmp_path: Path) -> None:
+    cfg = _write_session_config(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(fitt_cli, ["session", "path", "main", "--config-file", str(cfg)])
+    assert result.exit_code == 0
+    assert "main" in result.output
+    assert "history" in result.output

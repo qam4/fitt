@@ -37,6 +37,12 @@ from .config import (
 )
 from .errors import ConfigError
 from .memory import MemoryStore
+from .sessions import (
+    DuplicateSessionId,
+    InvalidSessionId,
+    ProtectedSession,
+    SessionRegistry,
+)
 
 # Force a wide console width so long model names aren't truncated in
 # narrow terminals (and in CI/pytest runners where width is tiny).
@@ -290,6 +296,113 @@ def memory_path(session: str, config_file: Path | None) -> None:
     """Print the on-disk path of today's history file for this session."""
     _, store = _open_memory(config_file, None)
     _console.print(str(store.history_path(session)))
+
+
+# --------------------------------------------------------------- fitt session
+
+
+def _open_registry(config_path: Path | None) -> SessionRegistry:
+    cp = config_path or default_config_path()
+    cfg = load_config(cp, None, load_secrets_too=False)
+    reg = SessionRegistry(cfg.memory.sessions_dir)
+    reg.ensure_main()
+    return reg
+
+
+@main.group("session")
+def session_group() -> None:
+    """List and manage named conversation sessions."""
+
+
+@session_group.command("list")
+@click.option(
+    "--include-archived",
+    is_flag=True,
+    default=False,
+    help="Include archived sessions in the listing.",
+)
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def session_list(include_archived: bool, config_file: Path | None) -> None:
+    """Print every configured session."""
+    reg = _open_registry(config_file)
+    sessions = reg.all(include_archived=include_archived)
+
+    table = Table(title="FITT sessions")
+    table.add_column("Id", style="cyan")
+    table.add_column("Name")
+    table.add_column("Created (UTC)")
+    table.add_column("Archived", justify="center")
+    for s in sessions:
+        table.add_row(
+            s.id,
+            s.name,
+            s.created_at.isoformat().replace("+00:00", "Z"),
+            "[red]yes[/red]" if s.archived else "",
+        )
+    _console.print(table)
+
+
+@session_group.command("new")
+@click.argument("session_id")
+@click.option("--name", default=None, help="Human-readable display name.")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def session_new(session_id: str, name: str | None, config_file: Path | None) -> None:
+    """Create a new session."""
+    reg = _open_registry(config_file)
+    try:
+        s = reg.create(session_id, name)
+    except (InvalidSessionId, DuplicateSessionId) as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    _console.print(f"[green]Created session {s.id!r} (name={s.name!r}).[/green]")
+
+
+@session_group.command("rename")
+@click.argument("session_id")
+@click.option("--name", required=True, help="New display name.")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def session_rename(session_id: str, name: str, config_file: Path | None) -> None:
+    """Rename an existing session."""
+    reg = _open_registry(config_file)
+    try:
+        s = reg.rename(session_id, name)
+    except ProtectedSession as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    _console.print(f"[green]Renamed {s.id!r} to {s.name!r}.[/green]")
+
+
+@session_group.command("archive")
+@click.argument("session_id")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def session_archive(session_id: str, config_file: Path | None) -> None:
+    """Archive a session. History stays on disk; chat requests are rejected."""
+    reg = _open_registry(config_file)
+    try:
+        s = reg.archive(session_id)
+    except ProtectedSession as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    _console.print(f"[yellow]Archived {s.id!r}.[/yellow]")
+
+
+@session_group.command("unarchive")
+@click.argument("session_id")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def session_unarchive(session_id: str, config_file: Path | None) -> None:
+    """Re-activate an archived session."""
+    reg = _open_registry(config_file)
+    s = reg.unarchive(session_id)
+    _console.print(f"[green]Unarchived {s.id!r}.[/green]")
+
+
+@session_group.command("path")
+@click.argument("session_id")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def session_path(session_id: str, config_file: Path | None) -> None:
+    """Print the on-disk history directory for this session."""
+    cfg = load_config(config_file or default_config_path(), None, load_secrets_too=False)
+    _console.print(str(cfg.memory.sessions_dir / session_id / "history"))
 
 
 if __name__ == "__main__":
