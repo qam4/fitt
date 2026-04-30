@@ -3,6 +3,9 @@ secrets.yaml
 *.env
 .env
 
+# Compose dev overlay (user-local, not shared)
+docker-compose.override.yml
+
 # Local FITT runtime dir (if ever symlinked/copied in)
 .fitt/
 logs/

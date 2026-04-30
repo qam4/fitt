@@ -1,0 +1,49 @@
+# Dev overlay for the FITT hub. Copy to docker-compose.override.yml
+# (gitignored) to enable a hot-reload dev loop on your laptop.
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker compose up -d
+#
+# Compose auto-applies override.yml when it sits next to the main
+# compose file. Remove or rename it to go back to the production
+# build.
+#
+# What it changes:
+#   - Gateway source is bind-mounted read-only into the container,
+#     so edits to gateway/src/*.py are picked up without a rebuild.
+#   - Gateway runs under uvicorn --reload, which restarts the app
+#     process on source changes (~1 second).
+#   - Telegram-bot source is bind-mounted too; the bot has no
+#     equivalent of --reload, so run `docker compose restart
+#     telegram-bot` after editing its source.
+#
+# Dependency changes (adding a package to pyproject.toml) still
+# need a rebuild: `docker compose build gateway` (or telegram-bot).
+
+services:
+  gateway:
+    volumes:
+      - ./gateway/src:/app/src:ro
+    # Override the production ENTRYPOINT ("python -m gateway") with
+    # uvicorn --factory pointed at the zero-arg factory. The factory
+    # loads config from the bind-mounted /fitt, configures logging,
+    # and returns the FastAPI app.
+    entrypoint: []
+    command:
+      - uvicorn
+      - gateway.app:create_app_from_env
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --reload
+      - --reload-dir
+      - /app/src
+
+  telegram-bot:
+    volumes:
+      - ./telegram-bot/src:/app/telegram-bot/src:ro
+      # Also expose the gateway source so the bot's editable install
+      # of fitt-gateway picks up gateway edits without a rebuild.
+      - ./gateway/src:/app/gateway/src:ro

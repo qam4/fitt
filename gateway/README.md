@@ -29,6 +29,35 @@ uv run pytest               # run the test suite
 uv run python -m gateway    # start the gateway in the foreground
 ```
 
+## Running the whole hub in Docker (on your laptop)
+
+The same compose file that runs on the NAS runs on your laptop.
+Useful for catching container-specific bugs (permissions,
+networking, base-image issues) before they hit production. Also
+the fastest way to iterate with hot reload.
+
+```powershell
+# one-time setup at repo root:
+cp .env.example .env
+# edit .env: set FITT_HOME to a local path, paste bearer token
+
+cp docker-compose.override.yml.example docker-compose.override.yml
+# (optional) enables uvicorn --reload + source bind-mount
+
+docker compose up -d
+docker compose logs -f gateway
+```
+
+With the override file in place, saving `gateway/src/**.py`
+triggers uvicorn reload inside the container within ~1 second.
+Telegram-bot source is also bind-mounted but the bot doesn't
+support live reload, so run `docker compose restart telegram-bot`
+after editing its source.
+
+Dependency changes (`pyproject.toml` edits) require a rebuild:
+`docker compose build gateway` (or `telegram-bot`), then
+`docker compose up -d <service>`.
+
 ## Running the `fitt` CLI
 
 Inside the repo:
