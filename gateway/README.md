@@ -246,6 +246,22 @@ Windows spawns the process.
 
 ## Troubleshooting
 
+### Quick sanity check for the Docker hub
+
+When something's off with a compose-based install, run the smoke
+script at the repo root:
+
+```bash
+scripts/smoke-compose.sh
+```
+
+It builds the gateway image, starts it against a throwaway
+config, hits `/health` and `/v1/models`, and tears down. If that
+passes, the image is fine and the issue is in your real config or
+environment. If it fails, the build or the entrypoint is broken
+and the rest of the troubleshooting below won't help until you
+fix that first.
+
 ### `uv sync` fails with a network error
 
 uv downloads Python + dependency wheels from the internet on first
