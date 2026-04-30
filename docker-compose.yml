@@ -1,38 +1,109 @@
-version: "3.9"
+# FITT hub - three services on one Docker host.
+#
+# Bring up:     docker compose up -d
+# Watch logs:   docker compose logs -f
+# Tear down:    docker compose down
+#
+# Config lives on the host under ${FITT_HOME} (see .env). Every
+# container bind-mounts the same directory so config.yaml,
+# secrets.yaml, sessions/, identity/, and logs/ are all in one
+# place. Back that one folder up, you have everything.
+#
+# The QNAP install recipe is in docs/quickstart.md. Set FITT_HOME
+# to wherever you normally keep app data on your NAS (e.g.
+# /share/Public/fitt).
 
-# Docker compose for Open WebUI, which points at the FITT gateway
-# as its OpenAI-compatible provider.
-#
-# Bring up:   docker compose up -d
-# Tear down:  docker compose down -v
-#
-# ``$FITT_BEARER_TOKEN`` must be set in the shell environment, or
-# in a ``.env`` file next to this compose file. The install script
-# (scripts/install-open-webui.ps1) creates the ``.env`` for you
-# from your secrets.yaml.
+name: fitt
 
 services:
+  gateway:
+    # Phase 3.5 v0 builds on the target host. Swap the `build:`
+    # block for `image: ghcr.io/qam4/fitt-gateway:latest` once
+    # CI/CD publishes prebuilt images.
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    image: fitt-gateway:local
+    container_name: fitt-gateway
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      FITT_HOME: /fitt
+      FITT_CONFIG_PATH: /fitt/config.yaml
+      FITT_SECRETS_PATH: /fitt/secrets.yaml
+      TZ: ${TZ:-UTC}
+    volumes:
+      # One mount: /fitt inside the container == $FITT_HOME outside.
+      # Holds config.yaml, secrets.yaml, identity/, sessions/, logs/.
+      - ${FITT_HOME:?set FITT_HOME in .env}:/fitt
+    ports:
+      # Reachable over Tailscale on the host. The OS firewall (not
+      # compose) is what scopes this to the tailnet.
+      - "8080:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  telegram-bot:
+    # Build context is the repo root so the bot's path-dep on
+    # ../gateway resolves (see telegram-bot/Dockerfile comment).
+    build:
+      context: .
+      dockerfile: telegram-bot/Dockerfile
+    image: fitt-telegram-bot:local
+    container_name: fitt-telegram-bot
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    depends_on:
+      gateway:
+        # If your Container Station version rejects this condition,
+        # drop it and use `depends_on: [gateway]`. The bot retries
+        # its gateway connection on startup anyway.
+        condition: service_healthy
+    environment:
+      FITT_HOME: /fitt
+      # The bot reaches the gateway by compose service name on the
+      # default bridge network; no host-level DNS or IP needed.
+      FITT_GATEWAY_URL: http://gateway:8080
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${FITT_HOME:?set FITT_HOME in .env}:/fitt
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    # Pinned stable tag; bump deliberately in a dedicated PR.
+    image: ghcr.io/open-webui/open-webui:v0.3.35
     container_name: fitt-open-webui
     restart: unless-stopped
-    ports:
-      # Bound to 0.0.0.0 but restricted by Windows Defender Firewall
-      # to the Tailscale interface only. Same pattern as the gateway.
-      - "3000:8080"
+    depends_on:
+      gateway:
+        condition: service_healthy
     environment:
-      # Open WebUI treats the gateway as an OpenAI-compatible
-      # upstream. host.docker.internal resolves to the Docker host
-      # (Windows + macOS); Linux uses the extra_hosts entry below.
-      - OPENAI_API_BASE_URL=http://host.docker.internal:8080/v1
-      - OPENAI_API_KEY=${FITT_BEARER_TOKEN}
-      # Keep the instance locked down.
-      - ENABLE_SIGNUP=false
-      - ENABLE_COMMUNITY_SHARING=false
-      - ENABLE_OLLAMA_API=false
-      # Don't hammer the gateway probing unknown models.
-      - WEBUI_AUTH=true
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      # Open WebUI talks to the gateway by compose service name,
+      # same pattern as the bot. The Bearer token is the same one
+      # clients use and lives in your secrets.yaml; surface it to
+      # compose via .env as FITT_BEARER_TOKEN.
+      OPENAI_API_BASE_URL: http://gateway:8080/v1
+      OPENAI_API_KEY: ${FITT_BEARER_TOKEN:?set FITT_BEARER_TOKEN in .env}
+      ENABLE_SIGNUP: "false"
+      ENABLE_COMMUNITY_SHARING: "false"
+      ENABLE_OLLAMA_API: "false"
+      WEBUI_AUTH: "true"
+      TZ: ${TZ:-UTC}
     volumes:
-      - ./open-webui-data:/app/backend/data
+      # Kept under $FITT_HOME so every bit of persistent state for
+      # the hub lives in one backup-friendly parent folder.
+      - ${FITT_HOME:?set FITT_HOME in .env}/open-webui:/app/backend/data
+    ports:
+      - "3000:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
