@@ -422,6 +422,85 @@ ships.
 
 ---
 
+## Step 11 - Telegram bot install (5 min)
+
+Install the bot service as a sibling of the gateway. From an
+**elevated** PowerShell at the repo root:
+
+```powershell
+.\scripts\install-telegram-bot.ps1 -SetupVenv
+```
+
+This:
+
+- runs `uv sync` in `telegram-bot\` to create its venv,
+- verifies the bot can `import fitt_telegram_bot`,
+- registers `FITTTelegramBot` as a Windows service with
+  auto-start and 30-second restart on failure.
+
+No firewall rule is needed - the bot makes outbound connections
+only (Telegram Bot API + localhost gateway).
+
+Verify:
+
+```powershell
+Get-Service FITTTelegramBot
+Get-Content "$env:USERPROFILE\.fitt\logs\telegram-bot.stdout.log" -Tail 20
+```
+
+Then open Telegram on your phone, find your bot, send `/start`.
+You should get a welcome message showing your current alias and
+session. If nothing happens, check:
+
+1. Is your Telegram user id in `allowlist_user_ids`? Non-allowlisted
+   users are silently dropped by design.
+2. Is the bot token correct? `@BotFather` -> `/mybots` -> your bot
+   -> **API Token**.
+3. Is the gateway healthy (`curl http://localhost:8080/health`)?
+
+## Step 12 - Open WebUI install (5 min)
+
+Needs Docker Desktop running on the Hub. If not installed:
+
+```powershell
+winget install --id=Docker.DockerDesktop -e
+# Start Docker Desktop and sign in if prompted.
+```
+
+Then, elevated PowerShell at the repo root:
+
+```powershell
+.\scripts\install-open-webui.ps1
+```
+
+This reads your Bearer token from `secrets.yaml`, writes a
+gitignored `.env` next to `docker-compose.yml`, brings up the
+container, and adds the Tailscale-scoped firewall rule for TCP
+3000.
+
+Verify from the Hub:
+
+```
+http://localhost:3000/
+```
+
+Or from your phone on Tailscale:
+
+```
+http://<hub-tailscale-ip>:3000/
+```
+
+First visit shows the admin signup. Create your admin account. The
+container then disables further signups (`ENABLE_SIGNUP=false`), so
+random visitors on your tailnet cannot register.
+
+In Open WebUI, pick any of the FITT aliases (`fitt-default`,
+`fitt-smart`, ...) from the model dropdown. Responses flow through
+the gateway, so they show up in `fitt cost` alongside your Telegram
+traffic.
+
+---
+
 ## You're done
 
 What you have now:
@@ -433,8 +512,8 @@ What you have now:
 - Logs in `~/.fitt/logs/gateway.log`.
 - Cost visibility with `uv run fitt cost`.
 
-Next: live with it for two weeks before starting Phase 2 (memory) -
-see [`../FITT_ROADMAP.md`](../FITT_ROADMAP.md) guiding principle 9.
+Next: live with it for a week or two before starting the next phase
+- see [`../FITT_ROADMAP.md`](../FITT_ROADMAP.md) guiding principle 9.
 
 ---
 

@@ -49,3 +49,6 @@ models/
 # OS
 Thumbs.db
 desktop.ini
+
+# Open WebUI bind-mount data (chat history, admin account)
+open-webui-data/

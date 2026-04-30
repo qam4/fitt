@@ -1,0 +1,38 @@
+version: "3.9"
+
+# Docker compose for Open WebUI, which points at the FITT gateway
+# as its OpenAI-compatible provider.
+#
+# Bring up:   docker compose up -d
+# Tear down:  docker compose down -v
+#
+# ``$FITT_BEARER_TOKEN`` must be set in the shell environment, or
+# in a ``.env`` file next to this compose file. The install script
+# (scripts/install-open-webui.ps1) creates the ``.env`` for you
+# from your secrets.yaml.
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: fitt-open-webui
+    restart: unless-stopped
+    ports:
+      # Bound to 0.0.0.0 but restricted by Windows Defender Firewall
+      # to the Tailscale interface only. Same pattern as the gateway.
+      - "3000:8080"
+    environment:
+      # Open WebUI treats the gateway as an OpenAI-compatible
+      # upstream. host.docker.internal resolves to the Docker host
+      # (Windows + macOS); Linux uses the extra_hosts entry below.
+      - OPENAI_API_BASE_URL=http://host.docker.internal:8080/v1
+      - OPENAI_API_KEY=${FITT_BEARER_TOKEN}
+      # Keep the instance locked down.
+      - ENABLE_SIGNUP=false
+      - ENABLE_COMMUNITY_SHARING=false
+      - ENABLE_OLLAMA_API=false
+      # Don't hammer the gateway probing unknown models.
+      - WEBUI_AUTH=true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./open-webui-data:/app/backend/data
