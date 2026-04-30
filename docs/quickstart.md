@@ -1,7 +1,10 @@
 # FITT Quickstart
 
-> One page, start to finish. From nothing to a working gateway
-> reachable from your laptop's IDE in about 30 minutes.
+> Start to finish: from nothing to a working hub reachable from
+> your laptop's IDE, your phone's browser, and the Telegram app.
+> Expect ~30 minutes on a hub that has Docker and Tailscale
+> installed, plus whatever time it takes to pull your first
+> local model.
 
 This is the only install doc. If you want to set up FITT, read this
 top to bottom and do each step. For architecture and design, see
@@ -32,26 +35,42 @@ backend working before a Client is useful.
 
 # Part A — Hub
 
-One machine, always on. Desktop or mini-PC works. The Hub hosts the
-gateway, the Telegram bot, and Open WebUI.
+One machine, always on. Desktop, mini-PC, or NAS with Container
+Station / Docker all work. The Hub hosts the gateway, the
+Telegram bot, and Open WebUI - all as containers under one
+`docker compose` command.
 
 ## Step 1 - Tailscale on the Hub (3 min)
+
+On Windows:
 
 ```powershell
 winget install --id=tailscale.tailscale -e     # or download from tailscale.com
 ```
 
-Sign in. Verify:
+On a QNAP: install Tailscale from the App Center.
 
-```powershell
+On Linux:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+On macOS: install from the Mac App Store.
+
+Sign in. Verify (any platform):
+
+```bash
 tailscale status
 ```
 
-Note the Hub's `100.x.x.x` IP. You'll hand it to clients in Part C.
+Note the Hub's `100.x.x.x` IP. You'll hand it to clients in
+Part C.
 
-Tailscale's default ACL already allows every device on your tailnet
-to reach every other device. Don't tighten ACLs unless you know
-exactly which ports to allow.
+Tailscale's default ACL already allows every device on your
+tailnet to reach every other device. Don't tighten ACLs unless
+you know exactly which ports to allow.
 
 ## Step 2 - Cloud LLM account: OpenRouter (3 min)
 
@@ -87,200 +106,235 @@ meeting your needs, then uncomment the `anthropic_api_key` line in
 `secrets.yaml` and the `claude-sonnet-direct` block in
 `config.yaml`.
 
-## Step 3 - Install uv and NSSM (5 min)
+## Step 3 - Install Docker (5 min)
 
-### 3.1 uv
+Docker runs the three FITT services as containers. You do not need
+to install Python or uv on the hub; the images bring everything
+they need.
 
-uv manages Python, the virtual environment, and dependencies in
-one tool. You don't install Python yourself - uv downloads a
-compatible one when it needs to.
+### 3.1 Pick your platform
 
-```powershell
-winget install --id=astral-sh.uv -e
+- **QNAP**: install Container Station from the QNAP App Center if
+  you haven't already. You likely have it if you run Jellyfin,
+  Plex, or similar.
+- **Linux**: install Docker Engine using the official script or
+  your distro's package manager:
+
+  ```bash
+  curl -fsSL https://get.docker.com | sudo sh
+  sudo usermod -aG docker "$USER"    # log out + back in for this to take effect
+  ```
+
+- **macOS / Windows**: install Docker Desktop
+  ([docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop)).
+
+### 3.2 Clone the repo on the hub
+
+Pick anywhere that suits your hub's filesystem conventions. On a
+QNAP, SSH in and clone under `/share/Public/` or wherever you
+keep "my own" files (not the same folder as FITT's runtime data -
+see Step 5).
+
+```bash
+cd /share/Public
+git clone https://github.com/qam4/home-ai-cluster.git
 ```
 
-Or the official installer (use if winget is unavailable):
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-Restart your shell so `uv` is on PATH, then verify:
-
-```powershell
-uv --version
-```
-
-uv does not put a `python.exe` on PATH, so it doesn't conflict
-with any existing Python install, pyenv, conda, etc.
-
-### 3.2 NSSM
-
-NSSM wraps the gateway as a proper Windows service with
-auto-restart.
-
-```powershell
-winget install --id=NSSM.NSSM -e
-# or: choco install nssm
-# or: scoop install nssm
-# or grab the binary from https://nssm.cc/download and put it on PATH
-```
-
-### 3.3 Clone the repo
-
-```powershell
-cd $env:USERPROFILE
-gh repo clone qam4/home-ai-cluster
-```
+On Linux/macOS/Windows, any directory you'd normally keep code
+in is fine.
 
 ## Step 4 - (Optional) Small Ollama fallback on the Hub (5 min)
 
 Lets the Hub answer local-model requests when every satellite is
-asleep. Skip if the Hub has no GPU and you don't want CPU
-inference.
+asleep. **Skip if the Hub has no GPU**, which is the normal case
+for a NAS.
 
-1. Install Ollama ([ollama.com/download](https://ollama.com/download)).
-2. In Windows env vars, set `OLLAMA_HOST=0.0.0.0` (User variable).
-   Quit Ollama from the tray and relaunch so it picks up the env
-   var.
-3. Pull a small model that fits the Hub's VRAM:
+If you do want it, install Ollama natively on the Hub (not in
+Docker - GPU passthrough to Docker is more trouble than it's worth
+for satellite-on-hub duty), set `OLLAMA_HOST=0.0.0.0`, and pull a
+small model.
 
-   ```powershell
-   ollama pull qwen2.5-coder:7b
-   ```
-
-The default config uses this as the fallback for the `fitt-default`
-alias. If you skip this step, edit `config.yaml` in step 5.2 to
-remove the `fallback: qwen-coder-small` line and the
-`qwen-coder-small` model block.
+The default `config.example.yaml` uses `qwen-coder-small` as the
+fallback for `fitt-default`. If you skip this step, edit
+`config.yaml` in Step 5.2 to remove the `fallback:` line and the
+`qwen-coder-small` block.
 
 ## Step 5 - Config and secrets (10 min)
 
-### 5.1 Seed `~/.fitt/`
+Everything FITT reads and writes at runtime lives under one
+directory on the hub: `$FITT_HOME`. Config, secrets, memory,
+session history, logs, and Open WebUI's state all live there.
+Snapshot that folder, you have the whole hub's state.
 
-```powershell
-cd $env:USERPROFILE\home-ai-cluster
-mkdir $env:USERPROFILE\.fitt
-Copy-Item configs\config.example.yaml  $env:USERPROFILE\.fitt\config.yaml
-Copy-Item configs\secrets.example.yaml $env:USERPROFILE\.fitt\secrets.yaml
+Pick a path that matches your NAS's app-data convention. On a
+QNAP, mirror where Jellyfin/Plex store their config:
+
+```bash
+# QNAP example: /share/Public/fitt
+# Linux server: /srv/fitt
+# macOS:        /Users/you/.fitt
+FITT_HOME=/share/Public/fitt
 ```
 
-### 5.2 Edit `~/.fitt/config.yaml`
+### 5.1 Seed `$FITT_HOME`
 
-```powershell
-notepad $env:USERPROFILE\.fitt\config.yaml
+On the **Hub**, over SSH:
+
+```bash
+mkdir -p "$FITT_HOME"
+cd /path/to/home-ai-cluster      # wherever you cloned in Step 3.2
+cp configs/config.example.yaml  "$FITT_HOME/config.yaml"
+cp configs/secrets.example.yaml "$FITT_HOME/secrets.yaml"
+cp .env.example                 "$FITT_HOME/../.env"   # next to docker-compose.yml; see below
 ```
 
-The example config references a satellite you haven't set up yet.
-Two choices:
+Actually, the `.env` goes in the repo root (next to
+`docker-compose.yml`), not under `$FITT_HOME`. Adjust the last
+command to your clone path:
 
-- **If you'll do Part B right after this:** leave the `100.x.y.z`
-  placeholder for now, write it down as "TODO", and come back after
-  the satellite is up. The gateway will still start - `/ready` will
-  return 503 until the satellite is reachable, but the cloud alias
-  will work immediately.
-- **If the Hub is Hub-only (no local models):** delete the
-  `qwen-coder-big` model block and change `fitt-default:` to point
-  at `qwen-coder-small` (or delete `fitt-default` entirely).
+```bash
+cp .env.example .env        # in the home-ai-cluster repo root
+```
 
-Save.
+### 5.2 Edit `$FITT_HOME/config.yaml`
+
+Replace the `100.x.y.z` placeholder for `qwen-coder-big` with the
+Tailscale IP of the satellite you'll set up in Part B. If you
+don't have a satellite yet, leave the placeholder - the gateway
+will start, the cloud alias will work, and `/ready` will return
+503 until you wire the satellite up.
+
+If the hub has no local Ollama fallback (Step 4 skipped), remove
+the `qwen-coder-small` model block and the `fallback:` line on
+`qwen-coder-big`.
 
 ### 5.3 Generate a Bearer token
 
-```powershell
-uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Copy the long random string.
+Copy the long random string that prints. You'll paste it into
+two places: `$FITT_HOME/secrets.yaml` and the repo root `.env`.
 
-### 5.4 Edit `~/.fitt/secrets.yaml`
+### 5.4 Edit `$FITT_HOME/secrets.yaml`
 
-```powershell
-notepad $env:USERPROFILE\.fitt\secrets.yaml
-```
+- Bearer token from Step 5.3 into `allowed_tokens[0].token`.
+- OpenRouter key from Step 2 into `openrouter_api_key`.
 
-Paste in:
-
-- The Bearer token from 5.3 into `allowed_tokens[0].token`.
-- The OpenRouter key from step 2 into `openrouter_api_key`.
-
-Leave the Anthropic, `api_keys`, and Telegram blocks commented out.
-Save.
+Leave the Anthropic, `api_keys`, and Telegram blocks commented
+out for v0.
 
 ### 5.5 Lock down permissions
 
-```powershell
-icacls "$env:USERPROFILE\.fitt\secrets.yaml" /inheritance:r /grant:r "$($env:USERNAME):F"
+The gateway refuses to load `secrets.yaml` if it's
+group/world-readable. Fix it once:
+
+```bash
+chmod 0600 "$FITT_HOME/secrets.yaml"
 ```
 
-This removes inherited ACEs and grants full control to just you.
-If you later see `PermissionError: [Errno 13]` loading the gateway,
-the ACL ended up wrong. Reset with:
+### 5.6 Edit the repo root `.env`
 
-```powershell
-icacls "$env:USERPROFILE\.fitt\secrets.yaml" /reset
-icacls "$env:USERPROFILE\.fitt\secrets.yaml" /inheritance:r /grant:r "$($env:USERNAME):F"
+Compose reads this file for `FITT_HOME`, `PUID`, `PGID`, `TZ`,
+and the Bearer token it needs to inject into Open WebUI.
+
+```bash
+# home-ai-cluster/.env
+FITT_HOME=/share/Public/fitt
+PUID=1000
+PGID=1000
+TZ=America/Los_Angeles
+FITT_BEARER_TOKEN=<paste the same token from Step 5.3>
 ```
 
-### 5.6 Sanity check
+`PUID` and `PGID` should match the host user that owns
+`$FITT_HOME`. On QNAP the default admin user is `1000:1000`; on
+Linux, `id -u` and `id -g` tell you.
 
-```powershell
-cd $env:USERPROFILE\home-ai-cluster\gateway
-uv sync
-uv run fitt config check
+## Step 6 - Bring up the hub
+
+Two equivalent flavors. Pick the one that matches how you
+normally manage containers on this box.
+
+### 6.A - Container Station (QNAP, GUI)
+
+1. Container Station -> **Applications** -> **Create**.
+2. Give the application a name (`fitt` is fine).
+3. Paste the contents of `docker-compose.yml` from the repo into
+   the YAML editor, or point at the file on the share.
+4. Click **Create**. Container Station pulls the Open WebUI image,
+   builds the gateway and bot images on the NAS, creates the
+   Docker network, and starts all three containers.
+5. Wait ~60 seconds. The application dashboard shows
+   `fitt-gateway`, `fitt-telegram-bot`, and `fitt-open-webui` in
+   "Running" state.
+
+If Container Station rejects the compose file with an error
+mentioning `depends_on` or `condition`, your QTS version doesn't
+support compose's health conditions. Replace the two
+`depends_on:` blocks in the compose file with the simpler list
+form (`depends_on: [gateway]`) and try again. The bot and Open
+WebUI retry their gateway connections anyway.
+
+### 6.B - SSH + docker compose
+
+From the repo root on the hub:
+
+```bash
+docker compose up -d
 ```
 
-`uv sync` creates `gateway\.venv`, downloads a Python if needed,
-and installs the gateway's dependencies. Subsequent runs are fast.
+That's it. Images build (gateway + telegram-bot) and pull
+(open-webui), network comes up, all three containers start.
 
-`uv run fitt config check` should print `Configuration OK.` with
-your aliases and models listed. It validates the file shape but
-does NOT probe endpoints, so a yet-to-be-configured satellite will
-not fail here. If it errors, fix what it points at and re-run.
+To watch logs:
 
-## Step 6 - Install as a Windows service (5 min)
-
-Open an **elevated** PowerShell (right-click -> Run as
-administrator).
-
-```powershell
-cd $env:USERPROFILE\home-ai-cluster
-.\scripts\install-service.ps1 -SetupVenv
+```bash
+docker compose logs -f gateway
 ```
-
-`-SetupVenv` runs `uv sync` inside this elevated shell,
-guaranteeing the service points at the right Python regardless of
-your user PATH. Without `-SetupVenv`, the script expects step 5.6's
-`uv sync` to have already run and simply uses the existing
-`gateway\.venv`.
-
-The script:
-
-- Verifies the venv's Python can actually `import gateway`. Fails
-  fast with a clear error if not.
-- Registers `FITTGateway` via NSSM with auto-start and 30-second
-  restart on failure.
-- Adds a Windows Defender Firewall rule (TCP 8080, Private profile
-  only).
-- Polls `/health` for up to 45 seconds and reports the result.
 
 ## Step 7 - Verify the gateway (2 min)
 
-```powershell
-Get-Service FITTGateway
-curl http://localhost:8080/health             # should print {"status":"ok"}
-curl http://localhost:8080/v1/models          # should list your aliases
-curl http://<hub-tailscale-ip>:8080/health    # same, over Tailscale
+From any device on Tailscale (or the hub itself):
+
+```bash
+curl http://<hub-tailscale-ip>:8080/health           # {"status":"ok"}
+curl http://<hub-tailscale-ip>:8080/v1/models        # JSON listing your aliases
 ```
 
-**First boot takes 15-30 seconds** while Python imports LiteLLM,
-pydantic, etc. If `/health` doesn't respond immediately, wait a
-bit and retry; NSSM will restart the process if it actually
-crashed.
+**First boot takes 15-30 seconds** while Python imports LiteLLM
+and friends. If `/health` doesn't respond immediately, wait and
+retry. Docker restarts the container if it actually crashed (our
+`restart: unless-stopped` policy).
 
-`/ready` (as opposed to `/health`) will return 503 until every
-alias has at least one reachable backend. That's expected if your
+`/ready` (as opposed to `/health`) returns 503 until every alias
+has at least one reachable backend. That's expected if your
 satellite isn't up yet - move to Part B.
+
+### Troubleshooting first boot
+
+If something looks wrong, run the smoke script from the repo
+root:
+
+```bash
+scripts/smoke-compose.sh
+```
+
+It builds the gateway image, starts it against a throwaway
+config, hits `/health` and `/v1/models`, and tears down. If that
+passes, the image is fine and the issue is in your
+`$FITT_HOME/config.yaml`, `secrets.yaml`, or `.env`. If it fails,
+the build or the entrypoint is broken - read the compose logs
+for the real error.
+
+Also useful:
+
+```bash
+docker compose ps                   # container states
+docker compose logs gateway         # gateway stdout/stderr
+docker compose logs telegram-bot    # bot stdout/stderr
+```
 
 ---
 
@@ -341,10 +395,15 @@ answers but slower and VRAM-hungry. The tag you use here is the
 
 ## Step 11 - Wire the satellite into the Hub
 
-On the **Hub**, edit `~/.fitt/config.yaml`:
+On the **Hub**, edit `$FITT_HOME/config.yaml` with your editor
+of choice (over SSH on a NAS, or on a shared mount):
 
-```powershell
-notepad $env:USERPROFILE\.fitt\config.yaml
+```bash
+# Linux/macOS/QNAP over SSH:
+nano "$FITT_HOME/config.yaml"
+
+# Windows + Docker Desktop:
+notepad $env:FITT_HOME\config.yaml
 ```
 
 Add (or update) a model entry pointing at this satellite:
@@ -367,19 +426,24 @@ aliases:
 
 Save. Restart the gateway so it picks up the new config:
 
-```powershell
-Restart-Service FITTGateway
+```bash
+docker compose restart gateway
 ```
 
 Verify from the Hub:
 
-```powershell
-uv run fitt status       # should show the satellite as reachable
-curl http://localhost:8080/ready      # should return 200 once every alias has a live backend
+```bash
+docker compose exec gateway fitt status    # should show the satellite as reachable
+curl http://localhost:8080/ready           # should return 200 once every alias has a live backend
 ```
 
-If `/ready` still returns 503, look at `~/.fitt/logs/gateway.log`
-for which alias failed and why.
+If `/ready` still returns 503, check the gateway logs:
+
+```bash
+docker compose logs --tail=50 gateway
+```
+
+They'll name the alias that failed and why.
 
 ## Adding another satellite later
 
@@ -392,7 +456,7 @@ someone else's box)? Just repeat **Part B** on it:
 4. On the Hub, add a new model block to `config.yaml` with a new
    `id`, the new satellite's IP, and the tag you pulled. Bind it
    to an alias (or use it as another model's `fallback`).
-5. `Restart-Service FITTGateway`.
+5. `docker compose restart gateway` on the hub.
 
 The alias pattern means clients don't care which satellite serves
 them; they just ask for `fitt-default` or whatever and the gateway
@@ -497,8 +561,9 @@ wrong - revisit step 6.
 
 ## Step 15 - Telegram bot (optional)
 
-The bot runs on the **Hub** and lets you chat with FITT from the
-Telegram app on any device.
+The bot's container was already started in Step 6 as part of
+`docker compose up -d`. But it sits idle until you give it a bot
+token. Enabling it is two edits and one restart.
 
 ### 15.1 Create the bot and get credentials
 
@@ -509,7 +574,7 @@ Telegram app on any device.
 
 ### 15.2 Fill in `secrets.yaml`
 
-On the **Hub**, edit `~/.fitt/secrets.yaml` and uncomment the
+On the **Hub**, edit `$FITT_HOME/secrets.yaml` and uncomment the
 Telegram block:
 
 ```yaml
@@ -519,62 +584,32 @@ telegram:
     - 123456789
 ```
 
-### 15.3 Install the bot service
+### 15.3 Restart the bot
 
-From an **elevated** PowerShell on the Hub at the repo root:
+From the repo root on the hub:
 
-```powershell
-.\scripts\install-telegram-bot.ps1 -SetupVenv
+```bash
+docker compose restart telegram-bot
+docker compose logs -f telegram-bot
 ```
 
-This runs `uv sync` in `telegram-bot\` to create its venv,
-verifies the bot can `import fitt_telegram_bot`, and registers
-`FITTTelegramBot` as a Windows service with auto-start.
+Look for a line like `telegram_bot.started`. Then open Telegram
+on your phone, find your bot, send `/start`. You should get a
+welcome message.
 
-No firewall rule is needed - the bot makes outbound connections
-only (Telegram Bot API + localhost gateway).
+If nothing happens, check:
 
-Verify:
-
-```powershell
-Get-Service FITTTelegramBot
-Get-Content "$env:USERPROFILE\.fitt\logs\telegram-bot.stdout.log" -Tail 20
-```
-
-Then open Telegram on your phone, find your bot, send `/start`.
-You should get a welcome message. If nothing happens, check:
-
-1. Is your Telegram user id in `allowlist_user_ids`? Non-
-   allowlisted users are silently dropped by design.
-2. Is the bot token correct? `@BotFather` -> `/mybots` -> your bot
-   -> **API Token**.
-3. Is the gateway healthy
-   (`curl http://localhost:8080/health`)?
+1. Is your Telegram user id in `allowlist_user_ids`?
+   Non-allowlisted users are silently dropped by design.
+2. Is the bot token correct? `@BotFather` -> `/mybots` -> your
+   bot -> **API Token**.
+3. Is the gateway healthy? `docker compose ps` - `fitt-gateway`
+   should show `healthy`.
 
 ## Step 16 - Open WebUI (optional)
 
-Open WebUI is a browser chat UI that also runs on the **Hub**. It
-needs Docker Desktop.
-
-### 16.1 Install Docker Desktop (if not already)
-
-```powershell
-winget install --id=Docker.DockerDesktop -e
-# Start Docker Desktop and sign in if prompted.
-```
-
-### 16.2 Install Open WebUI
-
-On the **Hub**, elevated PowerShell at the repo root:
-
-```powershell
-.\scripts\install-open-webui.ps1
-```
-
-This reads your Bearer token from `secrets.yaml`, writes a
-gitignored `.env` next to `docker-compose.yml`, brings up the
-container, and adds a Tailscale-scoped firewall rule for TCP
-3000.
+Open WebUI was also started by `docker compose up -d` in Step 6.
+All that's left is to create the admin account.
 
 Verify from the Hub:
 
@@ -601,20 +636,24 @@ your Telegram traffic.
 
 ## Resilience checks (5 min)
 
-On the Hub, elevated PowerShell:
+On the Hub:
 
-```powershell
-# Restart test
-Restart-Computer
+```bash
+# Reboot test
+sudo reboot           # or your platform's equivalent
 # After reboot, from anywhere on Tailscale:
 curl http://<hub-tailscale-ip>:8080/health      # should respond within 60s
 
-# Crash test - find the PID, kill it, watch NSSM restart
-Get-Process python | Where-Object { $_.Path -like "*home-ai-cluster*" }
-Stop-Process -Id <pid>
-Start-Sleep -Seconds 35
-curl http://localhost:8080/health               # should respond again
+# Crash test - kill the gateway container, watch Docker restart it
+docker kill fitt-gateway
+sleep 10
+curl http://<hub-tailscale-ip>:8080/health      # should respond again
 ```
+
+The compose file's `restart: unless-stopped` policy means Docker
+restarts any container that crashes. Host reboot + Docker auto-
+start (enabled by default on Container Station / Docker Desktop)
+means the hub comes back by itself.
 
 ---
 
@@ -622,14 +661,15 @@ curl http://localhost:8080/health               # should respond again
 
 What you have now:
 
-- A Windows service on the Hub that routes chat requests between
-  local satellites and the cloud.
+- Three containers on the Hub (gateway, telegram-bot, open-webui)
+  behind one `docker compose` command, routing chat requests
+  between local satellites and the cloud.
 - IDE chat on any laptop that can reach the Hub over Tailscale.
-- Optional Telegram bot and Open WebUI sharing the same gateway
-  and cost log.
 - One Bearer token, one config, swappable models.
-- Logs in `~/.fitt/logs/gateway.log`.
-- Cost visibility with `uv run fitt cost`.
+- All persistent state under `$FITT_HOME` - back that folder up,
+  you have the whole hub.
+- Cost visibility. From the repo root:
+  `docker compose exec gateway fitt cost` summarises MTD spend.
 
 Next: live with it for a week or two before starting the next
 phase - see [`../FITT_ROADMAP.md`](../FITT_ROADMAP.md) guiding
@@ -637,11 +677,25 @@ principle 9.
 
 ---
 
+## Updating the hub
+
+```bash
+cd /path/to/home-ai-cluster
+git pull
+docker compose build         # rebuild changed images
+docker compose up -d         # recreate changed containers
+```
+
+Compose only recreates services whose image changed, so this is
+safe to run any time. Containers that didn't change keep running.
+
+---
+
 ## Troubleshooting
 
 `gateway/README.md` has a dedicated troubleshooting section: auth
-401, `/ready` 503, streaming cost=0, service crash loops, firewall
-issues, update workflow.
+401, `/ready` 503, streaming cost=0, firewall issues, and the
+first-response `smoke-compose.sh` script.
 
 ## Common slip-ups
 
@@ -655,9 +709,15 @@ issues, update workflow.
 - **Wrong Tailscale IP in `config.yaml`**: your satellite got a
   new IP after sleep/wake. Use MagicDNS (hostnames) if this
   happens often.
-- **`uv sync` fails with network errors**: uv downloads Python +
-  deps from the internet; corporate proxies or flaky Wi-Fi can
-  trip it up. Retry, or set `UV_HTTP_TIMEOUT=120`.
-- **`install-service.ps1` reports "Expected Python at ... \gateway\.venv\..."**:
-  run `uv sync` in `gateway\` first, or re-run the script with
-  `-SetupVenv`.
+- **`secrets.yaml` world-readable on first boot**: the gateway
+  refuses to load. `chmod 0600` the file and
+  `docker compose restart gateway`.
+- **`$FITT_HOME` on host owned by a different uid than
+  `PUID`/`PGID` in `.env`**: the gateway can't write session
+  history or logs. Either `chown -R $PUID:$PGID $FITT_HOME` or
+  set `PUID`/`PGID` to match the host owner.
+- **Containers keep restarting on a QNAP**: check the container
+  logs in Container Station. The most common cause is a
+  `depends_on: condition: service_healthy` rejection on older
+  QTS versions - drop the `condition:` per Step 6.A's note and
+  recreate the application.
