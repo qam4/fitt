@@ -182,9 +182,12 @@ services:
         max-file: "5"
 
   telegram-bot:
+    # Build context is the repo root so the gateway path-dep
+    # (tool.uv.sources) resolves. `dockerfile:` is relative to
+    # context.
     build:
-      context: ./telegram-bot
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: telegram-bot/Dockerfile
     image: fitt-telegram-bot:local
     # Phase 3.5+1 (Shape 2): uncomment to pull a prebuilt image and
     # remove the `build:` block above.

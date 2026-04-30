@@ -1,0 +1,22 @@
+# Note: build context is the repo root (so ../gateway is visible
+# through tool.uv.sources). Most entries in this file are duplicated
+# in gateway/.dockerignore; that's intentional because we ignore
+# against the root context during the bot build.
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+build/
+tests/
+docs/
+*.md
+.git/
+.gitignore
