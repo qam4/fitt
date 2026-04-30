@@ -1,0 +1,22 @@
+# Keep the build context small and the image deterministic. Only
+# pyproject.toml, uv.lock, and src/ actually matter for the build.
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+build/
+tests/
+docs/
+*.md
+.git/
+.gitignore
+.dockerignore
+Dockerfile

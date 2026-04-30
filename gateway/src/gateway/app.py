@@ -11,15 +11,34 @@ from fastapi.responses import JSONResponse
 
 from . import __version__
 from .auth import AuthMiddleware
-from .config import Config
+from .config import Config, default_config_path, default_secrets_path, load_config
 from .errors import (
     ModelIdNotAlias,
     NoBackendAvailable,
     UnknownAlias,
     UnknownSession,
 )
+from .logging_config import configure_logging
 from .memory import MemoryStore
 from .sessions import SessionRegistry
+
+
+def create_app_from_env() -> FastAPI:
+    """Zero-arg factory for ``uvicorn --factory`` / ``--reload``.
+
+    Loads config + secrets from the default paths (honours
+    ``FITT_CONFIG_PATH`` / ``FITT_SECRETS_PATH`` / ``FITT_HOME``),
+    configures logging, and returns a ready-to-serve app. Used by
+    the docker-compose dev overlay so edits to source trigger a
+    uvicorn reload without re-parsing argv.
+    """
+    cfg = load_config(default_config_path(), default_secrets_path())
+    configure_logging(
+        cfg.logging.dir,
+        level=cfg.server.log_level,
+        retention_days=cfg.logging.retention_days,
+    )
+    return create_app(cfg)
 
 
 def create_app(config: Config) -> FastAPI:
