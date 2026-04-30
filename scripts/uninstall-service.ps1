@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 
 <#
 .SYNOPSIS
@@ -58,7 +58,7 @@ if ($svc) {
         sc.exe delete $ServiceName | Out-Null
     }
 } else {
-    Write-Host "Service '$ServiceName' is not installed — nothing to remove." -ForegroundColor Yellow
+    Write-Host "Service '$ServiceName' is not installed - nothing to remove." -ForegroundColor Yellow
 }
 
 $ruleName = 'FITT Gateway (Private only)'

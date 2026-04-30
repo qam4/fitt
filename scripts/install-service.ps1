@@ -1,13 +1,13 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 
 <#
 .SYNOPSIS
     Install the FITT Gateway as a Windows service.
 
 .DESCRIPTION
-    Registers the gateway as a Windows service named "FITTGateway" using
-    NSSM. Configures auto-start at boot, 30-second restart on failure,
-    and log rotation.
+    Registers the gateway as a Windows service named "FITTGateway"
+    using NSSM. Configures auto-start at boot, 30-second restart on
+    failure, and log rotation.
 
     Also creates a Windows Defender Firewall rule that allows inbound
     TCP 8080 on the Private network profile only (Tailscale registers
@@ -100,7 +100,7 @@ function Assert-FittHome {
     }
     foreach ($f in @('config.yaml', 'secrets.yaml')) {
         if (-not (Test-Path (Join-Path $fittHome $f))) {
-            throw "Missing $fittHome\$f — copy from configs/$($f -replace '\.yaml$', '.example.yaml') first."
+            throw "Missing $fittHome\$f - copy from configs/$($f -replace '\.yaml$', '.example.yaml') first."
         }
     }
     return $fittHome
@@ -137,7 +137,7 @@ function Install-FittService {
     & $Nssm install $Name $Python '-m' 'gateway' | Out-Null
     & $Nssm set $Name AppDirectory (Join-Path $RepoRoot 'gateway') | Out-Null
     & $Nssm set $Name DisplayName 'FITT Gateway' | Out-Null
-    & $Nssm set $Name Description 'FITT — OpenAI-compatible HTTP gateway for local and cloud LLMs.' | Out-Null
+    & $Nssm set $Name Description 'FITT - OpenAI-compatible HTTP gateway for local and cloud LLMs.' | Out-Null
     & $Nssm set $Name Start SERVICE_AUTO_START | Out-Null
 
     # Restart policy: if the process exits, wait 30s and try again.
@@ -145,7 +145,7 @@ function Install-FittService {
     & $Nssm set $Name AppRestartDelay 30000 | Out-Null
     & $Nssm set $Name AppThrottle 5000 | Out-Null
 
-    # Log NSSM's own stdout/stderr (not the gateway's — that's handled
+    # Log NSSM's own stdout/stderr (not the gateway's - that's handled
     # by structlog) to files under ~/.fitt/logs.
     & $Nssm set $Name AppStdout (Join-Path $logDir 'service.stdout.log') | Out-Null
     & $Nssm set $Name AppStderr (Join-Path $logDir 'service.stderr.log') | Out-Null
@@ -170,7 +170,7 @@ function Ensure-FirewallRule {
     # Remove any prior rule with the same name so re-runs are idempotent.
     Remove-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue
 
-    Write-Step "Adding firewall rule '$Name' — allow TCP $Port inbound, Private profile only."
+    Write-Step "Adding firewall rule '$Name' - allow TCP $Port inbound, Private profile only."
     New-NetFirewallRule `
         -DisplayName $Name `
         -Direction Inbound `
@@ -192,7 +192,7 @@ function Test-Gateway {
             Write-Warning "/health responded $($r.StatusCode); check the service log."
         }
     } catch {
-        Write-Warning "/health did not respond yet: $_. The service may still be starting — check ~/.fitt/logs."
+        Write-Warning "/health did not respond yet: $_. The service may still be starting - check ~/.fitt/logs."
     }
 }
 

@@ -1,7 +1,7 @@
-# FITT Gateway — example configuration
+# FITT Gateway - example configuration
 #
 # Copy this file to ~/.fitt/config.yaml and edit with your values.
-# Do NOT put secrets (API keys, tokens) in this file — those go in
+# Do NOT put secrets (API keys, tokens) in this file - those go in
 # ~/.fitt/secrets.yaml.
 #
 # Design principle: clients name *aliases* like `fitt-smart`, never
@@ -14,7 +14,7 @@ server:
   port: 8080
   log_level: info
   # log_bodies: true enables request/response body logging for debug.
-  # Default is false — bodies contain user prompts, keep them out of
+  # Default is false - bodies contain user prompts, keep them out of
   # the log in normal operation.
   log_bodies: false
 
