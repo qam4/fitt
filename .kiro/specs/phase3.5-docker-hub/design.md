@@ -16,8 +16,11 @@
 |                         |    (pinned tag)                |                          |
 |                         +--------------------------------+                          |
 |                                                                                     |
-|    Bind mount:   ${FITT_HOME}  ->  /fitt    (config, secrets, sessions, logs)       |
-|    Named vol:    open-webui-data           (chat history, admin account)            |
+|    Bind mounts:                                                                     |
+|      ${FITT_HOME}/            -> /fitt    (gateway, telegram-bot)                   |
+|                                           config, secrets, sessions, logs           |
+|      ${FITT_HOME}/open-webui/ -> /app/backend/data  (Open WebUI)                    |
+|                                           chat history, admin account, uploads      |
 |                                                                                     |
 |    Published ports:  8080 (gateway), 3000 (Open WebUI)                              |
 |                                                                                     |
@@ -216,7 +219,11 @@ services:
       ENABLE_SIGNUP: "false"
       WEBUI_AUTH: "true"
     volumes:
-      - open-webui-data:/app/backend/data
+      # Bind-mount onto the same FITT directory so all persistent
+      # state lives in one place on the NAS (matches Jellyfin-style
+      # "one app folder per app" convention and keeps backups
+      # simple: snapshot $FITT_HOME and you have everything).
+      - ${FITT_HOME:-./fitt-data}/open-webui:/app/backend/data
     ports:
       - "3000:3000"
     logging:
@@ -225,18 +232,19 @@ services:
         max-size: "10m"
         max-file: "5"
 
-volumes:
-  open-webui-data:
+volumes: {}
 ```
 
 ### Environment variables (`.env` at repo root, gitignored)
 
 ```
 # Path on the host for FITT's config, secrets, sessions, and logs.
-# On QNAP typically: /share/FITT
+# On QNAP typically: /share/Public/fitt  (match your usual app-data
+#                    convention - whatever you use for Jellyfin,
+#                    Plex, etc.)
 # On Linux:          /srv/fitt  (or similar)
 # On macOS:          /Users/you/.fitt
-FITT_HOME=/share/FITT
+FITT_HOME=/share/Public/fitt
 
 # User/group that owns ${FITT_HOME} on the host. Matches the
 # UID/GID the containers run as. QNAP admins default to 1000:1000.
@@ -497,11 +505,12 @@ care how the hub was installed.
 ### A.1 outline (Container Station GUI)
 
 1. Install Tailscale on the NAS (App Center or native).
-2. SSH in once to create `/share/FITT/`, drop `config.yaml`,
-   `secrets.yaml`, `.env` files in place, `chmod 0600` secrets.
+2. SSH in once to create `/share/Public/fitt/` (or whatever app-data
+   convention your NAS uses - match the folder where Jellyfin, Plex,
+   etc. live), drop `config.yaml`, `secrets.yaml`, `.env` files in
+   place, `chmod 0600` secrets.
    (Documented because the GUI can't create a
-   permission-restricted file. One-time SSH, not a recurring
-   requirement.)
+   permission-restricted file.)
 3. Container Station -> Applications -> Create.
 4. Paste the contents of `docker-compose.yml`, or point at the
    file on the share.
@@ -560,8 +569,9 @@ from a Windows hub":
 
 1. Stop the three services on Windows (`Stop-Service FITTGateway`,
    etc.).
-2. Copy `%USERPROFILE%\.fitt\` to `\\nas\share\FITT\` (or equivalent).
-3. SSH to the NAS, `chmod 0600 /share/FITT/secrets.yaml`.
+2. Copy `%USERPROFILE%\.fitt\` to `\\nas\Public\fitt\` (or
+   whatever convention your NAS uses for app data).
+3. SSH to the NAS, `chmod 0600 /share/Public/fitt/secrets.yaml`.
 4. Clone the repo on the NAS, copy `.env.example` to `.env`, edit.
 5. `docker compose up -d`.
 6. Update Continue's `apiBase` on the laptop to the NAS's Tailscale

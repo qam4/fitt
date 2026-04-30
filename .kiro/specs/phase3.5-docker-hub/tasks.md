@@ -90,8 +90,9 @@ Each top-level task is a reviewable commit.
 
 (Manual, documented in spec review.)
 
-- [ ] 8a. Author: on the TS-253Be, create `/share/FITT/`, copy
-       existing `~/.fitt/` content, chmod secrets.
+- [ ] 8a. Author: on the TS-253Be, create `/share/Public/fitt/`
+       (matching the existing app-data convention used for Jellyfin
+       / Plex), copy existing `~/.fitt/` content, chmod secrets.
 - [ ] 8b. Clone the repo on the NAS.
 - [ ] 8c. Fill in `.env`.
 - [ ] 8d. `docker compose up -d`.
