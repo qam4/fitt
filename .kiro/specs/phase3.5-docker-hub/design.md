@@ -282,7 +282,14 @@ Three tiers of loop, picked based on what you're testing:
 - **Tier 3 — NAS diagnosis (rare).** SSH to the NAS, read
   `docker compose logs -f gateway`, optionally `docker exec -it
   fitt-gateway /bin/bash`. Only when a bug fails to reproduce in
-  Tier 2. VS Code Remote-SSH works fine here but is not required.
+  Tier 2. A terminal SSH session is enough; VS Code Remote-SSH
+  is **not required** and often doesn't work on a stock QNAP
+  anyway: QTS ships an older glibc than recent VS Code servers
+  expect, so Remote-SSH fails to install its backend. If you
+  really want a remote IDE on the NAS, the workaround is to run
+  code-server in a dedicated Container Station container (modern
+  Debian/Ubuntu base, modern glibc) rather than on the QTS host
+  itself. Not worth the setup cost for occasional diagnosis.
 
 ### Dev overlay
 
