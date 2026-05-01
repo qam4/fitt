@@ -34,9 +34,9 @@ Phase 0 (manual) ─┐
                   │                        │    │
                   │                        │    └─► Phase 8 (voice)
                   │                        │
-                  │                        └─► Phase 4 (tools) ─► Phase 4.5 (project registry)
-                  │                             │                     │
-                  │                             │                     └─► Phase 5 (retro-ai)
+                  │                        └─► Phase 4 (tools) ─────────────┐
+                  │                             │                          │
+                  │                             │                          └─► Phase 5 (lessons + retro-ai)
                   │                             │
                   │                             ├─► Phase 6 (autonomy)
                   │                             ├─► Phase 7 (RAG memory)
@@ -479,78 +479,82 @@ for 3 days without intervention.
 
 ## Phase 4 — Agentic Tools (Spec-driven, ~2 weekends)
 
-**Goal:** The LLM can *do* things. Read files, edit files, run shell commands, with approval gates. Tools exposed via MCP where MCP servers exist; the design accepts any tool protocol the LLM can use.
+**Goal:** FITT offers its own tool system for non-IDE interfaces (Telegram, Open WebUI, curl) and layers spec-aware workflow tools on top. In the IDE, Continue supplies the raw toolkit; FITT stays out of the way and adds value only through session continuity, shared memory, and project-aware system prompts.
 
-**Requirements sketch:**
-- MCP client in the gateway. MCP is the default protocol; the gateway abstracts tool calls so future protocols can be added without client-side changes.
-- Wire in existing tool servers: filesystem, git, shell.
-- Tool approval UI: routed back to the *interface that originated the request*. If the message came from Telegram, approve in Telegram; if from the IDE, approve via an OpenAI-tool-call mechanism the IDE client already understands.
-- Tamper-resistant deny list (hardcoded `rm -rf /`, `git push --force`, recursive chmod, curl-piped-to-shell, etc.).
-- Audit log of every tool call with HMAC chain.
-- Per-tool policy in `config.yaml`: `auto` | `ask` | `trust_session` | `block`, with glob patterns.
+**Key design decisions (from the Phase 4 design discussion):**
+
+- **Two layers of tool plumbing**: inline Python for core tools (simple, fast, no subprocess), MCP for the long tail (Slack, Jira, Postgres, Home Assistant). To the model, they're both just function calls.
+- **Tool forwarding, not replacement.** When a client request carries a `tools` field (Continue in Agent Mode does this), the gateway forwards those tools intact and appends FITT's session-aware tools rather than overwriting. Clients with their own toolkits keep them; clients without toolkits (Telegram, Open WebUI) see FITT's full set.
+- **IDE is a thin case.** Continue already implements agent-mode tools (`read_file`, `edit_existing_file`, `run_terminal_command`, etc.). FITT does not need to duplicate them. Setting `capabilities: [tool_use]` in Continue's `config.yaml` for the FITT models unlocks Agent mode.
+- **Spec-aware as first-class**. `spec_read`, `spec_next_task`, `spec_mark_task`, `spec_list` are inline Python tools that understand the Kiro-style `.kiro/specs/<feature>/{requirements,design,tasks}.md` convention. These are what make a "Kiro-style workflow" portable across interfaces.
+- **Lessons (self-learning) deferred to Phase 5.** Splitting them out so Phase 4 can ship cleanly.
+
+**Core inline tools (shipped with FITT):**
+
+- `read_file`, `write_file`, `edit_file` (write scoped to registered projects)
+- `list_directory`, `grep_repo`, `glob_search`
+- `git_status`, `git_diff`, `git_commit` (writes gated)
+- `run_tests` (runs the project's configured test command)
+- `http_get` (with allow/deny on hostnames)
+- `spec_read`, `spec_next_task`, `spec_mark_task`, `spec_list`
+- `list_capabilities` (enumeration tool for capability-awareness)
+
+**MCP for everything else:** Slack, Jira, GitHub, Postgres, Home Assistant, Brave Search, etc. Config reads `mcpServers:`, spawns subprocesses, supervises them, surfaces their tools alongside the inline ones.
 
 **Capability awareness (Principle 8):**
-- Every session's system prompt includes an auto-generated capabilities summary: tools currently loaded with short descriptions.
-- When the agent determines a request needs a capability it doesn't have, it replies with a standard format: *what's missing, what to install or configure, a pointer to how.*
-- The gateway logs declined-for-missing-capability events to `~/.fitt/capability_gaps.log` — a natural backlog of future tool additions.
-- A built-in tool `list_capabilities` lets the agent enumerate tools at runtime.
-- A `fitt capability-gaps` CLI prints the backlog grouped by frequency.
+- System prompt auto-generates a capabilities summary from the loaded tool list.
+- When the agent determines a request needs a capability it doesn't have, it replies in a standard format (*what's missing, what to install or configure*).
+- Declined-for-missing-capability events log to `~/.fitt/capability_gaps.log` as a natural backlog.
+- `fitt capability-gaps` CLI prints the backlog grouped by frequency.
 
-**Lessons (MeshClaw-style self-learning):**
-- `learn_add`, `learn_list`, `learn_remove` MCP tools that append/remove entries in `~/.fitt/lessons.md`.
-- Lessons get injected into the system prompt alongside identity on every request.
-- When the user says "no, actually use X instead of Y", the agent calls `learn_add` so the correction sticks across sessions.
-- `fitt learn` CLI provides a non-chat interface for direct edits.
+**Approval model:**
+- **Read-only tools** auto-approve everywhere.
+- **Writes from the IDE** auto-approve (Continue surfaces tool calls to the user already; re-gating in FITT is friction).
+- **Writes from anywhere else** and **all shell-like operations** (including `run_tests`, `git_commit`, `edit_file`) route to Telegram for a human Allow/Deny.
+- Per-tool overrides in `config.yaml`: `auto` / `ask` / `trust_session` / `block`.
+- Per-client tokens in `secrets.yaml` carry a `client:` and `trust:` tag so the gateway knows which interface is asking.
+- Hardcoded deny list for obviously-destructive patterns (`rm -rf /`, `git push --force`, curl-piped-to-shell, etc.) — code, not config.
 
-**Design sketch:**
-- `gateway/tools.py` — MCP client bootstrap and server supervisor (restart on crash).
-- `gateway/tool_registry.py` — source of truth for loaded tools, descriptions, allow rules.
-- `gateway/approval.py` — approval-gate middleware, routes prompts back to originating interface.
-- `gateway/audit.py` — append-only `~/.fitt/audit.jsonl` with HMAC chain; `fitt audit verify` CLI.
-- `gateway/capabilities.py` — generates the capabilities section of the system prompt.
-- `gateway/deny_list.py` — hardcoded deny patterns, in code not config.
+**Audit log:**
+- Append-only `~/.fitt/audit.jsonl` with HMAC chain.
+- `fitt audit verify` CLI checks chain integrity.
+- Every tool call logged: timestamp, session, client, tool, arguments, outcome.
+
+**Module design:**
+- `gateway/tools/` — package of inline tool implementations.
+- `gateway/mcp_client.py` — MCP server supervisor and tool surfacing.
+- `gateway/tool_registry.py` — unified registry across inline + MCP, source of truth for schemas and policies.
+- `gateway/approval.py` — approval-gate middleware, routes prompts back to Telegram.
+- `gateway/audit.py` — append-only audit log with HMAC chain.
+- `gateway/capabilities.py` — system-prompt capability summary + gap logging.
+- `gateway/deny_list.py` — hardcoded deny patterns.
+- `gateway/projects.py` — project registry (was Phase 4.5; folded in because the filesystem tool depends on it).
 
 **Tasks sketch:**
-1. Add MCP SDK dependency and server supervisor.
-2. Config schema for MCP servers.
-3. Tool-call interception.
-4. Approval routing back to originating interface (Telegram inline keyboard for Telegram-origin; tool-call confirmation protocol for IDE-origin).
-5. Tamper-resistant deny list.
-6. Audit log with HMAC chain + verify CLI.
-7. Capability injection into system prompt.
-8. `list_capabilities` built-in tool.
-9. "Missing capability" response convention + gap-logging middleware.
-10. `fitt capability-gaps` CLI.
+1. Project registry (schema, CLI, file watcher). Was Phase 4.5.
+2. Inline tool scaffolding + `read_file` / `list_directory` / `grep_repo`.
+3. Write-gated tools + per-client token schema.
+4. Spec-aware tools (`spec_read`, `spec_next_task`, `spec_mark_task`, `spec_list`).
+5. MCP client + server supervisor.
+6. Capability system prompt + `list_capabilities` + gap logging.
+7. Approval middleware + Telegram inline-keyboard UI.
+8. Audit log with HMAC chain + verify CLI.
+9. Tool-forwarding policy (append to client-supplied `tools`, don't replace).
+10. Evals: "does this model reliably call this tool?" harness for routing weaker models to smaller tool sets.
 
 **Known concerns:**
-- Local 14B models are worse at deciding "I don't have this tool" than Claude. Phase 4 should include an eval harness that tests this specifically.
-- Approval-UI across interfaces is the hairiest part. If the IDE path proves too complex, fall back to "IDE sessions auto-approve read-only; writes require escalation to Telegram." Document this explicitly.
+- Local 14B models handle tool calling less reliably than Claude. The eval harness measures it; routing policy downgrades weaker aliases to a minimal tool set.
+- Approval UX on Telegram needs a "trust for the rest of this session" option or approval fatigue kills the workflow.
+- MCP server crash storms can cascade if the supervisor retries too aggressively. Exponential backoff.
+- Continue's own rules (`.continue/rules/`) and FITT's server-side system prompt can conflict. Agree on separation: FITT's prompt is generic (identity, active specs, capabilities); client-side rules are client-specific (editing conventions, tool usage preferences).
 
 *Full three-file spec to be written when this phase starts.*
 
 ---
 
-## Phase 4.5 — Project Registry (Spec-driven, ~0.5 weekend)
+## Phase 4.5 (absorbed into Phase 4)
 
-**Goal:** FITT knows where your repos live and how to work with them. Needed by Phase 5 and gets awkward to bolt on later.
-
-**Requirements sketch:**
-- `~/.fitt/projects.yaml` lists repos FITT knows about: path, default commands, log locations, associated sessions.
-- CLI: `fitt project add <path>`, `fitt project list`, `fitt project remove <name>`.
-- The capability system (Phase 4) injects the known-projects list into the system prompt.
-- Filesystem tool's allowed paths derive from the registry (only registered project paths are writable by default).
-
-**Design sketch:**
-- Tiny YAML schema, read at gateway startup and on file change.
-- No DB. If it gets complex, revisit.
-
-**Tasks sketch:**
-1. Define schema.
-2. CLI subcommand `fitt project`.
-3. Hot-reload on file change (`watchdog`).
-4. Inject into system prompt and filesystem tool allowlist.
-
-*Full three-file spec to be written when this phase starts.*
+The project-registry work originally scoped as Phase 4.5 is folded into Phase 4, because the filesystem tool's write allowlist needs it from day one.
 
 ---
 

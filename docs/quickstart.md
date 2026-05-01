@@ -501,6 +501,8 @@ models:
     apiBase: http://<hub-tailscale-ip>:8080/v1
     apiKey: <your-bearer-token-from-5.3>
     model: fitt-smart
+    capabilities:
+      - tool_use        # enables Continue's Agent/Plan modes
     roles:
       - chat
       - edit
@@ -511,11 +513,24 @@ models:
     apiBase: http://<hub-tailscale-ip>:8080/v1
     apiKey: <your-bearer-token-from-5.3>
     model: fitt-default
+    capabilities:
+      - tool_use        # see note below
     roles:
       - chat
       - edit
       - apply
 ```
+
+The `capabilities: [tool_use]` line matters. Continue auto-detects
+tool support from well-known provider/model pairs (e.g. direct
+Anthropic Claude); with `provider: openai` + a custom `apiBase`
+it can't tell, and Agent/Plan modes show as "unavailable." Adding
+the capability explicitly unlocks them.
+
+On smaller local models (Qwen 2.5-Coder at 14B and below), tool
+calling is possible but less reliable. If Agent mode behaves
+oddly with `fitt-default`, fall back to Chat mode for that alias
+or remove its `tool_use` capability.
 
 `provider: openai` plus `apiBase` points Continue at any
 OpenAI-compatible server, which the gateway is. Despite the name,
