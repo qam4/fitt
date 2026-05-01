@@ -47,14 +47,14 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 4. Read-only inline tools (no SSH backend yet)
 
-- [ ] 4a. `list_capabilities`: returns the tool list as JSON for
+- [x] 4a. `list_capabilities`: returns the tool list as JSON for
        the model.
-- [ ] 4b. `spec_read(feature_name)`, `spec_list()`, `spec_next_task`,
+- [x] 4b. `spec_read(feature_name)`, `spec_list()`, `spec_next_task`,
        `spec_mark_task`. All operate on
        `<project-path>/.kiro/specs/<feature>/`. Hub-local only for
        now; SSH comes in task 5.
-- [ ] 4c. Register with the tool registry. Default bucket: `auto`.
-- [ ] 4d. Tests: `test_tools_inline.py`.
+- [x] 4c. Register with the tool registry. Default bucket: `auto`.
+- [x] 4d. Tests: `test_tools_inline.py`.
 
 ## 5. SSH execution backend
 

@@ -16,6 +16,7 @@ from ._types import (
     ToolContext,
     ToolResult,
 )
+from .inline import build_inline_tools
 from .registry import ToolPolicy, ToolRegistry
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "ToolPolicy",
     "ToolRegistry",
     "ToolResult",
+    "build_inline_tools",
 ]
