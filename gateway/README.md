@@ -18,16 +18,34 @@ when you already have the gateway running.
 
 ## Running locally during development
 
-Requires [uv](https://docs.astral.sh/uv/) on PATH
-(`winget install --id=astral-sh.uv -e`). See the quickstart for the
-full setup.
+Requires [uv](https://docs.astral.sh/uv/) on PATH. Install it:
 
 ```powershell
-cd gateway
+# Windows
+winget install --id=astral-sh.uv -e
+```
+
+```bash
+# macOS
+brew install uv
+```
+
+```bash
+# Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then, from the `gateway/` directory:
+
+```bash
 uv sync                     # first run: ~30 seconds; after: instant
 uv run pytest               # run the test suite
 uv run python -m gateway    # start the gateway in the foreground
 ```
+
+Running the gateway locally still reads `$FITT_HOME/config.yaml`
+and `$FITT_HOME/secrets.yaml`, so the quickstart's Part A config
+steps apply whether you run via Docker or natively.
 
 ## Running the whole hub in Docker (on your laptop)
 

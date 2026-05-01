@@ -45,10 +45,14 @@ Telegram bot, and Open WebUI - all as containers under one
 On Windows:
 
 ```powershell
-winget install --id=tailscale.tailscale -e     # or download from tailscale.com
+winget install --id=tailscale.tailscale -e
 ```
 
-On a QNAP: install Tailscale from the App Center.
+On macOS:
+
+```bash
+brew install --cask tailscale      # or install from the Mac App Store
+```
 
 On Linux:
 
@@ -57,7 +61,7 @@ curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 ```
 
-On macOS: install from the Mac App Store.
+On a QNAP: install Tailscale from the QNAP App Center.
 
 Sign in. Verify (any platform):
 
@@ -114,19 +118,33 @@ they need.
 
 ### 3.1 Pick your platform
 
-- **QNAP**: install Container Station from the QNAP App Center if
-  you haven't already. You likely have it if you run Jellyfin,
-  Plex, or similar.
-- **Linux**: install Docker Engine using the official script or
-  your distro's package manager:
+Container Station on QNAP bundles Docker, the `docker` CLI, and
+`docker compose`. Docker Desktop on macOS/Windows and Docker Engine
+on Linux all give you the same three pieces. You can use the GUI,
+SSH in and use the CLI, or mix the two - they manage the same
+containers.
 
-  ```bash
-  curl -fsSL https://get.docker.com | sudo sh
-  sudo usermod -aG docker "$USER"    # log out + back in for this to take effect
-  ```
+On Windows:
 
-- **macOS / Windows**: install Docker Desktop
-  ([docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop)).
+```powershell
+winget install --id=Docker.DockerDesktop -e
+```
+
+On macOS:
+
+```bash
+brew install --cask docker       # or install Docker Desktop from docker.com
+```
+
+On Linux (Engine, no GUI needed for a server):
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker "$USER"    # log out + back in for this to take effect
+```
+
+On QNAP: install Container Station from the QNAP App Center. You
+likely have it if you run Jellyfin, Plex, or similar.
 
 ### 3.2 Clone the repo on the hub
 
@@ -142,6 +160,13 @@ git clone https://github.com/qam4/home-ai-cluster.git
 
 On Linux/macOS/Windows, any directory you'd normally keep code
 in is fine.
+
+Git is pre-installed on macOS, most Linux distros, and QNAP.
+If you need it on Windows:
+
+```powershell
+winget install --id=Git.Git -e
+```
 
 ## Step 4 - (Optional) Small Ollama fallback on the Hub (5 min)
 
@@ -210,12 +235,20 @@ the `qwen-coder-small` model block and the `fallback:` line on
 
 ### 5.3 Generate a Bearer token
 
-```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+On Windows (PowerShell):
+
+```powershell
+[Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
 ```
 
-Copy the long random string that prints. You'll paste it into
-two places: `$FITT_HOME/secrets.yaml` and the repo root `.env`.
+On macOS / Linux / QNAP:
+
+```bash
+openssl rand -base64 32
+```
+
+Copy the string that prints. You'll paste it into two places:
+`$FITT_HOME/secrets.yaml` and the repo root `.env`.
 
 ### 5.4 Edit `$FITT_HOME/secrets.yaml`
 
@@ -254,8 +287,11 @@ Linux, `id -u` and `id -g` tell you.
 
 ## Step 6 - Bring up the hub
 
-Two equivalent flavors. Pick the one that matches how you
-normally manage containers on this box.
+Two equivalent flavors (6.A GUI, 6.B CLI). Pick the one that
+matches how you normally manage containers on this box; both
+talk to the same Docker daemon and produce the same running
+containers. 6.C covers an optional advanced workflow for driving
+a headless hub from your laptop.
 
 ### 6.A - Container Station (QNAP, GUI)
 
@@ -293,6 +329,31 @@ To watch logs:
 ```bash
 docker compose logs -f gateway
 ```
+
+### 6.C - (Optional) Drive the hub from your laptop
+
+If the hub is awkward to edit on directly (no good editor, no
+VS Code Remote, minimal shell), you can use Docker's remote-host
+mode: edit and `docker compose` on your laptop, build and run on
+the hub.
+
+```powershell
+# Windows (PowerShell); on macOS/Linux use: export DOCKER_HOST=ssh://...
+$env:DOCKER_HOST = "ssh://admin@<hub-tailscale-ip>"
+docker version       # Client: your laptop; Server: the hub
+```
+
+With `DOCKER_HOST` set, every `docker compose up -d`,
+`docker compose logs`, `docker ps` from your laptop terminal
+targets the hub's daemon instead of the laptop's. The compose
+file and source tree stay on the laptop; build context is shipped
+to the hub over SSH, and containers run on the hub.
+
+Build still happens on the hub (so a NAS is still the
+bottleneck for compile time), but editing, pushing changes, and
+tailing logs are all instant. Containers started this way are
+fully visible in the hub's Container Station / Docker Desktop
+GUI - same daemon, same containers.
 
 ## Step 7 - Verify the gateway (2 min)
 
@@ -348,13 +409,30 @@ Do this section **once per satellite**.
 
 ## Step 8 - Tailscale on the satellite (3 min)
 
+Same install as Step 1, on the satellite machine this time.
+
+On Windows:
+
 ```powershell
 winget install --id=tailscale.tailscale -e
 ```
 
+On macOS:
+
+```bash
+brew install --cask tailscale
+```
+
+On Linux:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
 Sign in on the same Tailscale account as the Hub. Verify:
 
-```powershell
+```bash
 tailscale status
 ```
 
@@ -362,31 +440,56 @@ Note this satellite's `100.x.x.x` IP. You'll use it in step 11.
 
 ## Step 9 - Ollama on the satellite (5 min)
 
-1. Install Ollama
-   ([ollama.com/download](https://ollama.com/download)).
-2. Set `OLLAMA_HOST=0.0.0.0` as a **User variable** in Windows env
-   vars. Without this, the Hub can't reach Ollama over the tailnet;
+Install Ollama.
+
+On Windows:
+
+```powershell
+winget install --id=Ollama.Ollama -e
+```
+
+On macOS:
+
+```bash
+brew install --cask ollama       # or download from ollama.com
+```
+
+On Linux:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Then:
+
+1. Set `OLLAMA_HOST=0.0.0.0` in the machine's environment.
+   - Windows: add it as a **User variable** in the system env
+     vars dialog.
+   - macOS/Linux: add `export OLLAMA_HOST=0.0.0.0` to your
+     shell rc file, or `launchctl setenv` on macOS to make it
+     visible to GUI apps.
+
+   Without this, the Hub can't reach Ollama over the tailnet;
    Ollama defaults to listening on loopback only.
-3. Quit Ollama from the tray and relaunch so it picks up the env
-   var.
+2. Restart Ollama so it picks up the env var (quit from the tray
+   on Windows/macOS, or `systemctl restart ollama` on Linux).
 
 Verify from the **Hub**:
 
-```powershell
+```bash
 curl http://<satellite-tailscale-ip>:11434/api/tags
 ```
 
-JSON response = good. Connection refused = step 9.2's env var
-didn't take (most common cause: didn't restart Ollama after
-setting it).
+JSON response = good. Connection refused = the env var didn't
+take (most common cause: didn't restart Ollama after setting it).
 
 ## Step 10 - Pull a model (time varies)
 
 On the satellite, pull whatever model this machine is big enough
-to serve. Example for a 12-16 GB VRAM laptop:
+to serve. The command is the same on every platform:
 
-```powershell
-ollama pull qwen2.5-coder:14b
+```bash
+ollama pull qwen2.5-coder:14b      # example for 12-16 GB VRAM
 ```
 
 Pick the tag based on the VRAM you have. Bigger models = better
@@ -475,17 +578,62 @@ Anything that calls the gateway. The most common ones:
 
 ## Step 12 - Tailscale on each client device (3 min per device)
 
-Install Tailscale, sign in on the same account, verify
-`tailscale status`. Your phone needs the Tailscale app from the App
-Store or Play Store.
+Install Tailscale and sign in on the same account as the Hub.
+
+On Windows:
+
+```powershell
+winget install --id=tailscale.tailscale -e
+```
+
+On macOS:
+
+```bash
+brew install --cask tailscale
+```
+
+On Linux:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+On phones: install the Tailscale app from the App Store or Play
+Store.
+
+Verify:
+
+```bash
+tailscale status
+```
 
 ## Step 13 - VS Code + Continue (5 min)
 
 On your laptop (the machine where you want IDE chat).
 
-### 13.1 Install Continue
+### 13.1 Install VS Code and Continue
 
-Install the **Continue** extension from the VS Code marketplace.
+If you don't already have VS Code:
+
+On Windows:
+
+```powershell
+winget install --id=Microsoft.VisualStudioCode -e
+```
+
+On macOS:
+
+```bash
+brew install --cask visual-studio-code
+```
+
+On Linux: use your distro's package manager, or download from
+[code.visualstudio.com](https://code.visualstudio.com).
+
+Then install the **Continue** extension from the VS Code
+marketplace (sidebar -> Extensions -> search "Continue" ->
+Install).
 
 ### 13.2 Add FITT aliases to Continue's config.yaml
 
