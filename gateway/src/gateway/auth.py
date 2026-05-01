@@ -38,29 +38,37 @@ def _unauthorized(message: str) -> JSONResponse:
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Enforce Bearer-token auth on non-exempt paths."""
+    """Enforce Bearer-token auth on non-exempt paths.
+
+    On success, stores the client tag on ``request.state.client``
+    for downstream handlers to consult (approval routing,
+    per-client policies).
+    """
 
     def __init__(self, app, config: Config) -> None:  # type: ignore[no-untyped-def]
         super().__init__(app)
-        self._allowed = [t.token for t in (config.secrets.allowed_tokens if config.secrets else [])]
+        self._allowed: list[tuple[str, str]] = [
+            (t.token, t.client or "webui")
+            for t in (config.secrets.allowed_tokens if config.secrets else [])
+        ]
 
     def _is_exempt(self, path: str) -> bool:
         return any(path == p or path.startswith(p + "/") for p in _EXEMPT_PREFIXES)
 
-    def _check(self, header: str | None) -> bool:
+    def _match(self, header: str | None) -> str | None:
+        """Return the client tag if a bearer token matches; else None."""
         if not header:
-            return False
+            return None
         parts = header.split(maxsplit=1)
         if len(parts) != 2 or parts[0].lower() != "bearer":
-            return False
+            return None
         provided = parts[1].strip()
         if not provided:
-            return False
-        # Constant-time comparison against every allowed token.
-        for allowed in self._allowed:
+            return None
+        for allowed, client in self._allowed:
             if secrets.compare_digest(provided, allowed):
-                return True
-        return False
+                return client
+        return None
 
     async def dispatch(
         self,
@@ -68,8 +76,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         if self._is_exempt(request.url.path):
+            # No client tag on exempt paths — those shouldn't be
+            # making tool-dispatching calls.
             return await call_next(request)
         header = request.headers.get("authorization")
-        if not self._check(header):
+        client = self._match(header)
+        if client is None:
             return _unauthorized("Missing or invalid Bearer token.")
+        # Stash the client tag for downstream handlers (approval
+        # routing, per-client tool policies, audit logging).
+        request.state.client = client
         return await call_next(request)

@@ -22,15 +22,15 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 2. Client-tagged tokens
 
-- [ ] 2a. Extend `AllowedToken` model with optional `client:`
+- [x] 2a. Extend `AllowedToken` model with optional `client:`
        field. Literal: `ide` | `telegram` | `webui` | `cli`.
-- [ ] 2b. `Secrets.client_for(token)` helper; fallback to
+- [x] 2b. `Secrets.client_for(token)` helper; fallback to
        `"webui"` for untagged tokens.
-- [ ] 2c. Update auth middleware to pass client tag into the
+- [x] 2c. Update auth middleware to pass client tag into the
        request context.
-- [ ] 2d. Update `configs/secrets.example.yaml` with tagged
+- [x] 2d. Update `configs/secrets.example.yaml` with tagged
        examples.
-- [ ] 2e. Tests: token resolution with and without tags.
+- [x] 2e. Tests: token resolution with and without tags.
 
 ## 3. Tool registry scaffolding
 

@@ -260,6 +260,86 @@ def test_secrets_api_key_for_openai_backend(tmp_path: Path) -> None:
     assert secrets.api_key_for("openai") is None
 
 
+# --------------------------------------------------------------- client tags
+
+
+def test_allowed_token_accepts_client_tag(tmp_path: Path) -> None:
+    """`client:` tags on allowed_tokens drive per-client approval policy."""
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: ide
+            token: TOKEN_IDE_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+            client: ide
+          - name: tg
+            token: TOKEN_TG_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+            client: telegram
+          - name: untagged
+            token: TOKEN_UT_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    secrets = load_secrets(sp)
+
+    assert len(secrets.allowed_tokens) == 3
+    assert secrets.allowed_tokens[0].client == "ide"
+    assert secrets.allowed_tokens[1].client == "telegram"
+    assert secrets.allowed_tokens[2].client is None
+
+
+def test_allowed_token_rejects_unknown_client(tmp_path: Path) -> None:
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: bogus
+            token: TOKEN_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+            client: admin
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    with pytest.raises(ConfigError):
+        load_secrets(sp)
+
+
+def test_client_for_returns_configured_tag(tmp_path: Path) -> None:
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: ide
+            token: IDE_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+            client: ide
+          - name: tg
+            token: TG_TOKEN_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+            client: telegram
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    secrets = load_secrets(sp)
+
+    assert secrets.client_for("IDE_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") == "ide"
+    assert secrets.client_for("TG_TOKEN_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB") == "telegram"
+
+
+def test_client_for_untagged_token_defaults_to_webui(tmp_path: Path) -> None:
+    """Missing client tag = treated as webui (least-trusted)."""
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: legacy
+            token: LEGACY_TOKEN_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    secrets = load_secrets(sp)
+    assert secrets.client_for("LEGACY_TOKEN_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC") == "webui"
+
+
+def test_client_for_unknown_token_returns_unknown(tmp_path: Path) -> None:
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+    secrets = load_secrets(sp)
+    assert secrets.client_for("not-a-real-token") == "unknown"
+
+
 # ------------------------------------------------------------ default path tests
 
 

@@ -194,6 +194,10 @@ class AllowedToken(BaseModel):
 
     name: str
     token: str
+    # Optional client tag — drives per-client approval defaults in
+    # Phase 4+. When absent, the client is treated as "webui" (least
+    # trusted) so older secrets files stay safe by default.
+    client: Literal["ide", "telegram", "webui", "cli"] | None = None
 
 
 class TelegramSecrets(BaseModel):
@@ -236,6 +240,22 @@ class Secrets(BaseModel):
                 return self.api_keys.get(model_id)
             case "ollama":
                 return None
+
+    def client_for(self, token: str) -> str:
+        """Return the client tag for an incoming Bearer token.
+
+        Matches the first allowed token whose value equals ``token``.
+        Falls back to ``"webui"`` (least-trusted client) when the
+        matching token has no ``client:`` field configured. Returns
+        ``"unknown"`` only if no token matches, which should never
+        happen for a request that already passed auth.
+        """
+        import secrets as _secrets
+
+        for entry in self.allowed_tokens:
+            if _secrets.compare_digest(entry.token, token):
+                return entry.client or "webui"
+        return "unknown"
 
 
 # ----------------------------------------------------------------- loader
