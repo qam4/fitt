@@ -31,23 +31,24 @@ Phase 0 (manual) ─┐
                   │                   Phase 2.5 (sessions)
                   │                        │
                   │                        ├─► Phase 3 (telegram) ─► Phase 3.5 (docker hub)
-                  │                        │    │
-                  │                        │    └─► Phase 8 (voice)
                   │                        │
-                  │                        └─► Phase 4 (tools) ─────────────┐
-                  │                             │                          │
-                  │                             │                          └─► Phase 5 (lessons + retro-ai)
+                  │                        └─► Phase 4 (tools) ─► Phase 4.5 (cron + events)
+                  │                             │                    │
+                  │                             │                    └─► Phase 5 (lessons + decay)
+                  │                             │                         │
+                  │                             │                         └─► Phase 6 (spec-runner)
                   │                             │
-                  │                             ├─► Phase 6 (autonomy)
-                  │                             ├─► Phase 7 (RAG memory)
-                  │                             └─► Phase 9 (home assistant)
+                  │                             ├─► Phase 7 (vector memory, admin UI)
+                  │                             ├─► Phase 8 (voice, home assistant)
+                  │                             └─► Phase 9+ (subagents, heartbeat, parallel)
 ```
 
-Phases 5, 6, 7, 9 can be done in any order once their prerequisites are met.
+Phases 7-9+ land opportunistically, driven by friction from daily use.
 
 ---
 
-## Phase 0 — Bootstrap (Manual, ~30 minutes)
+</content>
+</file>## Phase 0 — Bootstrap (Manual, ~30 minutes)
 
 **Goal:** A local LLM reachable from the laptop's IDE. That's it.
 
@@ -378,7 +379,7 @@ allowed_tokens:
 
 **Goal:** Define what a session is, so Phases 3+ have a consistent model to build on.
 
-**Why this phase:** Without explicit session semantics, every interface (Telegram, IDE, cron) reinvents its own scoping. MeshClaw chose "per-channel isolation"; OpenClaw chose "per-sender"; FITT needs to pick. My recommendation: **one default session shared across interfaces, with explicit sub-sessions for side projects or experiments.**
+**Why this phase:** Without explicit session semantics, every interface (Telegram, IDE, cron) reinvents its own scoping. Two viable models: per-channel isolation (each Slack thread, IDE window, etc. its own scope) or per-sender isolation (one scope per user across all interfaces). FITT picks a third: **one default session shared across interfaces, with explicit sub-sessions for side projects or experiments.**
 
 **Requirements sketch:**
 - A session has an `id`, a `name`, a `created_at`, and an attached memory scope.
@@ -579,7 +580,7 @@ The project-registry work originally scoped as Phase 4.5 is folded into Phase 4,
 
 **Key work:**
 - `APScheduler`-backed cron: `fitt cron add "briefing" "summarize last night" --at "0 8 * * *"`.
-- Heartbeat loop reading `~/.fitt/heartbeat.md` checklist every 30 min. `HEARTBEAT_OK` as silent acknowledgment (MeshClaw pattern).
+- Heartbeat loop reading `~/.fitt/heartbeat.md` checklist every 30 min. `HEARTBEAT_OK` as silent acknowledgment.
 - `watchdog`-backed file triggers.
 - Each scheduled or triggered invocation runs in its own session (new or named).
 
@@ -656,7 +657,7 @@ Not a single weekend. Never ends.
 - Skills system if markdown grows unwieldy.
 - Regression-test harness for agent behavior (record/replay common prompts across model upgrades).
 - Productization decision.
-- **Self-evolving skills (speculative):** MeshClaw pattern where recurring corrections or tool-call sequences get synthesised into new skill files. Revisit after Phases 4–6 produce enough usage data to tell whether there are real patterns worth codifying vs. noise. May never be worth it for single-user use; flagged here so we notice if it becomes obvious.
+- **Self-evolving skills (speculative):** synthesise new skill files from recurring corrections or tool-call sequences. Revisit after Phases 4–6 produce enough usage data to tell whether there are real patterns worth codifying vs. noise. May never be worth it for single-user use; flagged here so we notice if it becomes obvious.
 
 ---
 
@@ -727,7 +728,7 @@ home-ai-cluster/
 ## Open Decisions (resolve as you go)
 
 - **Custom dashboard or stick with Open WebUI?** Open WebUI ships in Phase 3. If it covers the needs, no custom dashboard ever gets built. Re-evaluate end of Phase 4 — specifically whether approval flows, session management, and audit-log inspection warrant a purpose-built surface.
-- **Fork OpenClaw/MeshClaw vs build clean?** Revisit end of Phase 3. If the gateway feels over-engineered, consider adopting an existing base.
+- **Fork an existing self-hosted AI gateway vs build clean?** Revisit end of Phase 3. If the gateway feels over-engineered, consider adopting an existing open-source base (LiteLLM Proxy, LibreChat, etc.).
 - **Mem0/Zep or markdown forever?** Revisit end of Phase 7.
 - **Shared-session vs per-interface-session?** Resolved in Phase 2.5; re-evaluate if the shared default feels wrong after living with it.
 - **Productize?** Revisit end of Phase 9.
