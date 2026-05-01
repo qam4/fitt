@@ -175,8 +175,15 @@ class ToolContext:
     to resolve a ``project`` argument into its full record
     (path, ssh_host, test_command, ...)."""
 
-    # Future additions (Task 5+, 13+):
-    #   backend: ExecutionBackend   -- SSH-aware shell runner
+    backend: Any = None
+    """The :class:`~gateway.tools.backend.ExecutionBackend` that
+    runs shell commands on the project's execution host. Typed
+    as Any to avoid an import cycle (backend imports projects,
+    projects imports nothing in tools). Tools that need it
+    should cast/type-ignore at the call site. Optional because
+    the Task 4 read-only spec tools don't need it."""
+
+    # Future additions (Task 13+):
     #   audit:   AuditLog           -- write one entry per call
     #   gaps:    CapabilityGapLog   -- record "I need a tool to X"
 

@@ -16,17 +16,22 @@ from ._types import (
     ToolContext,
     ToolResult,
 )
+from .backend import ExecutionBackend, ShellResult
+from .fileops import build_fileops_tools
 from .inline import build_inline_tools
 from .registry import ToolPolicy, ToolRegistry
 
 __all__ = [
     "ApprovalBucket",
     "ApprovalDecision",
+    "ExecutionBackend",
+    "ShellResult",
     "Tool",
     "ToolCallable",
     "ToolContext",
     "ToolPolicy",
     "ToolRegistry",
     "ToolResult",
+    "build_fileops_tools",
     "build_inline_tools",
 ]

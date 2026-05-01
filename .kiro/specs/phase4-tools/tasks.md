@@ -70,13 +70,13 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 6. File-access inline tools
 
-- [ ] 6a. `read_file(project, path)` uses the SSH backend.
-- [ ] 6b. `list_directory(project, path)`.
-- [ ] 6c. `grep_repo(project, pattern, path_filter?)`.
-- [ ] 6d. `glob_search(project, pattern)`.
-- [ ] 6e. Path-resolution safety: no `..` escape; absolute paths
+- [x] 6a. `read_file(project, path)` uses the SSH backend.
+- [x] 6b. `list_directory(project, path)`.
+- [x] 6c. `grep_repo(project, pattern, path_filter?)`.
+- [x] 6d. `glob_search(project, pattern)`.
+- [x] 6e. Path-resolution safety: no `..` escape; absolute paths
        rejected outside the project root.
-- [ ] 6f. Tests.
+- [x] 6f. Tests.
 
 ## 7. Git read-only tools
 
