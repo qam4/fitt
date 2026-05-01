@@ -37,6 +37,14 @@ from .config import (
 )
 from .errors import ConfigError
 from .memory import MemoryStore
+from .projects import (
+    DuplicateProject,
+    InvalidProjectName,
+    InvalidProjectPath,
+    Project,
+    ProjectRegistry,
+    UnknownProject,
+)
 from .sessions import (
     DuplicateSessionId,
     InvalidSessionId,
@@ -403,6 +411,169 @@ def session_path(session_id: str, config_file: Path | None) -> None:
     """Print the on-disk history directory for this session."""
     cfg = load_config(config_file or default_config_path(), None, load_secrets_too=False)
     _console.print(str(cfg.memory.sessions_dir / session_id / "history"))
+
+
+# --------------------------------------------------------------- fitt project
+
+
+@main.group("project")
+def project_group() -> None:
+    """Register and manage projects FITT can operate on.
+
+    A project is a logical code workspace: a name, a path, optionally
+    an SSH host where the path lives. Tools that touch files (read,
+    edit, grep, run tests, commit) take a `project` argument and
+    dispatch to the registered host.
+    """
+
+
+def _open_project_registry() -> ProjectRegistry:
+    reg = ProjectRegistry()
+    reg.ensure_exists()
+    return reg
+
+
+@project_group.command("list")
+def project_list() -> None:
+    """Show every registered project."""
+    reg = _open_project_registry()
+    projects = reg.all()
+    if not projects:
+        _console.print(
+            "[dim]No projects registered. Use `fitt project add <name>` to add one.[/dim]"
+        )
+        return
+
+    table = Table(title="FITT projects")
+    table.add_column("Name", style="cyan")
+    table.add_column("Location")
+    table.add_column("Path")
+    table.add_column("Test command")
+    for p in projects:
+        loc = p.ssh_host or "(local)"
+        table.add_row(p.name, loc, p.path, p.test_command or "-")
+    _console.print(table)
+
+
+@project_group.command("add")
+@click.argument("name")
+@click.option(
+    "--path",
+    required=True,
+    help="Filesystem path on the execution host where the project lives.",
+)
+@click.option(
+    "--ssh-host",
+    default="",
+    help="SSH host (e.g. laptop.tailnet). Empty = hub-local.",
+)
+@click.option(
+    "--test-command",
+    default="",
+    help='Shell command to run tests (e.g. "uv run pytest -q").',
+)
+@click.option(
+    "--build-command",
+    default="",
+    help='Shell command to build or lint (e.g. "uv run ruff check src tests").',
+)
+def project_add(
+    name: str,
+    path: str,
+    ssh_host: str,
+    test_command: str,
+    build_command: str,
+) -> None:
+    """Register a new project."""
+    reg = _open_project_registry()
+    project = Project(
+        name=name,
+        path=path,
+        ssh_host=ssh_host,
+        test_command=test_command,
+        build_command=build_command,
+    )
+    try:
+        reg.add(project)
+    except (DuplicateProject, InvalidProjectName, InvalidProjectPath) as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    loc = ssh_host or "(local)"
+    _console.print(f"[green]Registered project {name!r} at {loc}:{path}.[/green]")
+
+
+@project_group.command("update")
+@click.argument("name")
+@click.option("--path", default=None)
+@click.option("--ssh-host", default=None)
+@click.option("--test-command", default=None)
+@click.option("--build-command", default=None)
+def project_update(
+    name: str,
+    path: str | None,
+    ssh_host: str | None,
+    test_command: str | None,
+    build_command: str | None,
+) -> None:
+    """Update one or more fields on an existing project.
+
+    Only fields you pass are changed; others keep their current value.
+    """
+    reg = _open_project_registry()
+    changes: dict[str, str] = {}
+    if path is not None:
+        changes["path"] = path
+    if ssh_host is not None:
+        changes["ssh_host"] = ssh_host
+    if test_command is not None:
+        changes["test_command"] = test_command
+    if build_command is not None:
+        changes["build_command"] = build_command
+
+    if not changes:
+        _console.print("[yellow]No fields to update. Pass at least one option.[/yellow]")
+        sys.exit(1)
+
+    try:
+        updated = reg.update(name, **changes)
+    except (UnknownProject, InvalidProjectPath) as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    _console.print(f"[green]Updated {updated.name!r}.[/green]")
+
+
+@project_group.command("remove")
+@click.argument("name")
+def project_remove(name: str) -> None:
+    """Remove a project from the registry.
+
+    Does not touch the project's files on disk; just forgets about
+    them in FITT's registry.
+    """
+    reg = _open_project_registry()
+    try:
+        reg.remove(name)
+    except UnknownProject as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    _console.print(f"[yellow]Removed project {name!r}.[/yellow]")
+
+
+@project_group.command("show")
+@click.argument("name")
+def project_show(name: str) -> None:
+    """Print details of a single project."""
+    reg = _open_project_registry()
+    try:
+        p = reg.get(name)
+    except UnknownProject as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    _console.print(f"[bold cyan]{p.name}[/bold cyan]")
+    _console.print(f"  location:      {p.ssh_host or '(local)'}")
+    _console.print(f"  path:          {p.path}")
+    _console.print(f"  test command:  {p.test_command or '-'}")
+    _console.print(f"  build command: {p.build_command or '-'}")
 
 
 if __name__ == "__main__":

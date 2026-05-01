@@ -7,18 +7,18 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 1. Project registry
 
-- [ ] 1a. Data model: `Project` dataclass with `name`, `ssh_host`,
+- [x] 1a. Data model: `Project` dataclass with `name`, `ssh_host`,
        `path`, `test_command`, `build_command`. YAML schema
        validated via Pydantic.
-- [ ] 1b. `ProjectRegistry` class: load from
+- [x] 1b. `ProjectRegistry` class: load from
        `$FITT_HOME/projects.yaml`, look up by name, list, add,
        remove.
 - [ ] 1c. File watcher: hot-reload on YAML edit via `watchfiles`.
        Malformed entries log a warning; valid entries stay loaded.
-- [ ] 1d. CLI: `fitt project add <name>` (interactive prompts),
+- [x] 1d. CLI: `fitt project add <name>` (interactive prompts),
        `fitt project list`, `fitt project remove <name>`.
 - [ ] 1e. Wire into gateway startup: load registry, start watcher.
-- [ ] 1f. Tests: `test_projects.py`.
+- [x] 1f. Tests: `test_projects.py`.
 
 ## 2. Client-tagged tokens
 
