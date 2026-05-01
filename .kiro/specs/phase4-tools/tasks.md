@@ -58,14 +58,14 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 5. SSH execution backend
 
-- [ ] 5a. `gateway/tools/backend.py` with `ExecutionBackend.run_shell`:
+- [x] 5a. `gateway/tools/backend.py` with `ExecutionBackend.run_shell`:
        dispatches via `ssh <host> '<cmd>'` when the project has an
        `ssh_host`; local subprocess otherwise.
-- [ ] 5b. Timeout handling, stderr capture, returncode.
-- [ ] 5c. SSH key location: document
+- [x] 5b. Timeout handling, stderr capture, returncode.
+- [x] 5c. SSH key location: document
        `$FITT_HOME/ssh/id_ed25519`. Gateway reads via
        `SSH_AUTH_SOCK` from agent OR key file. Pick one.
-- [ ] 5d. Tests: `test_tools_ssh_backend.py`. Mocks
+- [x] 5d. Tests: `test_tools_ssh_backend.py`. Mocks
        `asyncio.create_subprocess_exec`.
 
 ## 6. File-access inline tools
