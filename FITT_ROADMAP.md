@@ -480,19 +480,19 @@ for 3 days without intervention.
 
 ## Phase 4 — Agentic Tools (Spec-driven, ~2 weekends)
 
-**Goal:** FITT offers its own tool system for non-IDE interfaces (Telegram, Open WebUI, curl) and layers spec-aware workflow tools on top. In the IDE, Continue supplies the raw toolkit; FITT stays out of the way and adds value only through session continuity, shared memory, and project-aware system prompts.
+**Goal:** FITT offers its own tool system for non-IDE clients (Telegram, Open WebUI, curl). Tools dispatch to wherever the work actually happens — hub-local for general tools, via SSH to the project's declared host for file/git/shell operations. The IDE case (Continue) stays pass-through: Continue supplies its own toolkit; FITT is transparent.
 
-**Key design decisions (from the Phase 4 design discussion):**
+**Key design decisions:**
 
-- **Two layers of tool plumbing**: inline Python for core tools (simple, fast, no subprocess), MCP for the long tail (Slack, Jira, Postgres, Home Assistant). To the model, they're both just function calls.
-- **Tool forwarding, not replacement.** When a client request carries a `tools` field (Continue in Agent Mode does this), the gateway forwards those tools intact and appends FITT's session-aware tools rather than overwriting. Clients with their own toolkits keep them; clients without toolkits (Telegram, Open WebUI) see FITT's full set.
-- **IDE is a thin case.** Continue already implements agent-mode tools (`read_file`, `edit_existing_file`, `run_terminal_command`, etc.). FITT does not need to duplicate them. Setting `capabilities: [tool_use]` in Continue's `config.yaml` for the FITT models unlocks Agent mode.
-- **Spec-aware as first-class**. `spec_read`, `spec_next_task`, `spec_mark_task`, `spec_list` are inline Python tools that understand the Kiro-style `.kiro/specs/<feature>/{requirements,design,tasks}.md` convention. These are what make a "Kiro-style workflow" portable across interfaces.
-- **Lessons (self-learning) deferred to Phase 5.** Splitting them out so Phase 4 can ship cleanly.
+- **Two layers of tool plumbing.** Inline Python for core tools (simple, fast, no subprocess). External MCP servers for the long tail (Slack, Jira, Postgres, Home Assistant). To the model, they're both just function calls.
+- **Execution follows the project.** The hub runs the gateway, but file/git/shell tools execute where the code lives. Each project in the registry declares an `ssh_host` (may be the hub itself for hub-local projects). Tools wrap their operation in ssh when needed. Satellite roles: a machine can be an inference satellite (Ollama), an execution host (project code + tests), both, or neither.
+- **Tool forwarding, not replacement.** When a client sends a `tools` array (Continue in Agent mode does this), the gateway appends FITT's session-aware tools rather than overwriting. Continue keeps its own tools; FITT contributes `spec_*` + cron + event tools on top.
+- **Spec-aware tools are first-class.** `spec_read`, `spec_next_task`, `spec_mark_task`, `spec_list` understand the `.kiro/specs/<feature>/{requirements,design,tasks}.md` convention. What makes a spec-driven workflow portable across Telegram / IDE / CLI.
+- **Cron and lessons deferred.** Phase 4.5 adds cron + proactive notifications. Phase 5 adds lessons. Phase 4 stays focused on "tools + approval + audit + registry."
 
 **Core inline tools (shipped with FITT):**
 
-- `read_file`, `write_file`, `edit_file` (write scoped to registered projects)
+- `read_file`, `write_file`, `edit_file` (writes scoped to registered projects; routed via ssh when project has an `ssh_host`)
 - `list_directory`, `grep_repo`, `glob_search`
 - `git_status`, `git_diff`, `git_commit` (writes gated)
 - `run_tests` (runs the project's configured test command)
@@ -500,7 +500,7 @@ for 3 days without intervention.
 - `spec_read`, `spec_next_task`, `spec_mark_task`, `spec_list`
 - `list_capabilities` (enumeration tool for capability-awareness)
 
-**MCP for everything else:** Slack, Jira, GitHub, Postgres, Home Assistant, Brave Search, etc. Config reads `mcpServers:`, spawns subprocesses, supervises them, surfaces their tools alongside the inline ones.
+**MCP for everything else:** configured in `config.yaml` under `mcpServers:`; gateway spawns, supervises, surfaces tools alongside inline ones.
 
 **Capability awareness (Principle 8):**
 - System prompt auto-generates a capabilities summary from the loaded tool list.
@@ -508,145 +508,146 @@ for 3 days without intervention.
 - Declined-for-missing-capability events log to `~/.fitt/capability_gaps.log` as a natural backlog.
 - `fitt capability-gaps` CLI prints the backlog grouped by frequency.
 
-**Approval model:**
-- **Read-only tools** auto-approve everywhere.
-- **Writes from the IDE** auto-approve (Continue surfaces tool calls to the user already; re-gating in FITT is friction).
-- **Writes from anywhere else** and **all shell-like operations** (including `run_tests`, `git_commit`, `edit_file`) route to Telegram for a human Allow/Deny.
-- Per-tool overrides in `config.yaml`: `auto` / `ask` / `trust_session` / `block`.
-- Per-client tokens in `secrets.yaml` carry a `client:` and `trust:` tag so the gateway knows which interface is asking.
-- Hardcoded deny list for obviously-destructive patterns (`rm -rf /`, `git push --force`, curl-piped-to-shell, etc.) — code, not config.
+**Approval model — four buckets:**
+- `auto` — tool runs without prompting.
+- `ask` — approval required; routes to the originating client if it has a native UI, else Telegram.
+- `trust_session` — "ask" until the user clicks "trust rest of session"; then auto for that session's remainder.
+- `yolo` — auto-approve everything; time-boxed with automatic expiry (default 30 min for Telegram/WebUI, 6 h for IDE/CLI).
+- `block` — hardcoded deny list (in code, not config). Covers `rm -rf /`, `git push --force`, curl-piped-to-shell, and obvious destructive patterns.
+
+**Per-client tokens** in `secrets.yaml` carry a `client:` tag and default trust level (`ide` / `telegram` / `webui` / `cli`). Tool policy can override per-client.
+
+**Default policies by client:**
+- **IDE (Continue)** — writes auto-approve (Continue already shows diffs natively); shell-like tools (`run_tests`, `git_commit`) still `ask`.
+- **Telegram** — reads auto; writes and shell-like tools `ask` (inline-keyboard prompt).
+- **Open WebUI** — reads scoped to registered projects; writes `block`; no shell. Least trust by default.
+- **CLI on the hub** — writes `ask`; shell-like tools `ask`.
 
 **Audit log:**
 - Append-only `~/.fitt/audit.jsonl` with HMAC chain.
 - `fitt audit verify` CLI checks chain integrity.
-- Every tool call logged: timestamp, session, client, tool, arguments, outcome.
+- Every tool call logged: timestamp, session, client, tool, arguments, outcome, approval decision.
 
 **Module design:**
 - `gateway/tools/` — package of inline tool implementations.
+- `gateway/tools/ssh_backend.py` — dispatches file/git/shell tools via ssh when the project has an `ssh_host`.
 - `gateway/mcp_client.py` — MCP server supervisor and tool surfacing.
 - `gateway/tool_registry.py` — unified registry across inline + MCP, source of truth for schemas and policies.
-- `gateway/approval.py` — approval-gate middleware, routes prompts back to Telegram.
+- `gateway/approval.py` — approval-gate middleware, routes prompts back to the originating client (Telegram fallback).
 - `gateway/audit.py` — append-only audit log with HMAC chain.
 - `gateway/capabilities.py` — system-prompt capability summary + gap logging.
 - `gateway/deny_list.py` — hardcoded deny patterns.
-- `gateway/projects.py` — project registry (was Phase 4.5; folded in because the filesystem tool depends on it).
-
-**Tasks sketch:**
-1. Project registry (schema, CLI, file watcher). Was Phase 4.5.
-2. Inline tool scaffolding + `read_file` / `list_directory` / `grep_repo`.
-3. Write-gated tools + per-client token schema.
-4. Spec-aware tools (`spec_read`, `spec_next_task`, `spec_mark_task`, `spec_list`).
-5. MCP client + server supervisor.
-6. Capability system prompt + `list_capabilities` + gap logging.
-7. Approval middleware + Telegram inline-keyboard UI.
-8. Audit log with HMAC chain + verify CLI.
-9. Tool-forwarding policy (append to client-supplied `tools`, don't replace).
-10. Evals: "does this model reliably call this tool?" harness for routing weaker models to smaller tool sets.
+- `gateway/projects.py` — project registry (schema, CLI, file watcher) including `ssh_host`.
 
 **Known concerns:**
-- Local 14B models handle tool calling less reliably than Claude. The eval harness measures it; routing policy downgrades weaker aliases to a minimal tool set.
-- Approval UX on Telegram needs a "trust for the rest of this session" option or approval fatigue kills the workflow.
-- MCP server crash storms can cascade if the supervisor retries too aggressively. Exponential backoff.
-- Continue's own rules (`.continue/rules/`) and FITT's server-side system prompt can conflict. Agree on separation: FITT's prompt is generic (identity, active specs, capabilities); client-side rules are client-specific (editing conventions, tool usage preferences).
+- Local 14B models handle tool calling less reliably than cloud frontier models. An eval harness measures it; routing policy downgrades weaker aliases to a minimal tool set.
+- Approval UX on Telegram needs a "trust for this session" option or approval fatigue kills the workflow.
+- MCP server crash storms cascade if the supervisor retries too aggressively. Exponential backoff.
+- Continue's own rules (`.continue/rules/`) and FITT's server-side system prompt can conflict. Separation: FITT's prompt stays generic (identity, active specs, capabilities); client-side rules are client-specific (editing conventions, tool usage preferences).
+- SSH dispatch adds ~100-300ms per tool call. Acceptable at task-runner granularity (minutes per task); noisy for interactive chat. Acceptable tradeoff for Phase 4.
 
-*Full three-file spec to be written when this phase starts.*
-
----
-
-## Phase 4.5 (absorbed into Phase 4)
-
-The project-registry work originally scoped as Phase 4.5 is folded into Phase 4, because the filesystem tool's write allowlist needs it from day one.
+*Full spec: `.kiro/specs/phase4-tools/` (to be written when this phase starts).*
 
 ---
 
-## Phase 5 — Retro-AI Integration (~1–2 weekends)
+## Phase 4.5 — Cron + Proactive Notifications (Spec-driven, ~1 weekend)
 
-**Goal:** Launch, monitor, and report on RL training runs via FITT.
+**Goal:** FITT can do things on a schedule, and tell you about them. Unlocks "monitor the training job and tell me when it's done" without re-explaining each time (though lessons in Phase 5 is what makes it feel magical).
 
 **Key work:**
-- Custom `retroai-training` MCP server: `start_training`, `get_status`, `stop_training`, `get_metrics`, `get_reward_plot`.
-- Custom `emulator` MCP server: `screenshot`, `get_state`, `read_logs`.
-- Completion notifications via a `telegram-out` tool (or whatever notification surface you settle on).
 
-**Prerequisite:** Retro-AI registered in Phase 4.5.
+- **Cron subsystem.** `$FITT_HOME/cron.json` with atomic writes + file lock (hub-side persistence). Three schedule kinds: `every <seconds>` (interval, min 60s), `at <timestamp>` (one-shot), `cron <5-field expr>`. Each job fires a fresh session with the job's message as the user prompt.
+- **Cron tools.** `cron_add`, `cron_list`, `cron_update`, `cron_remove`, `cron_pause`, `cron_resume`. All respect the Phase 4 approval policy (`cron_add` in `ask` bucket; once the cron exists, its internal tool calls follow per-cron policy).
+- **Per-cron policy fields.** `silent: bool` (suppresses auto-delivery; agent decides via `send_message`), `approval_mode: "" | "auto"`, `session_key` (who created it, for scoped removal).
+- **Event log.** Append-only `$FITT_HOME/events.jsonl`. Every notable async event (cron fired, tool call needing approval, task completed, etc.) logged with metadata: `kind`, `timestamp`, `session_key`, related IDs, human-readable `summary`.
+- **Proactive delivery.** Every event pushed to Telegram by default. A `send_message` tool the agent can call to emit custom events (non-cron).
+- **`fitt inbox` CLI.** List events with filters (`--since`, `--kind`, `--session`). No web UI in this phase; Telegram + CLI is enough.
 
-*Full spec when the phase starts.*
+**Scope boundaries:**
+
+- One event log per hub. No per-client buckets.
+- No deduplication, counters, search UI. Flat append-only file; sort and filter at read time.
+- No fancy approval UI. Telegram inline keyboard for `ask`; that's it.
+- No heartbeat loop or self-directed tasks. Those need a separate Phase (see deferred).
+
+*Full spec: `.kiro/specs/phase4.5-cron-events/` (to be written when this phase starts).*
 
 ---
 
-## Phase 6 — Autonomy: Cron and Heartbeat (~1 weekend)
+## Phase 5 — Lessons + Decaying History (Spec-driven, ~1 weekend)
 
-**Goal:** FITT acts proactively, not just reactively.
+**Goal:** FITT remembers what you told it last month. "Monitor training pid 456" just works because the pattern was learned from an earlier conversation.
 
 **Key work:**
-- `APScheduler`-backed cron: `fitt cron add "briefing" "summarize last night" --at "0 8 * * *"`.
-- Heartbeat loop reading `~/.fitt/heartbeat.md` checklist every 30 min. `HEARTBEAT_OK` as silent acknowledgment.
-- `watchdog`-backed file triggers.
-- Each scheduled or triggered invocation runs in its own session (new or named).
 
-*Full spec when the phase starts.*
+- **Lessons store.** `$FITT_HOME/lessons.md` — plain markdown, bullets or short paragraphs. Hand-editable. Injected into every system prompt as a `[Learned corrections]` block, capped at ~50 entries, oldest-pruned.
+- **Lessons tools.** `learn_add(text, category?)`, `learn_list()`, `learn_remove(substring)`. Agent calls `learn_add` when the user says "remember", "always use X", "never Y", or after an observed correction.
+- **`fitt learn` CLI.** Non-chat interface for direct editing (add/list/remove).
+- **Decaying history injection.** When the gateway builds context for a request:
+  - Today's session history: injected in full (same as Phase 2).
+  - Yesterday: first entry + count, truncated.
+  - Days 3-30 ago: one-line marker per day (date + entry count).
+  - Day 30+: dropped from context. Files stay on disk.
+  - Total history budget capped at ~6000 chars.
+- **History pruning.** Nightly task deletes `history/YYYY-MM-DD.md` files older than `memory.history_max_days` (default 90, configurable).
+
+**Out of scope (deferred to Phase 7+):**
+
+- Vector embeddings / semantic search.
+- Episodic memory with similarity retrieval.
+- Automatic preferences/projects consolidation (LLM rewrite of `preferences.md` from recent messages).
+- Cross-session memory bleed (each session's history stays isolated; identity + lessons shared).
+
+*Full spec: `.kiro/specs/phase5-lessons/` (to be written when this phase starts).*
 
 ---
 
-## Phase 7 — Memory v1: RAG, Compaction, Cross-Project (~3 weekends)
+## Phase 6 — Spec-Runner: Unattended Coding (Spec-driven, ~1-2 weekends)
 
-**Goal:** FITT knows your codebases and long-running conversations don't blow the context budget.
+**Goal:** Hand FITT a `tasks.md` and walk away. It walks unchecked tasks in order, each one in its own session, commits per task, stops on first blocker. Works overnight.
 
 **Key work:**
-- Qdrant in Docker for vector index.
-- `nomic-embed-text` via Ollama for embeddings.
-- Nightly re-index cron (incremental where possible).
-- RAG retrieval in gateway's context-assembly step.
-- **History compaction:** when today's log exceeds a threshold, summarize older blocks with an LLM pass; replace with the summary. Preserve facts, drop chatter.
-- Project disambiguation (cwd heuristic, explicit switch via `/project`, keyword detection).
-- Optional Mem0/Zep evaluation for fact extraction; markdown remains source of truth.
 
-**Known concerns:**
-- Embedding model changes invalidate the index. Document the re-index cost and keep embedding config stable.
-- 3 weekends is honest; the hard parts are chunking strategy and project disambiguation, not the vector DB.
+- **Task-runner subsystem.** `fitt task run <spec-dir>` (CLI) or `task_run` tool (from any client). Takes a path to a `.kiro/specs/<feature>/` directory. Walks `tasks.md`.
+- **Worktree isolation on the execution host.** For each run, creates a fresh git worktree on the project's declared `ssh_host`: `git worktree add <worktree-path> -b fitt/<feature>-<ts>`. All work happens there; the user's main checkout is never touched.
+- **Per-task session.** Each unchecked task spawns a fresh sub-session, memory-injected, spec-aware. Tools: full Phase 4 set. Approval mode: inherit from task config (default `auto` for tasks approved at run-creation time).
+- **Commit per task.** After each passing task: `git add -A && git commit -m "<task title>"`. One clean commit per task on the worktree's branch.
+- **Cycle detection.** Same error 3x on a task → fail the task, notify, stop the run.
+- **Stop on first unrecoverable failure.** No replan. User sees the blocker in Telegram + the event log; they decide: fix manually, skip, rethink.
+- **Checkbox-based checkpointing.** `spec_mark_task` updates `tasks.md`. On resume, unchecked = still todo. No separate `TASK_PROGRESS.md` file needed.
+- **Per-task timeout.** Configurable (default 30 min). Timeout → task fails, run stops.
+- **Notifications per task.** Start / success / failure each emit an event (Phase 4.5 event log + Telegram push).
 
-*Full spec when the phase starts.*
+**Deliberate non-goals (deferred):**
 
----
+- **No planner.** We don't decompose free-text into tasks. The `tasks.md` authored collaboratively with the human _is_ the plan.
+- **No replan.** One step blocking stops the run.
+- **No self-review.** Trust the executor. Trust tests. (A failed test is a failed task.)
+- **No parallel step execution.** Sequential only.
+- **No acceptance review.** The spec's `tasks.md` sub-tasks are the acceptance.
+- **No watchdog for stalled sessions.** Per-task timeout is enough.
 
-## Phase 8 — Voice (~2–3 weekends, optional)
+The deferred list is deliberate: each of these earns its place later if we feel its absence. They're big features in internal tools; for FITT v1 with a well-factored `tasks.md`, they're probably unnecessary.
 
-**Goal:** Talk to FITT, hear it reply — especially from the watch via Telegram voice notes.
+**Prerequisites:** Phase 4 (tools + ssh backend + project registry), Phase 4.5 (events + notifications).
 
-**Status:** **Optional and deferrable.** Re-evaluate priority after Phase 7. If the text experience is satisfying, voice is cosmetic; if you find yourself wanting hands-free, it earns its weight.
-
-**Key work:**
-- `faster-whisper` STT service (GPU on desktop).
-- `piper-tts` or `kokoro-onnx` TTS.
-- Telegram voice-note handling.
-- Latency target: < 8s watch-to-watch for a 50-word reply.
-
-**Known concerns:**
-- Windows CUDA + cuDNN setup for Faster-Whisper is a real time sink.
-- Piper voices are robotic; Kokoro is heavier. Plan to audition both.
-
-*Full spec when the phase starts.*
+*Full spec: `.kiro/specs/phase6-spec-runner/` (to be written when this phase starts).*
 
 ---
 
-## Phase 9 — Home Assistant Agent (~2–3 weekends)
+## Phase 7+ — Opportunistic upgrades
 
-**Goal:** The Alexa-like agentic half of the vision.
+Features we know we'll want eventually but shouldn't pre-build. Each one lands when daily friction justifies it.
 
-**Prerequisite:** A running Home Assistant instance. If one doesn't exist, add **Phase 9a: Stand up Home Assistant** (1 weekend of its own for a beginner).
-
-**Key work:**
-- Home Assistant's MCP server wired to the gateway.
-- Calendar / email MCP servers.
-- Hard approval gates on anything with physical-world consequences.
-
-*Full spec when the phase starts.*
-
----
-
-## Phase 10 — Hardening (Ongoing)
-
-Not a single weekend. Never ends.
+- **Vector / semantic memory.** Triggered by "the agent consistently forgets things older than a week." Add embeddings (local Ollama model on a satellite), SQLite + FAISS, migrate markdown to structured memory.
+- **Admin web UI.** Triggered by "editing YAML over SSH is painful." Add a FastAPI + Jinja/HTMX dashboard reading the same files the CLI reads.
+- **Subagents / parallel execution.** Triggered by "I want FITT to research X while executing Y." Add background task spawning with result injection.
+- **Heartbeat loop.** Triggered by "I want FITT to pick up self-written TODOs." Self-directed behavior; 60-second loop picks up tasks from a queue the agent writes to.
+- **Replan in spec-runner.** Triggered by "the runner stops too often on solvable blockers." LLM-driven revision of remaining tasks after a failure.
+- **Self-review in spec-runner.** Triggered by "executor committed broken code and marked task done." Independent reviewer session reads git diff.
+- **Cross-machine SSH fleet management.** Triggered by "adding a new satellite is fiddly." Automated tailnet discovery, capability probing, auto-registration.
+- **Voice (Phase 8 in the old numbering).** Triggered by "I want hands-free." Whisper STT + Piper/Kokoro TTS.
+- **Home automation (Phase 9 in the old numbering).** Triggered by "I want my AI to control my house." Home Assistant MCP + approval-gated physical-world actions.
 
 - Secondary compute node: desktop's 3070 as Ollama fallback.
 - Backups: nightly snapshot of memory + audit log to NAS.
