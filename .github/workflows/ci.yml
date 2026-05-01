@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref (save CI minutes on rapid
+# pushes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------
+  # gateway: the core package. telegram-bot depends on it as a path
+  # dep, so this job must pass before telegram-bot can run.
+  # ------------------------------------------------------------------
+  gateway:
+    name: gateway (lint + typecheck + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Official uv action: installs uv, caches the download, and
+      # (with enable-cache) caches `~/.cache/uv` between runs.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          # Invalidate cache when the lockfile changes.
+          cache-dependency-glob: "gateway/uv.lock"
+
+      - name: Sync dependencies
+        run: uv sync --all-extras
+
+      - name: Ruff - lint
+        run: uv run ruff check src tests
+
+      - name: Ruff - format check
+        run: uv run ruff format --check src tests
+
+      - name: Mypy
+        run: uv run mypy src
+
+      - name: Pytest
+        run: uv run pytest -q
+
+  # ------------------------------------------------------------------
+  # telegram-bot: depends on gateway via `uv.sources` path dep.
+  # Runs in parallel - it pulls gateway in fresh from the checkout,
+  # doesn't consume the previous job's artifact.
+  # ------------------------------------------------------------------
+  telegram-bot:
+    name: telegram-bot (lint + typecheck + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: telegram-bot
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "telegram-bot/uv.lock"
+
+      - name: Sync dependencies
+        run: uv sync --all-extras
+
+      - name: Ruff - lint
+        run: uv run ruff check src tests
+
+      - name: Ruff - format check
+        run: uv run ruff format --check src tests
+
+      - name: Mypy
+        run: uv run mypy src
+
+      - name: Pytest
+        run: uv run pytest -q
