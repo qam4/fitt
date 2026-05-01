@@ -18,7 +18,7 @@ import logging.handlers
 import sys
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from structlog.types import EventDict, Processor, WrappedLogger
@@ -137,12 +137,16 @@ class _StructlogFormatter(logging.Formatter):
         else:
             event_dict = {"event": record.getMessage()}
         event_dict.setdefault("level", record.levelname.lower())
-        return self._processor(None, record.levelname, event_dict)  # type: ignore[arg-type]
+        # structlog's renderers return str | bytes; both JSONRenderer
+        # and ConsoleRenderer return str in practice, but the typing
+        # is wider. Cast to str for the stdlib Formatter contract.
+        rendered = self._processor(None, record.levelname, event_dict)
+        return rendered if isinstance(rendered, str) else rendered.decode("utf-8")
 
 
 def get_logger(name: str = "fitt.gateway") -> structlog.stdlib.BoundLogger:
     """Return a configured structlog logger."""
-    return structlog.get_logger(name)
+    return cast("structlog.stdlib.BoundLogger", structlog.get_logger(name))
 
 
 def log_request(logger: structlog.stdlib.BoundLogger, **fields: Any) -> None:

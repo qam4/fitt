@@ -11,6 +11,7 @@ completions endpoint still requires the Bearer token.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from fastapi import APIRouter, Request
 
@@ -18,7 +19,7 @@ router = APIRouter()
 
 
 @router.get("/v1/models")
-async def list_models(request: Request) -> dict:
+async def list_models(request: Request) -> dict[str, Any]:
     config = request.app.state.config
     created = int(time.time())
     data = []

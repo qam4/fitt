@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Coroutine
 
 _log = logging.getLogger(__name__)
 
@@ -108,5 +109,5 @@ class TelegramBotAPI:
 
 # Small helper so tests can await a coroutine in a sync context
 # without needing an event loop hack.
-def run(coro: asyncio.coroutines.Coroutine[object, object, object]) -> object:
+def run(coro: Coroutine[object, object, object]) -> object:
     return asyncio.get_event_loop().run_until_complete(coro)

@@ -405,7 +405,7 @@ async def chat_completions(request: Request) -> Response:
         fallback=dispatch.fallback_used,
     )
 
-    if hasattr(response_obj, "model_dump"):
+    if response_obj is not None and hasattr(response_obj, "model_dump"):
         body = response_obj.model_dump(exclude_none=True)
     elif isinstance(response_obj, dict):
         body = response_obj

@@ -35,7 +35,7 @@ _log = logging.getLogger(__name__)
 _PureHandler = Callable[[Any, IncomingUpdate, Services], Awaitable[None]]
 
 
-def build_application(bot_config: TelegramBotConfig) -> Application:
+def build_application(bot_config: TelegramBotConfig) -> Application[Any, Any, Any, Any, Any, Any]:
     """Construct a python-telegram-bot Application with FITT's
     handlers wired in."""
 

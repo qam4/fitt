@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Request
@@ -90,7 +91,7 @@ async def ready(request: Request) -> JSONResponse:
 
     failing = [alias for alias, ready, _ in probes if not ready]
     status_code = 200 if not failing else 503
-    body = {
+    body: dict[str, Any] = {
         "status": "ok" if not failing else "degraded",
         "aliases": {
             alias: {
