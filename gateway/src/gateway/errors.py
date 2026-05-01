@@ -65,3 +65,25 @@ class UnknownSession(GatewayError):
 
 class MemoryDisabled(GatewayError):
     """Raised when a memory operation is attempted while memory is disabled."""
+
+
+class UnknownTool(GatewayError):
+    """Raised when a request or dispatcher references a tool not in the registry."""
+
+    def __init__(self, name: str, available: list[str]) -> None:
+        self.name = name
+        self.available = available
+        super().__init__(f"Unknown tool {name!r}. Available: {', '.join(available) or '(none)'}")
+
+
+class DuplicateTool(GatewayError):
+    """Raised when a caller tries to register a tool whose name is already taken.
+
+    Typically a bug (two inline tools accidentally share a name) or
+    a sign of a failed MCP deregister. The registry refuses the
+    second registration rather than silently clobbering the first.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"A tool named {name!r} is already registered")

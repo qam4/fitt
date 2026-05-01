@@ -34,16 +34,16 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 3. Tool registry scaffolding
 
-- [ ] 3a. `gateway/tools/_types.py`: `Tool`, `ToolResult`,
+- [x] 3a. `gateway/tools/_types.py`: `Tool`, `ToolResult`,
        `ApprovalBucket`, `ApprovalDecision`, `ToolContext`
        dataclasses.
-- [ ] 3b. `gateway/tools/registry.py`: `ToolRegistry.register`,
+- [x] 3b. `gateway/tools/registry.py`: `ToolRegistry.register`,
        `unregister`, `lookup`, `list_all`, `describe_all`.
-- [ ] 3c. Policy loader: parse `tools:` section of `config.yaml`
+- [x] 3c. Policy loader: parse `tools:` section of `config.yaml`
        into a `ToolPolicy` object.
-- [ ] 3d. `resolve_bucket(tool, client, session)` implementing
+- [x] 3d. `resolve_bucket(tool, client, session)` implementing
        the documented precedence chain.
-- [ ] 3e. Tests: `test_tools_registry.py`.
+- [x] 3e. Tests: `test_tools_registry.py`.
 
 ## 4. Read-only inline tools (no SSH backend yet)
 

@@ -135,6 +135,12 @@ class Config(BaseModel):
     models: list[ModelConfig]
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    # ``tools:`` block is Phase 4+: per-tool approval buckets,
+    # wildcards for MCP, per-client overrides. Shape is
+    # intentionally loose at the Config layer (any mapping) and
+    # parsed strictly downstream by ToolPolicy. Absent block =
+    # all defaults from the registry's client table.
+    tools: dict[str, Any] | None = None
 
     # Populated after secrets load. Not serialised.
     secrets: Secrets | None = Field(default=None, exclude=True)
