@@ -7,6 +7,7 @@ slices the bot actually needs.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,10 +71,22 @@ def load_bot_config(
         )
     bearer = secrets.allowed_tokens[0].token
 
-    # The gateway listens on config.server.host:port, but from the
-    # bot's perspective we want localhost. This avoids depending on
-    # the user's Tailscale-IP for a same-machine loopback.
-    gateway_url = f"http://127.0.0.1:{cfg.server.port}"
+    # Where the bot reaches the gateway. Precedence:
+    #   1. FITT_GATEWAY_URL env var — the explicit knob, set by
+    #      docker-compose to `http://gateway:8080` so the bot
+    #      resolves the gateway by compose service name on the
+    #      bridge network.
+    #   2. Fallback: `http://127.0.0.1:<port>` assuming the bot
+    #      and gateway share a host (the bare-metal install
+    #      pattern we had pre-Phase-3.5).
+    # Don't quietly accept an empty string; catch the common
+    # mistake of leaving the env var unset to "" in a broken
+    # compose override.
+    env_url = os.environ.get("FITT_GATEWAY_URL", "").strip()
+    if env_url:
+        gateway_url = env_url
+    else:
+        gateway_url = f"http://127.0.0.1:{cfg.server.port}"
 
     prefs_path = fitt_home() / "telegram" / "prefs.json"
 
