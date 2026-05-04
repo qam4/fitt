@@ -58,8 +58,15 @@ def configure_logging(
     *,
     level: str = "info",
     retention_days: int = 30,
+    filename: str = "gateway.log",
 ) -> None:
     """Configure structlog to write JSON to a rotating file + console.
+
+    ``filename`` is the base log file name inside ``log_dir``.
+    Defaults to ``gateway.log`` for the gateway process; the
+    telegram-bot calls with ``telegram-bot.log`` so each service's
+    lines stay in their own file and you can ``tail -f`` either
+    one without noise from the other.
 
     Idempotent: repeated calls are a no-op. Tests that need to
     reconfigure should call ``reset_logging()`` first.
@@ -69,7 +76,7 @@ def configure_logging(
         return
 
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "gateway.log"
+    log_path = log_dir / filename
 
     numeric_level = getattr(logging, level.upper(), logging.INFO)
 
@@ -171,9 +178,7 @@ class _StructlogFormatter(logging.Formatter):
             # flag the next iteration's `event_dict = processor(...)`
             # with a union-type mismatch.
             result = processor(None, record.levelname, event_dict)
-            assert isinstance(result, dict), (
-                "local-chain processors must return a dict"
-            )
+            assert isinstance(result, dict), "local-chain processors must return a dict"
             event_dict = result
         rendered = self._renderer(None, record.levelname, event_dict)
         if isinstance(rendered, str):

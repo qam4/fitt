@@ -313,8 +313,17 @@ Three causes in order of likelihood:
 
 Read the logs:
 ```bash
+# stdout/stderr the container emitted (includes startup banners).
 docker compose logs --tail=50 gateway
+
+# Structured JSON on disk, separate per service.
+tail -n 50 "$FITT_HOME/logs/gateway.log"
+tail -n 50 "$FITT_HOME/logs/telegram-bot.log"
 ```
+
+The gateway and the telegram bot each write to their own file
+under `$FITT_HOME/logs/`. Daily rotation; backups kept for
+`logging.retention_days` (30 by default).
 
 ### `uv sync` fails with a network error
 

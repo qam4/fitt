@@ -23,6 +23,7 @@ def main() -> int:
         cfg.logging.dir,
         level=cfg.server.log_level,
         retention_days=cfg.logging.retention_days,
+        filename="telegram-bot.log",
     )
     log = get_logger("fitt.telegram_bot")
 

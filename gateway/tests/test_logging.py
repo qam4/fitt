@@ -131,3 +131,21 @@ def test_structlog_events_retain_their_timestamp(tmp_path: Path) -> None:
     assert isinstance(ts, str) and ts
     # ISO-8601 UTC ends with Z or +00:00 depending on structlog version.
     assert "T" in ts, ts
+
+
+def test_configure_logging_honors_filename(tmp_path: Path) -> None:
+    """Caller can redirect writes to a custom filename inside log_dir.
+
+    The Telegram bot passes `filename="telegram-bot.log"` so its
+    events don't co-mingle with the gateway's.
+    """
+    configure_logging(tmp_path / "logs", filename="telegram-bot.log")
+    logger = get_logger("fitt.telegram_bot")
+    logger.info("bot.started")
+
+    default_path = tmp_path / "logs" / "gateway.log"
+    custom_path = tmp_path / "logs" / "telegram-bot.log"
+    assert not default_path.exists(), "gateway.log must not be touched"
+    assert custom_path.exists()
+    entry = _read_one_json_line(custom_path)
+    assert entry["event"] == "bot.started"
