@@ -161,12 +161,25 @@ git clone https://github.com/qam4/home-ai-cluster.git
 On Linux/macOS/Windows, any directory you'd normally keep code
 in is fine.
 
-Git is pre-installed on macOS, most Linux distros, and QNAP.
-If you need it on Windows:
+Git is pre-installed on macOS, most Linux distros, and most
+Container Station QNAP hosts. If you need it on Windows:
 
 ```powershell
 winget install --id=Git.Git -e
 ```
+
+**QNAP note — if `git: command not found` in your SSH shell:**
+QNAP's minimal SSH shell on older QTS versions ships without
+`git`. Two ways around it:
+
+- **Clone elsewhere, copy the repo to the NAS.** Simplest. On
+  your laptop, `git clone`, then `scp -r home-ai-cluster admin@<nas>:/share/Public/`
+  (or drag-and-drop in File Station). You lose `git pull` for
+  updates; to update, clone + copy again, or rsync.
+- **Install Entware + git on the NAS.** Entware is a QPKG
+  package manager available in App Center. After installing it:
+  `ssh admin@<nas>; /opt/bin/opkg update; /opt/bin/opkg install git git-http`.
+  (`git-http` is needed for HTTPS clones against GitHub.)
 
 ## Step 4 - (Optional) Small Ollama fallback on the Hub (5 min)
 
@@ -221,13 +234,22 @@ command to your clone path:
 cp .env.example .env        # in the home-ai-cluster repo root
 ```
 
+**QNAP note — SSH as admin on first setup:** Non-admin QNAP
+accounts (the ones you'd SSH in as for daily use) typically
+can't create directories under `/share/Public/` or write to a
+freshly-created `$FITT_HOME`. Permission denied on `mkdir` or
+`cp` usually means this. Either `ssh admin@<nas>` for the
+initial setup, or `chown -R <your-user>:everyone $FITT_HOME` as
+admin once and then work as your regular user from there.
+
 ### 5.2 Edit `$FITT_HOME/config.yaml`
 
 Replace the `100.x.y.z` placeholder for `qwen-coder-big` with the
-Tailscale IP of the satellite you'll set up in Part B. If you
-don't have a satellite yet, leave the placeholder - the gateway
-will start, the cloud alias will work, and `/ready` will return
-503 until you wire the satellite up.
+**LAN IP** of the satellite you'll set up in Part B (tailnet IP
+works too, but only needed if the satellite lives off your home
+network). If you don't have a satellite yet, leave the
+placeholder — the gateway will start, the cloud alias will work,
+and `/ready` will return 503 until you wire the satellite up.
 
 If the hub has no local Ollama fallback (Step 4 skipped), remove
 the `qwen-coder-small` model block and the `fallback:` line on
@@ -295,10 +317,23 @@ a headless hub from your laptop.
 
 ### 6.A - Container Station (QNAP, GUI)
 
+**⚠️ Important caveat up front:** Container Station's compose
+importer **does not read the repo's `.env` file**. Every variable
+in `docker-compose.yml` that looks like `${FOO:-default}` becomes
+the default (or fails if it's required), regardless of what you
+typed into `.env`. If you need a custom `FITT_HOME`, `TZ`,
+`FITT_PORT`, or `FITT_BEARER_TOKEN` (you will — the bearer token
+is required), you'd have to inline them into the YAML you paste.
+**Prefer 6.B for anything beyond a default install.**
+
+If you still want the GUI path:
+
 1. Container Station -> **Applications** -> **Create**.
 2. Give the application a name (`fitt` is fine).
 3. Paste the contents of `docker-compose.yml` from the repo into
-   the YAML editor, or point at the file on the share.
+   the YAML editor. Hardcode the values `.env` would have
+   supplied — at minimum `FITT_HOME`, `FITT_BEARER_TOKEN`, and
+   `PUID`/`PGID`.
 4. Click **Create**. Container Station pulls the Open WebUI image,
    builds the gateway and bot images on the NAS, creates the
    Docker network, and starts all three containers.
@@ -400,9 +435,12 @@ for the real error.
 Also useful:
 
 ```bash
-docker compose ps                   # container states
-docker compose logs gateway         # gateway stdout/stderr
-docker compose logs telegram-bot    # bot stdout/stderr
+docker compose ps                           # container states
+docker compose logs gateway                 # gateway stdout/stderr
+docker compose logs telegram-bot            # bot stdout/stderr
+docker compose logs -f -t                   # tail all three with timestamps
+tail -f "$FITT_HOME/logs/gateway.log" \
+        "$FITT_HOME/logs/telegram-bot.log"  # structured JSON on disk
 ```
 
 ---
@@ -477,19 +515,26 @@ Then:
      shell rc file, or `launchctl setenv` on macOS to make it
      visible to GUI apps.
 
-   Without this, the Hub can't reach Ollama over the tailnet;
-   Ollama defaults to listening on loopback only.
+   Without this, the Hub can't reach Ollama from another
+   machine; Ollama defaults to listening on loopback only.
 2. Restart Ollama so it picks up the env var (quit from the tray
    on Windows/macOS, or `systemctl restart ollama` on Linux).
 
 Verify from the **Hub**:
 
 ```bash
-curl http://<satellite-tailscale-ip>:11434/api/tags
+# Use the satellite's LAN IP if it shares a subnet with the hub
+# (most home setups). Fall back to the tailnet IP if the
+# satellite lives elsewhere.
+curl http://<satellite-lan-ip>:11434/api/tags
 ```
 
 JSON response = good. Connection refused = the env var didn't
 take (most common cause: didn't restart Ollama after setting it).
+Timeout from the **hub shell** but success from a **laptop on
+the tailnet** usually means the hub isn't actually on the tailnet
+for outbound traffic (common on QNAPs with Tailscale installed as
+a Docker container rather than a QPKG — see troubleshooting below).
 
 ## Step 10 - Pull a model (time varies)
 
@@ -523,10 +568,30 @@ Add (or update) a model entry pointing at this satellite:
 models:
   - id: qwen-coder-big             # unique within this file
     backend: ollama
-    endpoint: http://<satellite-tailscale-ip>:11434
+    endpoint: http://<satellite-lan-ip>:11434
     model: qwen2.5-coder:14b       # exactly the ollama tag from step 10
     fallback: qwen-coder-small     # optional; another model id in this file
 ```
+
+**Which IP goes in `endpoint:`?** Use the satellite's **LAN IP**
+when the hub and satellite share a home network — the packet
+stays on the LAN, doesn't need Tailscale to route, and keeps
+working even if Tailscale is down. Use the satellite's **tailnet
+IP** (`100.x.y.z`) only when the satellite lives off-LAN — e.g.
+a work laptop, a cloud dev box. Tailscale's job in most setups is
+*you* reaching the hub from outside; hub-to-satellite stays local.
+
+**LAN IPs can drift.** A DHCP lease renewal after a
+reboot/sleep/wake can change the satellite's IP and the gateway
+will log `/ready` failures until you update `config.yaml`. Two
+defences:
+
+- **DHCP reservation.** In your router's admin, bind the
+  satellite's MAC address to a fixed LAN IP. Five minutes, once.
+- **mDNS / local hostname.** On many routers
+  `http://<laptop-hostname>.local:11434` or `.home:11434`
+  resolves. `curl` that form once to confirm before putting it
+  in config.yaml.
 
 Then make sure at least one alias points at it:
 
@@ -921,9 +986,9 @@ first-response `smoke-compose.sh` script.
   -> Private.
 - **Trailing whitespace in the Bearer token**: copy-paste ate a
   space. Regenerate with the one-liner in 5.3.
-- **Wrong Tailscale IP in `config.yaml`**: your satellite got a
-  new IP after sleep/wake. Use MagicDNS (hostnames) if this
-  happens often.
+- **Wrong LAN IP in `config.yaml`**: your satellite got a new IP
+  after sleep/wake. Use a DHCP reservation (step 11) or an mDNS
+  hostname.
 - **`secrets.yaml` world-readable on first boot**: the gateway
   refuses to load. `chmod 0600` the file and
   `docker compose restart gateway`.
@@ -936,3 +1001,31 @@ first-response `smoke-compose.sh` script.
   `depends_on: condition: service_healthy` rejection on older
   QTS versions - drop the `condition:` per Step 6.A's note and
   recreate the application.
+- **QNAP: hub can't reach tailnet IPs (`curl http://100.x.y.z/...`
+  from the NAS shell times out, but the same URL works from a
+  laptop on the tailnet).** Tailscale installed as a Docker
+  container doesn't always install a host-side route to `100.x/10`.
+  The Tailscale container can *expose* the NAS to the tailnet
+  (inbound traffic works, Jellyfin/Plex etc. are reachable
+  remotely), but the NAS host and its other bridge-networked
+  containers have no route *out*. Two fixes:
+  - Use LAN IPs for hub->satellite traffic (step 11). Works out
+    of the box because home-LAN routing is already in place.
+  - Install Tailscale as a QNAP QPKG instead of a Docker
+    container (App Center -> Tailscale). Creates a real
+    `tailscale0` interface on the host, adds the tailnet route,
+    and bridge-networked containers inherit it automatically.
+- **Container Station GUI didn't read `.env`** when importing the
+  compose file. Expected — the GUI's compose importer doesn't
+  support `.env` substitution. Use 6.B (`docker compose up -d`
+  over SSH) or hardcode the env values into the pasted YAML.
+- **`git: command not found` in QNAP SSH**: QNAP's minimal SSH
+  shell doesn't ship git. Clone on a laptop and copy the repo
+  over, or install Entware + git on the NAS. See step 3.2.
+- **Permission denied copying configs into `$FITT_HOME`**:
+  non-admin QNAP users often can't write under `/share/Public/`.
+  SSH as admin for the initial setup. See step 5.1.
+- **Port 8080 already in use on QNAP**: the NAS admin UI claims
+  it. The compose file now defaults the gateway to port 8421 to
+  dodge this; if 8421 is also taken on your hub, set `FITT_PORT`
+  and `GATEWAY_HOST_PORT` in `.env` to any free port.
