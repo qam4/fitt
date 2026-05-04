@@ -70,6 +70,48 @@ def create_app(config: Config) -> FastAPI:
     app.state.session_registry = SessionRegistry(config.memory.sessions_dir)
     app.state.session_registry.ensure_main()
 
+    # Tool subsystem (Phase 4). Registries + backend + approval
+    # middleware all live for the lifetime of the app.
+    #   - ProjectRegistry is re-read on every get() (like sessions),
+    #     so editing $FITT_HOME/projects.yaml from the CLI is
+    #     visible without a restart.
+    #   - ExecutionBackend is stateless apart from the resolved
+    #     SSH key path (discovered once from $FITT_HOME/ssh/).
+    #   - ToolRegistry is an in-memory set; tool policy from
+    #     config.yaml's `tools:` section (optional) gets parsed
+    #     and attached here.
+    #   - ApprovalMiddleware wraps the registry's policy ladder
+    #     and will grow deny-list / audit / ask-UI hooks in
+    #     later tasks.
+    from .approval import ApprovalMiddleware
+    from .projects import ProjectRegistry, default_projects_path
+    from .tools import (
+        ExecutionBackend,
+        ToolPolicy,
+        ToolRegistry,
+        build_fileops_tools,
+        build_git_tools,
+        build_inline_tools,
+    )
+
+    app.state.project_registry = ProjectRegistry(default_projects_path())
+    app.state.execution_backend = ExecutionBackend()
+
+    tool_policy = ToolPolicy.from_config(config.tools)
+    tool_registry = ToolRegistry(tool_policy)
+    # Build and register each inline tool group in a stable order.
+    # `build_inline_tools(registry)` captures the registry in a
+    # closure for `list_capabilities`, so construct it before
+    # registering anything else.
+    for t in build_inline_tools(tool_registry):
+        tool_registry.register(t)
+    for t in build_fileops_tools():
+        tool_registry.register(t)
+    for t in build_git_tools():
+        tool_registry.register(t)
+    app.state.tool_registry = tool_registry
+    app.state.approval = ApprovalMiddleware(tool_registry)
+
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)
 

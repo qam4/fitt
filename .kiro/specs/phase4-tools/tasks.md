@@ -17,7 +17,7 @@ Status legend: `[x]` done, `[ ]` not yet.
        Malformed entries log a warning; valid entries stay loaded.
 - [x] 1d. CLI: `fitt project add <name>` (interactive prompts),
        `fitt project list`, `fitt project remove <name>`.
-- [ ] 1e. Wire into gateway startup: load registry, start watcher.
+- [x] 1e. Wire into gateway startup: load registry, start watcher.
 - [x] 1f. Tests: `test_projects.py`.
 
 ## 2. Client-tagged tokens
