@@ -181,13 +181,17 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 16. Tool forwarding in chat handler
 
-- [ ] 16a. Update `chat.py` to detect and preserve
+- [x] 16a. Update `chat.py` to detect and preserve
        client-supplied `tools` array.
-- [ ] 16b. Append FITT's registered tools.
-- [ ] 16c. Name-based dispatch: FITT-owned → execute locally;
+- [x] 16b. Append FITT's registered tools.
+- [~] 16c. Name-based dispatch: FITT-owned → execute locally;
        client-owned → return to the client.
-- [ ] 16d. Tool-call loop bounded at 10 iterations (configurable).
-- [ ] 16e. Tests: `test_chat_tool_forwarding.py`.
+       *Partial: FITT-owned tools execute; client-owned names
+       currently return as a "tool not registered" error to the
+       model. Full forward-back-to-client behaviour awaits the
+       Continue IDE integration test (task 17b).*
+- [x] 16d. Tool-call loop bounded at 10 iterations (configurable).
+- [x] 16e. Tests: `test_chat_tool_forwarding.py`.
 
 ## 17. Integration tests
 
