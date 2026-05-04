@@ -108,7 +108,7 @@ templates under `configs/`; real values never land in git.
 ```yaml
 server:
   host: 0.0.0.0
-  port: 8080
+  port: 8421
   log_level: info
   log_bodies: false          # set true to log prompt/response bodies
 
@@ -344,11 +344,11 @@ Firewall rule likely wrong. Run:
 
 ```powershell
 Get-NetFirewallRule -DisplayName 'FITT Gateway (Private only)' | Format-List
-netstat -an | findstr :8080
+netstat -an | findstr :8421
 ```
 
 - The firewall rule should exist and target Private profile.
-- `netstat` should show `0.0.0.0:8080` in LISTENING state.
+- `netstat` should show `0.0.0.0:8421` in LISTENING state.
 
 If Windows thinks Tailscale's network is Public, change it in
 Settings -> Network -> Tailscale -> Set as Private.
@@ -406,7 +406,7 @@ Phase 1 limitation tracked in the roadmap.
 
 NSSM crash-loop protection. Check `~/.fitt/logs/service.stderr.log`
 and `~/.fitt/logs/gateway.log` for the underlying error. Common:
-missing `openrouter_api_key`, invalid YAML, port 8080 already bound.
+missing `openrouter_api_key`, invalid YAML, port 8421 already bound.
 
 ### How do I update the gateway without losing my config?
 

@@ -83,7 +83,7 @@ class ServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     host: str = "0.0.0.0"
-    port: int = 8080
+    port: int = 8421
     log_level: str = "info"
     log_bodies: bool = False
 
@@ -326,6 +326,21 @@ def load_config(
         cfg = Config.model_validate(raw)
     except Exception as e:
         raise ConfigError(f"{cp} failed validation: {e}") from e
+    # FITT_PORT env var overrides the YAML port. Applied here rather
+    # than in ServerConfig's validator so tests that build
+    # ServerConfig instances directly aren't subject to whatever
+    # FITT_PORT happens to be set in the developer's shell. The
+    # Docker deployment always goes through load_config, so the
+    # override lands where it matters.
+    env_port = os.environ.get("FITT_PORT")
+    if env_port:
+        try:
+            parsed = int(env_port)
+        except ValueError as e:
+            raise ConfigError(f"FITT_PORT must be an integer, got {env_port!r}") from e
+        if not 1 <= parsed <= 65535:
+            raise ConfigError(f"FITT_PORT out of range: {parsed}")
+        cfg.server.port = parsed
     if load_secrets_too:
         cfg.secrets = load_secrets(secrets_path)
     return cfg

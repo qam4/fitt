@@ -53,15 +53,19 @@ RUN groupadd --system --gid 1000 fitt \
 
 WORKDIR /app
 COPY --from=builder --chown=fitt:fitt /app /app
+# Bundle the standalone healthcheck script so the Dockerfile's
+# HEALTHCHECK directive has something to run (see the CMD below).
+COPY --chown=fitt:fitt healthcheck.py /app/healthcheck.py
 
 USER fitt
-EXPOSE 8080
+EXPOSE 8421
 
 # Self-healthcheck via /health. Used by compose's
 # `depends_on: condition: service_healthy` so dependent containers
 # (bot, open-webui) wait until the gateway can actually serve.
-HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request, sys; \
-sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health', timeout=2).status == 200 else 1)"
+# healthcheck.py reads FITT_PORT, defaulting to 8421 to match the
+# image's EXPOSE and the gateway's default listen port.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["python", "/app/healthcheck.py"]
 
 ENTRYPOINT ["python", "-m", "gateway"]

@@ -31,6 +31,12 @@ services:
       FITT_HOME: /fitt
       FITT_CONFIG_PATH: /fitt/config.yaml
       FITT_SECRETS_PATH: /fitt/secrets.yaml
+      # FITT_PORT controls both the uvicorn bind inside the
+      # container and the Dockerfile healthcheck. Match
+      # GATEWAY_HOST_PORT if you want the same port inside and
+      # outside; set them apart to sidestep a host collision
+      # (QNAP's admin UI on 8080, for example).
+      FITT_PORT: ${FITT_PORT:-8421}
       TZ: ${TZ:-UTC}
     volumes:
       # One mount: /fitt inside the container == $FITT_HOME outside.
@@ -39,7 +45,7 @@ services:
     ports:
       # Reachable over Tailscale on the host. The OS firewall (not
       # compose) is what scopes this to the tailnet.
-      - "8080:8080"
+      - "${GATEWAY_HOST_PORT:-8421}:${FITT_PORT:-8421}"
     logging:
       driver: json-file
       options:
@@ -66,7 +72,8 @@ services:
       FITT_HOME: /fitt
       # The bot reaches the gateway by compose service name on the
       # default bridge network; no host-level DNS or IP needed.
-      FITT_GATEWAY_URL: http://gateway:8080
+      # The port has to match the gateway's FITT_PORT.
+      FITT_GATEWAY_URL: http://gateway:${FITT_PORT:-8421}
       TZ: ${TZ:-UTC}
     volumes:
       - ${FITT_HOME:?set FITT_HOME in .env}:/fitt
@@ -89,7 +96,7 @@ services:
       # same pattern as the bot. The Bearer token is the same one
       # clients use and lives in your secrets.yaml; surface it to
       # compose via .env as FITT_BEARER_TOKEN.
-      OPENAI_API_BASE_URL: http://gateway:8080/v1
+      OPENAI_API_BASE_URL: http://gateway:${FITT_PORT:-8421}/v1
       OPENAI_API_KEY: ${FITT_BEARER_TOKEN:?set FITT_BEARER_TOKEN in .env}
       ENABLE_SIGNUP: "false"
       ENABLE_COMMUNITY_SHARING: "false"

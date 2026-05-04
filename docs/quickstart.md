@@ -357,11 +357,19 @@ GUI - same daemon, same containers.
 
 ## Step 7 - Verify the gateway (2 min)
 
+The gateway defaults to port **8421** (not 8080 — that port collides
+with QNAP's admin web UI, Tomcat, and several other common services).
+If you need a different port — say, because 8421 is also taken on
+your hub — edit `FITT_PORT` and `GATEWAY_HOST_PORT` in `.env`. The
+two values can differ for bridge networking (the former is the
+container-internal port, the latter what the host publishes); keep
+them in sync if you switch to `network_mode: host`.
+
 From any device on Tailscale (or the hub itself):
 
 ```bash
-curl http://<hub-tailscale-ip>:8080/health           # {"status":"ok"}
-curl http://<hub-tailscale-ip>:8080/v1/models        # JSON listing your aliases
+curl http://<hub-tailscale-ip>:8421/health           # {"status":"ok"}
+curl http://<hub-tailscale-ip>:8421/v1/models        # JSON listing your aliases
 ```
 
 **First boot takes 15-30 seconds** while Python imports LiteLLM
@@ -537,7 +545,7 @@ Verify from the Hub:
 
 ```bash
 docker compose exec gateway fitt status    # should show the satellite as reachable
-curl http://localhost:8080/ready           # should return 200 once every alias has a live backend
+curl http://localhost:8421/ready           # should return 200 once every alias has a live backend
 ```
 
 If `/ready` still returns 503, check the gateway logs:
@@ -646,7 +654,7 @@ add two model entries under `models:`:
 models:
   - name: FITT smart (Claude via OpenRouter)
     provider: openai
-    apiBase: http://<hub-tailscale-ip>:8080/v1
+    apiBase: http://<hub-tailscale-ip>:8421/v1
     apiKey: <your-bearer-token-from-5.3>
     model: fitt-smart
     capabilities:
@@ -658,7 +666,7 @@ models:
 
   - name: FITT default (local Qwen)
     provider: openai
-    apiBase: http://<hub-tailscale-ip>:8080/v1
+    apiBase: http://<hub-tailscale-ip>:8421/v1
     apiKey: <your-bearer-token-from-5.3>
     model: fitt-default
     capabilities:
@@ -707,7 +715,7 @@ From your **phone on Tailscale** (not mobile data), open in the
 browser:
 
 ```
-http://<hub-tailscale-ip>:8080/v1/models
+http://<hub-tailscale-ip>:8421/v1/models
 ```
 
 Should return JSON. If you can see this from the phone, the full
@@ -716,7 +724,7 @@ stack is working.
 From your **phone on mobile data** (off the tailnet), try:
 
 ```
-http://<hub-public-ip>:8080/
+http://<hub-public-ip>:8421/
 ```
 
 Should **fail** to connect. If it succeeds, the firewall rule is
@@ -805,12 +813,12 @@ On the Hub:
 # Reboot test
 sudo reboot           # or your platform's equivalent
 # After reboot, from anywhere on Tailscale:
-curl http://<hub-tailscale-ip>:8080/health      # should respond within 60s
+curl http://<hub-tailscale-ip>:8421/health      # should respond within 60s
 
 # Crash test - kill the gateway container, watch Docker restart it
 docker kill fitt-gateway
 sleep 10
-curl http://<hub-tailscale-ip>:8080/health      # should respond again
+curl http://<hub-tailscale-ip>:8421/health      # should respond again
 ```
 
 The compose file's `restart: unless-stopped` policy means Docker

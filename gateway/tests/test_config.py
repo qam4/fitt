@@ -358,3 +358,46 @@ def test_default_paths_respect_explicit_envs(
     monkeypatch.setenv("FITT_SECRETS_PATH", str(custom_secrets))
     assert default_config_path() == custom_cfg
     assert default_secrets_path() == custom_secrets
+
+
+# ---------------------------------------------- FITT_PORT env override
+
+
+def test_fitt_port_env_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FITT_PORT wins over the port written in config.yaml."""
+    cp = _write(tmp_path / "config.yaml", _valid_config_yaml())
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+    monkeypatch.setenv("FITT_PORT", "8421")
+
+    cfg = load_config(cp, sp)
+    assert cfg.server.port == 8421
+
+
+def test_fitt_port_unset_keeps_yaml_port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cp = _write(tmp_path / "config.yaml", _valid_config_yaml())
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+    monkeypatch.delenv("FITT_PORT", raising=False)
+
+    cfg = load_config(cp, sp)
+    # _valid_config_yaml() writes port: 8080 in its sample.
+    assert cfg.server.port == 8080
+
+
+def test_fitt_port_rejects_nonint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cp = _write(tmp_path / "config.yaml", _valid_config_yaml())
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+    monkeypatch.setenv("FITT_PORT", "not-a-port")
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(cp, sp)
+    assert "FITT_PORT" in str(exc.value)
+
+
+def test_fitt_port_rejects_out_of_range(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cp = _write(tmp_path / "config.yaml", _valid_config_yaml())
+    sp = _write(tmp_path / "secrets.yaml", _valid_secrets_yaml(), secure=True)
+    monkeypatch.setenv("FITT_PORT", "999999")
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(cp, sp)
+    assert "out of range" in str(exc.value)

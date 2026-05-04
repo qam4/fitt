@@ -11,7 +11,11 @@ server:
   # Binding host. 0.0.0.0 + OS firewall rule restricting to the
   # Tailscale interface is the recommended setup.
   host: 0.0.0.0
-  port: 8080
+  # Default port 8421 was chosen to avoid common collisions:
+  # 8080 is QNAP's admin UI and Tomcat's default; 8000/8888 are
+  # common dev-server defaults; 8443 is HTTPS-alt. Override per
+  # deployment via the FITT_PORT env var (wins over this value).
+  port: 8421
   log_level: info
   # log_bodies: true enables request/response body logging for debug.
   # Default is false - bodies contain user prompts, keep them out of
