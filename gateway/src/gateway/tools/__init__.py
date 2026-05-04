@@ -18,6 +18,7 @@ from ._types import (
 )
 from .backend import ExecutionBackend, ShellResult
 from .fileops import build_fileops_tools
+from .gitops import build_git_tools
 from .inline import build_inline_tools
 from .registry import ToolPolicy, ToolRegistry
 
@@ -33,5 +34,6 @@ __all__ = [
     "ToolRegistry",
     "ToolResult",
     "build_fileops_tools",
+    "build_git_tools",
     "build_inline_tools",
 ]

@@ -80,9 +80,9 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 7. Git read-only tools
 
-- [ ] 7a. `git_status(project)`.
-- [ ] 7b. `git_diff(project, ref?, path?)`.
-- [ ] 7c. Tests.
+- [x] 7a. `git_status(project)`.
+- [x] 7b. `git_diff(project, ref?, path?)`.
+- [x] 7c. Tests.
 
 ## 8. Approval middleware
 
