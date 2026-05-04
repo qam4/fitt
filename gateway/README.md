@@ -127,7 +127,7 @@ models:
     fallback: <another model id, optional>
 
 logging:
-  dir: ~/.fitt/logs
+  # dir defaults to $FITT_HOME/logs; absolute path override only.
   retention_days: 30
 ```
 

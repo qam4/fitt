@@ -108,8 +108,16 @@ models:
 # ------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------------
+# All runtime paths default to `$FITT_HOME/<subdir>`. $FITT_HOME is
+# set by .env (docker) or falls back to `~/.fitt/` (bare-metal). You
+# only need entries in this section if you want to override those
+# defaults - e.g. to point logs at a separate disk. Use an absolute
+# path when overriding; `~` is expanded against the process's $HOME,
+# not against $FITT_HOME, and that distinction is easy to get wrong.
 logging:
-  dir: ~/.fitt/logs
+  # dir: /absolute/override/only/if/you/care
   retention_days: 30
 
 # ------------------------------------------------------------------
@@ -125,5 +133,8 @@ memory:
   # If today's log exceeds this, the oldest turns are dropped from
   # the prompt (the file itself is not truncated).
   max_history_chars: 24000
-  identity_dir: ~/.fitt/identity
-  sessions_dir: ~/.fitt/sessions
+  # identity_dir and sessions_dir default to $FITT_HOME/identity
+  # and $FITT_HOME/sessions. Uncomment with an absolute path only
+  # if you need a different location.
+  # identity_dir: /absolute/override/only/if/you/care
+  # sessions_dir: /absolute/override/only/if/you/care
