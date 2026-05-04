@@ -24,7 +24,11 @@ WORKDIR /app
 # Copy only the files uv needs to resolve deps. This layer is cached
 # as long as pyproject.toml and uv.lock are unchanged, so source-only
 # edits don't re-resolve.
-COPY pyproject.toml uv.lock ./
+# README.md is copied here because hatchling reads it per
+# pyproject.toml's `readme = "README.md"` when building the wheel
+# for fitt-gateway (happens in the second `uv sync` below). Missing
+# it produces "OSError: Readme file does not exist: README.md".
+COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Now copy the source and install the project itself.
