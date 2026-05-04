@@ -18,5 +18,11 @@ build/
 tests/
 docs/
 *.md
+# Keep both README.md files; hatchling requires them to build the
+# wheels. The gateway's README.md (consumed through tool.uv.sources'
+# path dep) and the telegram-bot's own README.md both need to make
+# it into the Docker build context.
+!README.md
+!gateway/README.md
 .git/
 .gitignore

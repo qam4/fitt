@@ -16,6 +16,11 @@ build/
 tests/
 docs/
 *.md
+# Keep the package's README.md - hatchling reads it per
+# pyproject.toml's `readme = "README.md"` and refuses to build
+# the wheel if it's missing. Found the hard way during a NAS
+# docker build.
+!README.md
 .git/
 .gitignore
 .dockerignore
