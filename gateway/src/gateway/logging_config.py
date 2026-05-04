@@ -120,28 +120,70 @@ def reset_logging() -> None:
 
 
 class _StructlogFormatter(logging.Formatter):
-    """Render structlog events through the appropriate processor chain."""
+    """Render structlog events through the appropriate processor chain.
+
+    The stdlib handlers (stderr + rotating file) see two classes of
+    records:
+
+    1. Events originally emitted via structlog: ``record.msg`` is an
+       EventDict already processed by the chain in
+       ``configure_logging``. That chain includes a TimeStamper, so
+       a ``timestamp`` key is already present.
+
+    2. Events from plain stdlib loggers (httpx, uvicorn, LiteLLM,
+       third-party libs): ``record.msg`` is a string. No timestamp
+       attached.
+
+    The formatter runs a short local chain so case 2 also gets a
+    timestamp before the renderer serializes the dict. TimeStamper
+    is idempotent — passes through an existing ``timestamp`` key
+    without overwriting — so case 1 is unaffected.
+    """
 
     def __init__(self, *, for_file: bool) -> None:
         super().__init__()
-        self._processor = (
+        self._renderer: Processor = (
             structlog.processors.JSONRenderer()
             if for_file
             else structlog.dev.ConsoleRenderer(colors=False)
         )
+        # Processors applied to every event at format time so
+        # stdlib-originated logs get the same shape as structlog
+        # events.
+        self._local_chain: list[Processor] = [
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            _json_safe,
+        ]
 
     def format(self, record: logging.LogRecord) -> str:
         # record.msg is an EventDict when the log came from structlog.
         if isinstance(record.msg, dict):
-            event_dict: dict[str, Any] = dict(record.msg)
+            event_dict: EventDict = dict(record.msg)
         else:
-            event_dict = {"event": record.getMessage()}
+            event_dict = {
+                "event": record.getMessage(),
+                "logger": record.name,
+            }
         event_dict.setdefault("level", record.levelname.lower())
-        # structlog's renderers return str | bytes; both JSONRenderer
-        # and ConsoleRenderer return str in practice, but the typing
-        # is wider. Cast to str for the stdlib Formatter contract.
-        rendered = self._processor(None, record.levelname, event_dict)
-        return rendered if isinstance(rendered, str) else rendered.decode("utf-8")
+        for processor in self._local_chain:
+            # TimeStamper and _json_safe both return a dict in
+            # practice; assert the narrower type so mypy doesn't
+            # flag the next iteration's `event_dict = processor(...)`
+            # with a union-type mismatch.
+            result = processor(None, record.levelname, event_dict)
+            assert isinstance(result, dict), (
+                "local-chain processors must return a dict"
+            )
+            event_dict = result
+        rendered = self._renderer(None, record.levelname, event_dict)
+        if isinstance(rendered, str):
+            return rendered
+        if isinstance(rendered, (bytes, bytearray)):
+            return rendered.decode("utf-8")
+        # JSONRenderer and ConsoleRenderer both return str in
+        # practice; this branch exists so mypy accepts the wider
+        # Processor return type.
+        return str(rendered)
 
 
 def get_logger(name: str = "fitt.gateway") -> structlog.stdlib.BoundLogger:

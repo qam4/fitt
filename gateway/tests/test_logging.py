@@ -90,3 +90,44 @@ def test_configure_logging_is_idempotent(tmp_path: Path) -> None:
     n_handlers_after_second = len(stdlib_logging.getLogger().handlers)
 
     assert n_handlers_after_first == n_handlers_after_second
+
+
+def test_stdlib_logger_events_get_timestamped(tmp_path: Path) -> None:
+    """Third-party libraries log via stdlib (uvicorn, httpx, LiteLLM).
+
+    Before a fix this weekend, stdlib-originated events reached the
+    file handler without a timestamp - structlog's TimeStamper only
+    ran on structlog events. The formatter now runs its own chain
+    at format time so every written line carries a timestamp.
+    """
+    import logging as stdlib_logging
+
+    configure_logging(tmp_path / "logs")
+    # Some earlier test in the full suite may have raised httpx's
+    # logger level (respx or httpx itself does this). Force it back
+    # to INFO so our single log call lands in the file.
+    stdlib_logging.getLogger("httpx").setLevel(stdlib_logging.INFO)
+    stdlib_logging.getLogger("httpx").info("HTTP Request: POST https://api.example.com/v1")
+
+    entry = _read_one_json_line(tmp_path / "logs" / "gateway.log")
+    assert "timestamp" in entry, entry
+    assert entry["level"] == "info"
+    assert "HTTP Request" in entry["event"]
+    # The `logger` key lets readers tell stdlib-origin events apart
+    # from the gateway's own structlog events.
+    assert entry["logger"] == "httpx"
+
+
+def test_structlog_events_retain_their_timestamp(tmp_path: Path) -> None:
+    """TimeStamper is idempotent: a structlog event already has a
+    timestamp when it reaches the formatter; the formatter's second
+    TimeStamper pass must not double-stamp or overwrite it."""
+    configure_logging(tmp_path / "logs")
+    logger = get_logger()
+    logger.info("test.event")
+
+    entry = _read_one_json_line(tmp_path / "logs" / "gateway.log")
+    ts = entry.get("timestamp")
+    assert isinstance(ts, str) and ts
+    # ISO-8601 UTC ends with Z or +00:00 depending on structlog version.
+    assert "T" in ts, ts
