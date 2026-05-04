@@ -98,7 +98,15 @@ services:
       # compose via .env as FITT_BEARER_TOKEN.
       OPENAI_API_BASE_URL: http://gateway:${FITT_PORT:-8421}/v1
       OPENAI_API_KEY: ${FITT_BEARER_TOKEN:?set FITT_BEARER_TOKEN in .env}
-      ENABLE_SIGNUP: "false"
+      # ENABLE_SIGNUP is a PersistentConfig variable in Open WebUI:
+      # its initial value seeds the database on first boot and is
+      # read from there on subsequent boots. Open WebUI also treats
+      # the first account that signs up as the admin. Together that
+      # means the bootstrap has to start with signup enabled so the
+      # admin can actually be created; after first login you turn it
+      # off from Admin Panel -> Settings -> General. See quickstart
+      # step 16 for the one-time steps.
+      ENABLE_SIGNUP: "true"
       ENABLE_COMMUNITY_SHARING: "false"
       ENABLE_OLLAMA_API: "false"
       WEBUI_AUTH: "true"

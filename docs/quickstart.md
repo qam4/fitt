@@ -780,7 +780,7 @@ If nothing happens, check:
 ## Step 16 - Open WebUI (optional)
 
 Open WebUI was also started by `docker compose up -d` in Step 6.
-All that's left is to create the admin account.
+All that's left is to create the admin account and close signup.
 
 Verify from the Hub:
 
@@ -794,14 +794,58 @@ Or from your phone on Tailscale:
 http://<hub-tailscale-ip>:3000/
 ```
 
-First visit shows the admin signup. Create your admin account.
-The container then disables further signups (`ENABLE_SIGNUP=false`),
-so random visitors on your tailnet cannot register.
+**Bootstrap steps (once per fresh install):**
+
+1. First visit shows the signup form. Fill it in - the first
+   account becomes the admin automatically.
+2. After signing in, go to **Admin Panel -> Settings -> General**
+   and turn **Enable Signup** off. Save.
+
+The door is now closed: other tailnet members can't self-register,
+but you stay logged in.
+
+**Why the manual step?** `ENABLE_SIGNUP` is a *PersistentConfig*
+variable in Open WebUI — its first-boot value seeds the database,
+and changes made after that come from the Admin UI (or a database
+edit). The compose file defaults it to `true` so the admin can
+actually be created on first boot. If the first account couldn't
+sign up, the instance would be unreachable with no way in short
+of deleting the volume. See the troubleshooting section below if
+you ended up stuck that way.
 
 In Open WebUI, pick any of the FITT aliases (`fitt-default`,
 `fitt-smart`, ...) from the model dropdown. Responses flow
 through the gateway, so they show up in `fitt cost` alongside
 your Telegram traffic.
+
+### Troubleshooting: locked out of Open WebUI
+
+Symptom: you set `ENABLE_SIGNUP=false` in the compose override
+before creating the first admin, so the signup form is gone and
+no user exists to log in with. Open WebUI stores this value in
+its SQLite DB on first boot; flipping it in `docker-compose.yml`
+has no effect on subsequent starts.
+
+Fastest recovery (wipes Open WebUI accounts and chats; safe on a
+fresh install — this directory only holds Open WebUI state, not
+the FITT gateway's):
+
+```bash
+docker compose stop open-webui
+rm -rf "$FITT_HOME/open-webui"
+docker compose up -d open-webui
+```
+
+Or edit the value in place without losing data:
+
+```bash
+docker exec -it fitt-open-webui \
+  sqlite3 /app/backend/data/webui.db \
+  "UPDATE config SET data = json_set(data, '\$.ENABLE_SIGNUP', json('true'));"
+docker compose restart open-webui
+```
+
+Then redo the two bootstrap steps above.
 
 ---
 
