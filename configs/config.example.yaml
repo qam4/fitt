@@ -108,8 +108,6 @@ models:
 # ------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------
-# Logging
-# ------------------------------------------------------------------
 # All runtime paths default to `$FITT_HOME/<subdir>`. $FITT_HOME is
 # set by .env (docker) or falls back to `~/.fitt/` (bare-metal). You
 # only need entries in this section if you want to override those
