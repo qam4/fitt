@@ -645,11 +645,35 @@ async def _run_tool_loop(
         headers["X-FITT-Fallback"] = "1"
 
     if wanted_stream:
-        # Wrap the final assistant reply in a single SSE chunk so
-        # clients that requested streaming still receive something
-        # they can parse.
+        # The tool loop produced a non-streaming response
+        # (`choices[0].message.content`). Streaming clients (bot +
+        # open-webui) parse `choices[0].delta.content` instead, so
+        # we rewrite the envelope to a single streaming chunk. Two
+        # frames: one for the content delta, one to terminate.
+        assistant_text = _extract_assistant_text(response_obj)
+
+        def _chunk(delta: dict[str, Any] | None, finish_reason: str | None) -> dict[str, Any]:
+            return {
+                "id": body_dict.get("id", "chatcmpl-fitt"),
+                "object": "chat.completion.chunk",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": delta or {},
+                        "finish_reason": finish_reason,
+                    }
+                ],
+            }
+
+        first = _chunk(
+            {"role": "assistant", "content": assistant_text},
+            None,
+        )
+        final = _chunk({}, "stop")
+
         async def _single_chunk() -> AsyncIterator[bytes]:
-            yield f"data: {json.dumps(body_dict)}\n\n".encode()
+            yield f"data: {json.dumps(first)}\n\n".encode()
+            yield f"data: {json.dumps(final)}\n\n".encode()
             yield b"data: [DONE]\n\n"
 
         return StreamingResponse(

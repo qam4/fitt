@@ -371,12 +371,14 @@ def test_malformed_tool_call_arguments_surface_as_tool_error(
     assert "not valid JSON" in tool_msg["content"]
 
 
-def test_stream_wanted_returns_sse_envelope(
+def test_stream_wanted_returns_streaming_chunk_shape(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Client set stream=True alongside tool_choice. Tool loop runs
-    non-streaming internally, then wraps the final response in a
-    single SSE frame + [DONE]."""
+    non-streaming internally, then wraps the final response as a
+    streaming chunk (`choices[0].delta.content`, NOT
+    `choices[0].message.content`) so SSE-consuming clients can
+    parse it with their normal delta-accumulating loop."""
 
     async def fake(**_: Any) -> Any:
         return _fake_response(content="done")
@@ -395,6 +397,24 @@ def test_stream_wanted_returns_sse_envelope(
     )
     assert r.status_code == 200
     assert r.headers.get("content-type", "").startswith("text/event-stream")
-    text = r.text
-    assert text.startswith("data: ")
-    assert "[DONE]" in text
+
+    # Parse the SSE frames.
+    frames = []
+    for raw in r.text.splitlines():
+        if raw.startswith("data: "):
+            payload = raw[len("data: ") :]
+            if payload == "[DONE]":
+                continue
+            frames.append(json.loads(payload))
+
+    # Expect two chunks: content delta, then final stop.
+    assert len(frames) == 2, frames
+    # First chunk carries the assistant content as a delta.
+    first = frames[0]
+    assert first["object"] == "chat.completion.chunk"
+    delta = first["choices"][0]["delta"]
+    assert delta.get("content") == "done"
+    assert delta.get("role") == "assistant"
+    # Second chunk is the terminator.
+    second = frames[1]
+    assert second["choices"][0]["finish_reason"] == "stop"
