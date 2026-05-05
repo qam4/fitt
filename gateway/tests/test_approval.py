@@ -1,22 +1,25 @@
-"""Tests for Phase 4 Task 8 (slim) approval middleware.
+"""Tests for Phase 4 Task 8 (slim) + Task 9 approval middleware.
 
-The slim version only cares about three bucket outcomes:
+The middleware now handles:
 - ``auto`` → executes.
 - ``block`` → doesn't execute, blocked reason.
-- anything needing human input → rejected reason until the
-  Telegram UI lands in Task 9.
+- ``ask`` / ``trust_session`` → creates a pending approval and
+  awaits resolution (Task 9). Short timeouts drive the timeout
+  path in tests.
+- ``yolo`` → still rejected (Task 8d deferred).
 
-Deeper tests (deny list, session trust, YOLO windows, audit
-integration) come with Tasks 12/13 and when the ask UI lands.
+Deeper tests (deny list, audit integration) come with
+Tasks 12/13.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
 
-from gateway.approval import ApprovalMiddleware
+from gateway.approval import ApprovalMiddleware, _summarise_args
 from gateway.projects import ProjectRegistry
 from gateway.tools import (
     ApprovalBucket,
@@ -97,51 +100,12 @@ async def test_block_bucket_does_not_execute(
     assert decision.execute is False
     assert decision.reason == "blocked"
     assert "policy" in decision.detail
-    # Other clients still see the ASK default for that tool.
-    decision_ide = await m.check(
-        reg.lookup("write_file"),
-        {},
-        _ctx(project_registry, client="ide"),
-    )
-    assert decision_ide.execute is False
-    assert decision_ide.reason == "rejected"
 
 
-# --------------------------------------------------------------- ask
+# --------------------------------------------------------------- yolo (still rejected)
 
 
-async def test_ask_bucket_is_rejected_until_ui_lands(
-    project_registry: ProjectRegistry,
-) -> None:
-    reg = ToolRegistry()
-    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
-    m = ApprovalMiddleware(reg)
-    decision = await m.check(
-        reg.lookup("edit_file"),
-        {},
-        _ctx(project_registry),
-    )
-    assert decision.execute is False
-    assert decision.reason == "rejected"
-    assert "approval UI" in decision.detail
-
-
-async def test_trust_session_bucket_also_rejected(
-    project_registry: ProjectRegistry,
-) -> None:
-    reg = ToolRegistry()
-    reg.register(_mk_tool("git_commit", ApprovalBucket.TRUST_SESSION))
-    m = ApprovalMiddleware(reg)
-    decision = await m.check(
-        reg.lookup("git_commit"),
-        {},
-        _ctx(project_registry),
-    )
-    assert decision.execute is False
-    assert decision.reason == "rejected"
-
-
-async def test_yolo_bucket_rejected_in_slim_version(
+async def test_yolo_bucket_rejected_until_8d(
     project_registry: ProjectRegistry,
 ) -> None:
     reg = ToolRegistry()
@@ -154,22 +118,161 @@ async def test_yolo_bucket_rejected_in_slim_version(
     )
     assert decision.execute is False
     assert decision.reason == "rejected"
+    assert "Task 8d" in decision.detail
 
 
-# --------------------------------------------------------------- client passes through
+# --------------------------------------------------------------- ask: pending / resolved
 
 
-async def test_ide_gets_auto_for_read_tools(project_registry: ProjectRegistry) -> None:
-    """IDE client + AUTO-default tool + no overrides = execute."""
+async def test_ask_creates_pending_approval_and_waits(
+    project_registry: ProjectRegistry,
+) -> None:
+    """Check blocks awaiting resolution; another task resolves it;
+    check returns approved."""
     reg = ToolRegistry()
-    reg.register(_mk_tool("read_file", ApprovalBucket.AUTO))
-    m = ApprovalMiddleware(reg)
-    decision = await m.check(
-        reg.lookup("read_file"),
-        {},
-        _ctx(project_registry, client="ide"),
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+
+    async def resolver() -> None:
+        # Let `check` create the pending entry, then resolve it.
+        # One hop is enough because everything is in-process.
+        await asyncio.sleep(0.01)
+        pending = await m.list_pending()
+        assert len(pending) == 1, "expected exactly one pending approval"
+        ok = await m.resolve_approval(pending[0].approval_id, "approve")
+        assert ok is True
+
+    decision, _ = await asyncio.gather(
+        m.check(reg.lookup("edit_file"), {"path": "foo.py"}, _ctx(project_registry)),
+        resolver(),
     )
     assert decision.execute is True
+    assert decision.reason == "approved"
+
+    # Pending dict should be empty after resolution.
+    assert await m.list_pending() == []
+
+
+async def test_ask_reject_returns_rejected(
+    project_registry: ProjectRegistry,
+) -> None:
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+
+    async def resolver() -> None:
+        await asyncio.sleep(0.01)
+        pending = await m.list_pending()
+        await m.resolve_approval(pending[0].approval_id, "reject")
+
+    decision, _ = await asyncio.gather(
+        m.check(reg.lookup("edit_file"), {"path": "foo.py"}, _ctx(project_registry)),
+        resolver(),
+    )
+    assert decision.execute is False
+    assert decision.reason == "rejected"
+    assert "rejected by user" in decision.detail
+
+
+async def test_ask_trust_session_returns_trust(
+    project_registry: ProjectRegistry,
+) -> None:
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.TRUST_SESSION))
+    m = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+
+    async def resolver() -> None:
+        await asyncio.sleep(0.01)
+        pending = await m.list_pending()
+        await m.resolve_approval(pending[0].approval_id, "trust_session")
+
+    decision, _ = await asyncio.gather(
+        m.check(reg.lookup("edit_file"), {"path": "foo.py"}, _ctx(project_registry)),
+        resolver(),
+    )
+    assert decision.execute is True
+    assert decision.reason == "trust_session"
+
+
+async def test_ask_times_out(project_registry: ProjectRegistry) -> None:
+    """No resolver → approval times out; check returns timeout."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=0.05)
+
+    decision = await m.check(reg.lookup("edit_file"), {"path": "foo.py"}, _ctx(project_registry))
+    assert decision.execute is False
+    assert decision.reason == "timeout"
+    # Timed-out approval is cleaned up.
+    assert await m.list_pending() == []
+
+
+async def test_resolve_unknown_returns_false() -> None:
+    reg = ToolRegistry()
+    m = ApprovalMiddleware(reg)
+    assert await m.resolve_approval("does-not-exist", "approve") is False
+
+
+async def test_list_pending_filters_by_client(
+    project_registry: ProjectRegistry,
+) -> None:
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+
+    # Create two pending from different clients, don't resolve.
+    p_tg = await m.request_approval(
+        reg.lookup("edit_file"), {}, _ctx(project_registry, client="telegram")
+    )
+    p_ide = await m.request_approval(
+        reg.lookup("edit_file"), {}, _ctx(project_registry, client="ide")
+    )
+    try:
+        tg_only = await m.list_pending(client="telegram")
+        ide_only = await m.list_pending(client="ide")
+        all_pending = await m.list_pending()
+        assert {p.approval_id for p in tg_only} == {p_tg.approval_id}
+        assert {p.approval_id for p in ide_only} == {p_ide.approval_id}
+        assert {p.approval_id for p in all_pending} == {
+            p_tg.approval_id,
+            p_ide.approval_id,
+        }
+    finally:
+        # Clean up to avoid dangling futures raising "never awaited"
+        # warnings at teardown.
+        await m.resolve_approval(p_tg.approval_id, "reject")
+        await m.resolve_approval(p_ide.approval_id, "reject")
+
+
+# --------------------------------------------------------------- args summary
+
+
+def test_summarise_args_empty() -> None:
+    assert _summarise_args({}) == "(no args)"
+
+
+def test_summarise_args_short_fields() -> None:
+    s = _summarise_args({"path": "foo.py", "n": 42})
+    assert "path='foo.py'" in s
+    assert "n=42" in s
+
+
+def test_summarise_args_truncates_long_values() -> None:
+    long_val = "x" * 500
+    s = _summarise_args({"content": long_val})
+    # The value portion is truncated to ~60 chars.
+    assert len(s) < 210
+    assert s.endswith("...")
+
+
+def test_summarise_args_truncates_overall() -> None:
+    # Many short fields can still overflow the overall cap.
+    args = {f"k{i}": "short" for i in range(50)}
+    s = _summarise_args(args)
+    assert len(s) <= 200
+
+
+# --------------------------------------------------------------- client per-token
 
 
 async def test_per_client_override_to_auto(
@@ -189,15 +292,14 @@ async def test_per_client_override_to_auto(
     assert decision.reason == "auto"
 
 
-# --------------------------------------------------------------- placeholder methods
+# --------------------------------------------------------------- placeholders
 
 
 def test_trust_session_and_clear_session_are_noop(
     project_registry: ProjectRegistry,
 ) -> None:
-    """Placeholders for Task 9; exist so callers don't conditionally import."""
+    """Placeholders for Task 8c; exist so callers don't conditionally import."""
     reg = ToolRegistry()
     m = ApprovalMiddleware(reg)
-    # Should not raise.
     m.trust_session("main", "edit_file")
     m.clear_session("main")

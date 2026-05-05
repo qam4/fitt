@@ -201,11 +201,13 @@ def create_app(config: Config) -> FastAPI:
         )
 
     # Routers - imported lazily to keep import graph acyclic.
+    from .approvals_endpoint import router as approvals_router
     from .health import router as health_router
     from .models_endpoint import router as models_router
 
     app.include_router(health_router)
     app.include_router(models_router)
+    app.include_router(approvals_router)
 
     try:
         from .chat import router as chat_router

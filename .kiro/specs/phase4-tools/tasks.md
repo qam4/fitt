@@ -143,18 +143,18 @@ the future, dispatch continues.
 
 ### Tasks
 
-- [ ] 9a. `gateway/approval.py`: `ApprovalMiddleware` holds a
+- [x] 9a. `gateway/approval.py`: `ApprovalMiddleware` holds a
        pending-approvals dict. `request_approval(tool, args,
        context)` creates the future, stores it, returns
        `(approval_id, future)`. Caller awaits the future.
-- [ ] 9b. `gateway/approval.py`: `resolve_approval(approval_id,
+- [x] 9b. `gateway/approval.py`: `resolve_approval(approval_id,
        decision)` sets the future. Called by the decide HTTP
        handler. Idempotent on already-resolved.
-- [ ] 9c. Gateway HTTP: `GET /v1/approvals/pending?client=X`
+- [x] 9c. Gateway HTTP: `GET /v1/approvals/pending?client=X`
        returns `[{id, tool, args_summary, client, session, age_s}, ...]`.
        Only pending (not yet resolved) entries. Filters by
-       client tag.
-- [ ] 9d. Gateway HTTP: `POST /v1/approvals/{id}/decide` with body
+       client.
+- [x] 9d. Gateway HTTP: `POST /v1/approvals/{id}/decide` with body
        `{decision: "approve" | "reject" | "trust_session"}`.
        Resolves the future. Requires the requesting token's
        client tag to match the approval's target client (so the
