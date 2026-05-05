@@ -44,6 +44,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FITT_HOME=/fitt \
     PATH=/app/.venv/bin:$PATH
 
+# Runtime deps that python:3.11-slim doesn't include:
+#   openssh-client  -- ExecutionBackend.run_shell wraps commands in
+#                      `ssh <host> '...'` when a project has an
+#                      ssh_host. Without this the backend raises
+#                      FileNotFoundError the first time a remote
+#                      tool runs. Also brings ssh-keygen and
+#                      ssh-keyscan for operator debugging inside
+#                      the container.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root user matching the QNAP admin default (uid/gid 1000). The
 # user is overridable at runtime via compose's `user: "$PUID:$PGID"`.
 RUN groupadd --system --gid 1000 fitt \
