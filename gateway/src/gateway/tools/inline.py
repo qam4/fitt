@@ -1,39 +1,32 @@
 """Inline tool implementations.
 
-"Inline" means the tool runs inside the gateway process (or via
-the SSH backend once Task 5 lands; for now, hub-local only).
-Every tool in this module:
+"Inline" means the tool runs inside the gateway process, dispatching
+file operations through the SSH-aware :class:`ExecutionBackend` when
+the project has an ``ssh_host``. Same shape as ``fileops.py`` and
+``gitops.py``; the difference is these tools are opinionated about
+what they read (spec files under ``.kiro/specs/``) rather than
+generic file utilities.
 
-* has a callable matching ``ToolCallable`` (async, takes
-  ``(args, context) -> ToolResult``);
-* is wrapped in a :class:`Tool` entry with its schema and default
-  bucket;
-* is exposed via :func:`build_inline_tools` so the gateway startup
-  can register them in one place.
+Tools in this module:
 
-Task 4 (this file's initial landing) ships the read-only tools:
+- ``list_capabilities``  — describe the registry (hub-local only).
+- ``spec_list``          — feature folders under ``.kiro/specs/``.
+- ``spec_read``          — concatenated requirements/design/tasks.
+- ``spec_next_task``     — first unchecked ``- [ ]`` in tasks.md.
+- ``spec_mark_task``     — flip a ``- [ ]`` to ``- [x]`` in tasks.md.
 
-- ``list_capabilities``: summarise the registry for the model.
-- ``spec_list``: list spec features available in a project.
-- ``spec_read``: return the requirements/design/tasks files of a
-  feature.
-- ``spec_next_task``: return the first unchecked task id + text.
-- ``spec_mark_task``: flip a ``- [ ]`` to ``- [x]`` (this one's a
-  write, but scoped enough to sit in the read-side file for now).
-
-All tools read the project path from :class:`ProjectRegistry`
-lookups via ``ToolContext.projects.get(name)``. They refuse to
-touch projects whose ``ssh_host`` is non-empty because the SSH
-backend (Task 5) is where that branch lives. Raising a clean
-``ToolResult.error`` beats a silent hub-local read against a path
-that doesn't exist on the hub.
+The spec tools POSIX-dispatch everything:
+  ``ls``, ``test -f`` + ``cat``, ``cat | grep -nE``, ``mv``. Git Bash
+on a Windows satellite provides the same binaries, so the same argv
+works against either a hub-local project or a laptop reachable over
+SSH.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
+import shlex
 from typing import Any
 
 from ._types import ApprovalBucket, Tool, ToolContext, ToolResult
@@ -87,15 +80,29 @@ _SCHEMA_MARK_TASK: dict[str, Any] = {
 }
 
 
+# --------------------------------------------------------------- caps + timeouts
+
+_SPEC_READ_MAX_BYTES = 200_000
+"""Cap on concatenated spec output. Specs in this repo run ~1000
+lines total; 200 KB gives headroom without blowing out the LLM
+context."""
+
+_SPEC_LIST_TIMEOUT = 30
+_SPEC_READ_TIMEOUT = 30
+_SPEC_TASKS_TIMEOUT = 30
+
+
 # --------------------------------------------------------------- helpers
 
 
-def _resolve_project_root(args: dict[str, Any], ctx: ToolContext) -> Path | ToolResult:
-    """Resolve ``args['project']`` to a hub-local absolute path.
+def _resolve_project_for_tool(
+    args: dict[str, Any], ctx: ToolContext
+) -> tuple[Any, Any] | ToolResult:
+    """Return (project, backend) or a ToolResult error.
 
-    Returns a ToolResult error when the project is unknown or lives
-    on a remote host (SSH backend lands in Task 5). Returns the
-    resolved Path otherwise.
+    Hub-local and ssh projects are both valid — the backend takes
+    care of the wrap. Same pattern as ``fileops.py`` so each tool
+    module owns its own arg parsing and failure shapes.
     """
     project_name = args.get("project")
     if not isinstance(project_name, str) or not project_name:
@@ -104,45 +111,73 @@ def _resolve_project_root(args: dict[str, Any], ctx: ToolContext) -> Path | Tool
         project = ctx.projects.get(project_name)
     except Exception as exc:  # UnknownProject
         return ToolResult.error(f"Unknown project: {project_name} ({exc})")
-    if project.ssh_host:
+    if ctx.backend is None:
         return ToolResult.error(
-            f"Project {project_name!r} lives on ssh_host "
-            f"{project.ssh_host!r}; SSH backend not yet available."
+            "Internal error: no execution backend is wired onto "
+            "the tool context. This is a gateway bug."
         )
-    root = Path(project.path)
-    if not root.exists():
-        return ToolResult.error(f"Project {project_name!r} path does not exist: {root}")
-    return root
+    return project, ctx.backend
 
 
-def _spec_dir(root: Path, feature: str) -> Path:
-    """Return the expected spec directory for a feature."""
-    # Keep it paranoid: no path-traversal via feature names.
-    if "/" in feature or "\\" in feature or feature.startswith(".") or ".." in feature:
-        raise ValueError(f"Invalid feature name: {feature!r}")
-    return root / ".kiro" / "specs" / feature
+def _validate_feature(name: str) -> str | None:
+    """Return ``name`` if it's a safe feature identifier, else None.
+
+    Feature names become path components in ``.kiro/specs/<name>``,
+    so we reject any character that would let a caller traverse
+    (``/``, ``\\``, ``..``) or hide files (leading ``.``).
+    """
+    if not name:
+        return None
+    if "/" in name or "\\" in name or name.startswith(".") or ".." in name:
+        return None
+    return name
 
 
-# --------------------------------------------------------------- list_capabilities
-#
-# ``list_capabilities`` is constructed inside ``build_inline_tools``
-# because its callable must close over the registry. No module-level
-# function is needed.
+def _join_remote_path(root: str, *parts: str) -> str:
+    """Join path components with forward slashes.
+
+    We keep this POSIX-only because the backend always invokes a
+    POSIX-shell-style command (``cd && <cmd>``), and Git Bash on
+    Windows satellites serves ``/c/...`` paths the same way.
+    """
+    head = root.rstrip("/")
+    tail = "/".join(p.strip("/") for p in parts if p)
+    return f"{head}/{tail}" if tail else head
 
 
 # --------------------------------------------------------------- spec_list
 
 
 async def _tool_spec_list(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    """List spec feature folders under ``.kiro/specs/``."""
-    resolved = _resolve_project_root(args, ctx)
+    """List feature folders under ``.kiro/specs/``."""
+    resolved = _resolve_project_for_tool(args, ctx)
     if isinstance(resolved, ToolResult):
         return resolved
-    specs_dir = resolved / ".kiro" / "specs"
-    if not specs_dir.exists():
-        return ToolResult.ok(json.dumps([], indent=2))
+    project, backend = resolved
+
+    specs_dir = _join_remote_path(project.path, ".kiro", "specs")
+    # `test -d` returns 0 iff the directory exists; then `ls -1`
+    # gives one entry per line. When the directory is missing we
+    # return an empty list rather than an error — a project that
+    # hasn't written any specs yet is a valid state.
+    cmd = [
+        "sh",
+        "-c",
+        (
+            f"if [ -d {shlex.quote(specs_dir)} ]; then "
+            f"  ls -1 {shlex.quote(specs_dir)} 2>/dev/null; "
+            f"fi"
+        ),
+    ]
+    result = await backend.run_shell(project, cmd, timeout_secs=_SPEC_LIST_TIMEOUT)
+    if result.timed_out:
+        return ToolResult.error(result.stderr)
+    if result.exit != 0:
+        return ToolResult.error((result.stderr or f"spec_list probe exited {result.exit}").strip())
     features = sorted(
-        p.name for p in specs_dir.iterdir() if p.is_dir() and not p.name.startswith(".")
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip() and not line.strip().startswith(".")
     )
     return ToolResult.ok(json.dumps(features, indent=2))
 
@@ -150,39 +185,45 @@ async def _tool_spec_list(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 # --------------------------------------------------------------- spec_read
 
 
-# Maximum combined size of requirements + design + tasks before we
-# truncate. Specs in this repo run ~1000 lines total; 200 KB gives
-# generous headroom. Beyond that the LLM context is the bottleneck
-# anyway.
-_SPEC_READ_MAX_BYTES = 200_000
-
-
 async def _tool_spec_read(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    """Return the three spec files concatenated as a labelled string."""
-    resolved = _resolve_project_root(args, ctx)
+    """Return the three spec files concatenated as labelled markdown."""
+    resolved = _resolve_project_for_tool(args, ctx)
     if isinstance(resolved, ToolResult):
         return resolved
-    feature = args.get("feature")
-    if not isinstance(feature, str) or not feature:
-        return ToolResult.error("Missing required argument: feature")
-    try:
-        spec_dir = _spec_dir(resolved, feature)
-    except ValueError as exc:
-        return ToolResult.error(str(exc))
-    if not spec_dir.exists():
-        return ToolResult.error(f"Spec feature not found: {feature} (looked in {spec_dir})")
+    project, backend = resolved
 
+    feature_raw = args.get("feature")
+    if not isinstance(feature_raw, str):
+        return ToolResult.error("Missing required argument: feature")
+    feature = _validate_feature(feature_raw)
+    if feature is None:
+        return ToolResult.error(f"Invalid feature name: {feature_raw!r}")
+
+    spec_dir = _join_remote_path(project.path, ".kiro", "specs", feature)
     out: list[str] = []
     total = 0
     for name in ("requirements.md", "design.md", "tasks.md"):
-        p = spec_dir / name
-        if not p.exists():
-            out.append(f"## {name}\n\n_(missing)_\n")
+        file_path = _join_remote_path(spec_dir, name)
+        cmd = [
+            "sh",
+            "-c",
+            (
+                f"if [ -f {shlex.quote(file_path)} ]; then "
+                f"  cat -- {shlex.quote(file_path)}; "
+                f"else "
+                f"  echo __FITT_MISSING__; "
+                f"fi"
+            ),
+        ]
+        result = await backend.run_shell(project, cmd, timeout_secs=_SPEC_READ_TIMEOUT)
+        if result.timed_out:
+            return ToolResult.error(result.stderr)
+        if result.exit != 0:
+            out.append(f"## {name}\n\n_(read error: {(result.stderr or 'unknown').strip()})_\n")
             continue
-        try:
-            content = p.read_text(encoding="utf-8")
-        except OSError as exc:
-            out.append(f"## {name}\n\n_(read error: {exc})_\n")
+        content = result.stdout
+        if content.strip() == "__FITT_MISSING__":
+            out.append(f"## {name}\n\n_(missing)_\n")
             continue
         total += len(content)
         if total > _SPEC_READ_MAX_BYTES:
@@ -191,7 +232,12 @@ async def _tool_spec_read(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             )
             continue
         out.append(f"## {name}\n\n{content}\n")
-    return ToolResult.ok("\n".join(out))
+    joined = "\n".join(out)
+    # Surface a clear "spec not found" error rather than three
+    # "_(missing)_" blocks when the whole directory is absent.
+    if all("_(missing)_" in chunk for chunk in out):
+        return ToolResult.error(f"Spec feature not found: {feature} (looked in {spec_dir})")
+    return ToolResult.ok(joined)
 
 
 # --------------------------------------------------------------- spec_next_task
@@ -207,23 +253,38 @@ _TASK_LINE = re.compile(
 
 async def _tool_spec_next_task(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     """Return the first unchecked task in a feature's tasks.md."""
-    resolved = _resolve_project_root(args, ctx)
+    resolved = _resolve_project_for_tool(args, ctx)
     if isinstance(resolved, ToolResult):
         return resolved
-    feature = args.get("feature")
-    if not isinstance(feature, str) or not feature:
+    project, backend = resolved
+
+    feature_raw = args.get("feature")
+    if not isinstance(feature_raw, str):
         return ToolResult.error("Missing required argument: feature")
-    try:
-        spec_dir = _spec_dir(resolved, feature)
-    except ValueError as exc:
-        return ToolResult.error(str(exc))
-    tasks_path = spec_dir / "tasks.md"
-    if not tasks_path.exists():
+    feature = _validate_feature(feature_raw)
+    if feature is None:
+        return ToolResult.error(f"Invalid feature name: {feature_raw!r}")
+
+    tasks_path = _join_remote_path(project.path, ".kiro", "specs", feature, "tasks.md")
+    cmd = [
+        "sh",
+        "-c",
+        (
+            f"if [ -f {shlex.quote(tasks_path)} ]; then "
+            f"  cat -- {shlex.quote(tasks_path)}; "
+            f"else "
+            f"  echo __FITT_MISSING__; "
+            f"fi"
+        ),
+    ]
+    result = await backend.run_shell(project, cmd, timeout_secs=_SPEC_TASKS_TIMEOUT)
+    if result.timed_out:
+        return ToolResult.error(result.stderr)
+    if result.exit != 0:
+        return ToolResult.error((result.stderr or f"spec_next_task exited {result.exit}").strip())
+    text = result.stdout
+    if text.strip() == "__FITT_MISSING__":
         return ToolResult.error(f"No tasks.md for feature {feature!r} at {tasks_path}")
-    try:
-        text = tasks_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return ToolResult.error(f"Could not read tasks.md: {exc}")
 
     for m in _TASK_LINE.finditer(text):
         if m.group("status") == " ":
@@ -245,67 +306,105 @@ async def _tool_spec_next_task(args: dict[str, Any], ctx: ToolContext) -> ToolRe
 async def _tool_spec_mark_task(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     """Flip a single ``- [ ]`` task to ``- [x]`` in tasks.md.
 
-    Refuses if the task id doesn't appear, or appears more than
-    once (ambiguous). Writes atomically via a temp file next to
-    tasks.md, then renames.
+    The tricky part is doing an atomic write remotely. We read the
+    file, mutate locally, then push the modified text back via
+    ``sh -c 'cat > path.tmp && mv path.tmp path'``. The mutated
+    content is piped on stdin through an ``extra_env`` channel is
+    not applicable; we embed it as a heredoc via ``printf %s``
+    after base64-encoding to keep the bytes intact across shells.
     """
-    resolved = _resolve_project_root(args, ctx)
+    resolved = _resolve_project_for_tool(args, ctx)
     if isinstance(resolved, ToolResult):
         return resolved
-    feature = args.get("feature")
+    project, backend = resolved
+
+    feature_raw = args.get("feature")
     task_id = args.get("task_id")
-    if not isinstance(feature, str) or not feature:
+    if not isinstance(feature_raw, str):
         return ToolResult.error("Missing required argument: feature")
     if not isinstance(task_id, str) or not task_id:
         return ToolResult.error("Missing required argument: task_id")
-    try:
-        spec_dir = _spec_dir(resolved, feature)
-    except ValueError as exc:
-        return ToolResult.error(str(exc))
-    tasks_path = spec_dir / "tasks.md"
-    if not tasks_path.exists():
-        return ToolResult.error(f"No tasks.md for feature {feature!r} at {tasks_path}")
-    text = tasks_path.read_text(encoding="utf-8")
+    feature = _validate_feature(feature_raw)
+    if feature is None:
+        return ToolResult.error(f"Invalid feature name: {feature_raw!r}")
 
-    # Build a matcher for this specific task id.
+    tasks_path = _join_remote_path(project.path, ".kiro", "specs", feature, "tasks.md")
+
+    # Step 1: read the current tasks.md
+    read_cmd = [
+        "sh",
+        "-c",
+        (
+            f"if [ -f {shlex.quote(tasks_path)} ]; then "
+            f"  cat -- {shlex.quote(tasks_path)}; "
+            f"else "
+            f"  echo __FITT_MISSING__; "
+            f"fi"
+        ),
+    ]
+    read_result = await backend.run_shell(project, read_cmd, timeout_secs=_SPEC_TASKS_TIMEOUT)
+    if read_result.timed_out:
+        return ToolResult.error(read_result.stderr)
+    if read_result.exit != 0:
+        return ToolResult.error((read_result.stderr or f"read exited {read_result.exit}").strip())
+    text = read_result.stdout
+    if text.strip() == "__FITT_MISSING__":
+        return ToolResult.error(f"No tasks.md for feature {feature!r} at {tasks_path}")
+
+    # Step 2: find + validate + mutate in memory
     pattern = re.compile(
         r"^(?P<prefix>\s*-\s*\[)(?P<status>[ xX])(?P<mid>\]\s+" + re.escape(task_id) + r"\.\s+.*)$",
         re.MULTILINE,
     )
     matches = list(pattern.finditer(text))
     if not matches:
-        return ToolResult.error(f"No task {task_id!r} found in {tasks_path.name}")
+        return ToolResult.error(f"No task {task_id!r} found in tasks.md")
     if len(matches) > 1:
         return ToolResult.error(
-            f"Task id {task_id!r} is ambiguous: appears {len(matches)} times in {tasks_path.name}"
+            f"Task id {task_id!r} is ambiguous: appears {len(matches)} times in tasks.md"
         )
     match = matches[0]
     if match.group("status") != " ":
         return ToolResult.ok(f"Task {task_id!r} already marked done; no change.")
-
     new_text = text[: match.start("status")] + "x" + text[match.end("status") :]
-    # Atomic write: temp in same dir, rename into place.
-    tmp = tasks_path.with_suffix(tasks_path.suffix + ".tmp")
-    tmp.write_text(new_text, encoding="utf-8")
-    tmp.replace(tasks_path)
-    return ToolResult.ok(f"Marked task {task_id!r} done in {tasks_path.name}")
+
+    # Step 3: atomic write via base64 to survive shell quoting.
+    # We pipe the bytes through `base64 -d` on the remote and
+    # write to a sibling `.tmp` file, then `mv` over the target.
+    import base64
+
+    payload = base64.b64encode(new_text.encode("utf-8")).decode("ascii")
+    tmp_path = tasks_path + ".tmp"
+    write_cmd = [
+        "sh",
+        "-c",
+        (
+            f"printf %s {shlex.quote(payload)} "
+            f"| base64 -d > {shlex.quote(tmp_path)} "
+            f"&& mv {shlex.quote(tmp_path)} {shlex.quote(tasks_path)}"
+        ),
+    ]
+    write_result = await backend.run_shell(project, write_cmd, timeout_secs=_SPEC_TASKS_TIMEOUT)
+    if write_result.timed_out:
+        return ToolResult.error(write_result.stderr)
+    if write_result.exit != 0:
+        return ToolResult.error(
+            (write_result.stderr or f"write exited {write_result.exit}").strip()
+        )
+    return ToolResult.ok(f"Marked task {task_id!r} done in tasks.md")
 
 
 # --------------------------------------------------------------- builder
 
 
 def build_inline_tools(registry_ref: Any) -> list[Tool]:
-    """Return the Phase-4-task-4 set of inline tools.
+    """Return the set of inline tools that share the registry.
 
-    ``registry_ref`` is the :class:`ToolRegistry` instance the tools
-    will close over for ``list_capabilities``. We pass it explicitly
-    rather than smuggling it through ``ctx`` so the dependency is
-    visible.
+    ``registry_ref`` is the :class:`ToolRegistry` instance; we close
+    over it so ``list_capabilities`` can describe the whole set
+    (itself included).
     """
 
-    # Capture the registry in a closure so list_capabilities can
-    # describe itself (and every other tool) without a context
-    # plumbing dance.
     async def _list_capabilities(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         entries = registry_ref.describe_all()
         return ToolResult.ok(json.dumps(entries, indent=2, sort_keys=True))
@@ -362,9 +461,6 @@ def build_inline_tools(registry_ref: Any) -> list[Tool]:
             ),
             schema=_SCHEMA_MARK_TASK,
             callable=_tool_spec_mark_task,
-            # Writes to tasks.md, but scoped to a single checkbox
-            # flip — treat it as auto on the hub; per-client policy
-            # can override.
             default_bucket=ApprovalBucket.AUTO,
             requires_project=True,
             kind="inline",

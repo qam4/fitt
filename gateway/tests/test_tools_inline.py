@@ -1,16 +1,19 @@
-"""Tests for Phase 4 Task 4 inline tools.
+"""Tests for Phase 4 inline tools.
 
-Covers ``list_capabilities``, ``spec_list``, ``spec_read``,
-``spec_next_task``, ``spec_mark_task``. All tools run hub-local;
-the SSH backend lands in Task 5 and only then do we exercise the
-ssh_host code path.
+Covers ``list_capabilities`` and the four ``spec_*`` tools. The
+ExecutionBackend is stubbed so tests don't shell out: we assert
+on the exact argv the backend receives and control the
+ShellResult it returns.
 """
 
 from __future__ import annotations
 
+import base64
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import dedent
+from typing import Any
 
 import pytest
 
@@ -21,22 +24,83 @@ from gateway.tools import (
     ToolRegistry,
     build_inline_tools,
 )
+from gateway.tools.backend import ShellResult
+
+# --------------------------------------------------------------- stubs
+
+
+@dataclass
+class FakeBackend:
+    """Records invocations; returns queued ShellResults.
+
+    Each call reads ``responses[call_index]`` and falls back to
+    the last entry once exhausted. The ``calls`` list is what
+    tests assert on to verify argv shape.
+    """
+
+    responses: list[ShellResult] = field(default_factory=list)
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    async def run_shell(
+        self,
+        project: Project,
+        cmd: list[str],
+        *,
+        cwd: str | None = None,
+        timeout_secs: int = 300,
+        extra_env: dict[str, str] | None = None,
+    ) -> ShellResult:
+        self.calls.append(
+            {
+                "project": project.name,
+                "ssh_host": project.ssh_host,
+                "cmd": list(cmd),
+                "cwd": cwd,
+                "timeout_secs": timeout_secs,
+            }
+        )
+        if not self.responses:
+            return ShellResult(exit=0, stdout="", stderr="", timed_out=False)
+        idx = min(len(self.calls) - 1, len(self.responses) - 1)
+        return self.responses[idx]
+
+
+def _ok(stdout: str = "", stderr: str = "") -> ShellResult:
+    return ShellResult(exit=0, stdout=stdout, stderr=stderr, timed_out=False)
+
+
+def _err(exit_code: int, stderr: str) -> ShellResult:
+    return ShellResult(exit=exit_code, stdout="", stderr=stderr, timed_out=False)
+
 
 # --------------------------------------------------------------- fixtures
 
 
 @pytest.fixture
 def hub_project(tmp_path: Path) -> tuple[ProjectRegistry, Project]:
-    """A registered project rooted at ``tmp_path/repo``, hub-local."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
+    """A registered hub-local project. The backend still gets
+    invoked — the "hub-local" distinction only affects how the
+    real ExecutionBackend dispatches, which we mock out."""
     reg = ProjectRegistry(config_path=tmp_path / "projects.yaml")
     project = Project(
         name="hub",
         ssh_host="",
-        path=str(repo),
+        path="/hub/repo",
         test_command="pytest -q",
-        build_command="",
+    )
+    reg.add(project)
+    return reg, project
+
+
+@pytest.fixture
+def ssh_project(tmp_path: Path) -> tuple[ProjectRegistry, Project]:
+    """An ssh-backed project."""
+    reg = ProjectRegistry(config_path=tmp_path / "projects.yaml")
+    project = Project(
+        name="laptop",
+        ssh_host="user@laptop.tailnet",
+        path="/c/src/home-ai-cluster",
+        test_command="pytest -q",
     )
     reg.add(project)
     return reg, project
@@ -44,31 +108,22 @@ def hub_project(tmp_path: Path) -> tuple[ProjectRegistry, Project]:
 
 @pytest.fixture
 def tool_registry() -> ToolRegistry:
-    """A ToolRegistry pre-populated with all Task 4 inline tools."""
     reg = ToolRegistry()
     for t in build_inline_tools(reg):
         reg.register(t)
     return reg
 
 
-def _ctx(projects: ProjectRegistry) -> ToolContext:
-    return ToolContext(client="ide", session_key="main", projects=projects)
-
-
-def _write_spec(
-    project: Project,
-    feature: str,
-    *,
-    requirements: str = "# Requirements\n",
-    design: str = "# Design\n",
-    tasks: str = "# Tasks\n",
-) -> Path:
-    d = Path(project.path) / ".kiro" / "specs" / feature
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "requirements.md").write_text(requirements, encoding="utf-8")
-    (d / "design.md").write_text(design, encoding="utf-8")
-    (d / "tasks.md").write_text(tasks, encoding="utf-8")
-    return d
+def _ctx(
+    projects: ProjectRegistry,
+    backend: FakeBackend | None = None,
+) -> ToolContext:
+    return ToolContext(
+        client="ide",
+        session_key="main",
+        projects=projects,
+        backend=backend,
+    )
 
 
 # --------------------------------------------------------------- registration
@@ -93,9 +148,9 @@ def test_all_inline_tools_default_to_auto(tool_registry: ToolRegistry) -> None:
 # --------------------------------------------------------------- list_capabilities
 
 
-@pytest.mark.asyncio
 async def test_list_capabilities_returns_registry_json(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
     projects, _ = hub_project
     tool = tool_registry.lookup("list_capabilities")
@@ -105,7 +160,6 @@ async def test_list_capabilities_returns_registry_json(
     names = [e["name"] for e in parsed]
     assert "list_capabilities" in names
     assert "spec_list" in names
-    # Each entry carries description, bucket, kind, requires_project.
     for entry in parsed:
         assert entry.keys() == {
             "name",
@@ -119,77 +173,101 @@ async def test_list_capabilities_returns_registry_json(
 # --------------------------------------------------------------- spec_list
 
 
-@pytest.mark.asyncio
-async def test_spec_list_empty_when_no_specs_dir(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+async def test_spec_list_empty_when_dir_missing(
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
     projects, _ = hub_project
+    # `ls` returns nothing when the `test -d` guard short-circuits.
+    backend = FakeBackend(responses=[_ok(stdout="")])
     tool = tool_registry.lookup("spec_list")
-    result = await tool.callable({"project": "hub"}, _ctx(projects))
+    result = await tool.callable({"project": "hub"}, _ctx(projects, backend))
     assert not result.is_error
     assert json.loads(result.payload) == []
+    # Argv check: we dispatch through a guarded sh -c ...
+    assert backend.calls[0]["cmd"][0] == "sh"
+    assert backend.calls[0]["cmd"][1] == "-c"
+    assert "/hub/repo/.kiro/specs" in backend.calls[0]["cmd"][2]
 
 
-@pytest.mark.asyncio
-async def test_spec_list_returns_sorted_feature_names(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+async def test_spec_list_sorts_features(
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
-    _write_spec(project, "zebra")
-    _write_spec(project, "alpha")
-    _write_spec(project, "mango")
+    projects, _ = hub_project
+    backend = FakeBackend(responses=[_ok(stdout="zebra\nalpha\nmango\n")])
     tool = tool_registry.lookup("spec_list")
-    result = await tool.callable({"project": "hub"}, _ctx(projects))
+    result = await tool.callable({"project": "hub"}, _ctx(projects, backend))
     assert not result.is_error
     assert json.loads(result.payload) == ["alpha", "mango", "zebra"]
 
 
-@pytest.mark.asyncio
+async def test_spec_list_filters_dotfiles(
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
+) -> None:
+    projects, _ = hub_project
+    backend = FakeBackend(responses=[_ok(stdout="phase4\n.stash\nalpha\n")])
+    tool = tool_registry.lookup("spec_list")
+    result = await tool.callable({"project": "hub"}, _ctx(projects, backend))
+    assert not result.is_error
+    assert json.loads(result.payload) == ["alpha", "phase4"]
+
+
+async def test_spec_list_works_against_ssh_project(
+    tool_registry: ToolRegistry,
+    ssh_project: tuple[ProjectRegistry, Project],
+) -> None:
+    """ssh_host is forwarded to the backend; the tool doesn't care."""
+    projects, _ = ssh_project
+    backend = FakeBackend(responses=[_ok(stdout="phase4\n")])
+    tool = tool_registry.lookup("spec_list")
+    result = await tool.callable({"project": "laptop"}, _ctx(projects, backend))
+    assert not result.is_error
+    assert json.loads(result.payload) == ["phase4"]
+    assert backend.calls[0]["ssh_host"] == "user@laptop.tailnet"
+
+
 async def test_spec_list_unknown_project_errors(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
     projects, _ = hub_project
     tool = tool_registry.lookup("spec_list")
-    result = await tool.callable({"project": "ghost"}, _ctx(projects))
+    result = await tool.callable({"project": "ghost"}, _ctx(projects, FakeBackend()))
     assert result.is_error
     assert "Unknown project" in result.payload
 
 
-@pytest.mark.asyncio
-async def test_ssh_project_refused_until_backend_ready(
-    tmp_path: Path, tool_registry: ToolRegistry
+async def test_spec_list_missing_backend_errors(
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    reg = ProjectRegistry(config_path=tmp_path / "projects.yaml")
-    reg.add(
-        Project(
-            name="laptop-project",
-            ssh_host="laptop.tailnet",
-            path="/home/fred/code/x",
-        )
-    )
+    projects, _ = hub_project
     tool = tool_registry.lookup("spec_list")
-    result = await tool.callable({"project": "laptop-project"}, _ctx(reg))
+    result = await tool.callable({"project": "hub"}, _ctx(projects))
     assert result.is_error
-    assert "SSH backend not yet available" in result.payload
+    assert "no execution backend" in result.payload
 
 
 # --------------------------------------------------------------- spec_read
 
 
-@pytest.mark.asyncio
 async def test_spec_read_returns_concatenated_markdown(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
-    _write_spec(
-        project,
-        "phase4",
-        requirements="# R\n\nrequirement body\n",
-        design="# D\n\ndesign body\n",
-        tasks="# T\n\n- [ ] 1a. first\n",
+    projects, _ = hub_project
+    # Three cats, one per spec file.
+    backend = FakeBackend(
+        responses=[
+            _ok(stdout="# R\n\nrequirement body\n"),
+            _ok(stdout="# D\n\ndesign body\n"),
+            _ok(stdout="# T\n\n- [ ] 1a. first\n"),
+        ]
     )
     tool = tool_registry.lookup("spec_read")
-    result = await tool.callable({"project": "hub", "feature": "phase4"}, _ctx(projects))
+    result = await tool.callable({"project": "hub", "feature": "phase4"}, _ctx(projects, backend))
     assert not result.is_error
     assert "## requirements.md" in result.payload
     assert "requirement body" in result.payload
@@ -197,34 +275,46 @@ async def test_spec_read_returns_concatenated_markdown(
     assert "design body" in result.payload
     assert "## tasks.md" in result.payload
     assert "1a. first" in result.payload
+    # Three backend invocations, one per file.
+    assert len(backend.calls) == 3
 
 
-@pytest.mark.asyncio
 async def test_spec_read_missing_file_labelled(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
-    # Only create requirements.md
-    d = Path(project.path) / ".kiro" / "specs" / "half"
-    d.mkdir(parents=True)
-    (d / "requirements.md").write_text("r only", encoding="utf-8")
-
+    projects, _ = hub_project
+    # requirements.md present; design.md and tasks.md missing.
+    backend = FakeBackend(
+        responses=[
+            _ok(stdout="r only"),
+            _ok(stdout="__FITT_MISSING__\n"),
+            _ok(stdout="__FITT_MISSING__\n"),
+        ]
+    )
     tool = tool_registry.lookup("spec_read")
-    result = await tool.callable({"project": "hub", "feature": "half"}, _ctx(projects))
+    result = await tool.callable({"project": "hub", "feature": "half"}, _ctx(projects, backend))
     assert not result.is_error
-    assert "## requirements.md" in result.payload
     assert "r only" in result.payload
-    assert "## design.md" in result.payload
     assert "(missing)" in result.payload
 
 
-@pytest.mark.asyncio
-async def test_spec_read_unknown_feature_errors(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+async def test_spec_read_all_missing_is_an_error(
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
+    """All three files missing = the feature doesn't exist; surface
+    a clean "not found" error rather than three missing-stubs."""
     projects, _ = hub_project
+    backend = FakeBackend(
+        responses=[
+            _ok(stdout="__FITT_MISSING__\n"),
+            _ok(stdout="__FITT_MISSING__\n"),
+            _ok(stdout="__FITT_MISSING__\n"),
+        ]
+    )
     tool = tool_registry.lookup("spec_read")
-    result = await tool.callable({"project": "hub", "feature": "nope"}, _ctx(projects))
+    result = await tool.callable({"project": "hub", "feature": "ghost"}, _ctx(projects, backend))
     assert result.is_error
     assert "Spec feature not found" in result.payload
 
@@ -233,27 +323,31 @@ async def test_spec_read_unknown_feature_errors(
     "bad_feature",
     ["../escape", "..", "a/b", "sub\\dir", ".hidden"],
 )
-@pytest.mark.asyncio
 async def test_spec_read_rejects_path_traversal(
     tool_registry: ToolRegistry,
     hub_project: tuple[ProjectRegistry, Project],
     bad_feature: str,
 ) -> None:
     projects, _ = hub_project
+    backend = FakeBackend()
     tool = tool_registry.lookup("spec_read")
-    result = await tool.callable({"project": "hub", "feature": bad_feature}, _ctx(projects))
+    result = await tool.callable(
+        {"project": "hub", "feature": bad_feature},
+        _ctx(projects, backend),
+    )
     assert result.is_error
     assert "Invalid feature name" in result.payload
+    assert backend.calls == []  # never reached the backend
 
 
 # --------------------------------------------------------------- spec_next_task
 
 
-@pytest.mark.asyncio
 async def test_spec_next_task_returns_first_unchecked(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
+    projects, _ = hub_project
     tasks = dedent(
         """
         # Tasks
@@ -264,37 +358,40 @@ async def test_spec_next_task_returns_first_unchecked(
         - [ ] 2b. later open
         """
     ).strip()
-    _write_spec(project, "phase4", tasks=tasks)
-
+    backend = FakeBackend(responses=[_ok(stdout=tasks)])
     tool = tool_registry.lookup("spec_next_task")
-    result = await tool.callable({"project": "hub", "feature": "phase4"}, _ctx(projects))
+    result = await tool.callable(
+        {"project": "hub", "feature": "phase4"},
+        _ctx(projects, backend),
+    )
     assert not result.is_error
     parsed = json.loads(result.payload)
     assert parsed == {"task_id": "2a", "text": "first open"}
 
 
-@pytest.mark.asyncio
 async def test_spec_next_task_all_done(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
-    _write_spec(project, "f", tasks="- [x] 1a. done\n- [x] 1b. done\n")
+    projects, _ = hub_project
+    backend = FakeBackend(responses=[_ok(stdout="- [x] 1a. done\n- [x] 1b. done\n")])
     tool = tool_registry.lookup("spec_next_task")
-    result = await tool.callable({"project": "hub", "feature": "f"}, _ctx(projects))
+    result = await tool.callable({"project": "hub", "feature": "f"}, _ctx(projects, backend))
     assert not result.is_error
-    parsed = json.loads(result.payload)
-    assert parsed == {"task_id": None, "text": None}
+    assert json.loads(result.payload) == {"task_id": None, "text": None}
 
 
-@pytest.mark.asyncio
 async def test_spec_next_task_missing_tasks_file(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
-    d = Path(project.path) / ".kiro" / "specs" / "notasks"
-    d.mkdir(parents=True)
+    projects, _ = hub_project
+    backend = FakeBackend(responses=[_ok(stdout="__FITT_MISSING__\n")])
     tool = tool_registry.lookup("spec_next_task")
-    result = await tool.callable({"project": "hub", "feature": "notasks"}, _ctx(projects))
+    result = await tool.callable(
+        {"project": "hub", "feature": "notasks"},
+        _ctx(projects, backend),
+    )
     assert result.is_error
     assert "No tasks.md" in result.payload
 
@@ -302,11 +399,11 @@ async def test_spec_next_task_missing_tasks_file(
 # --------------------------------------------------------------- spec_mark_task
 
 
-@pytest.mark.asyncio
 async def test_spec_mark_task_flips_checkbox(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
+    projects, _ = hub_project
     tasks = dedent(
         """
         # Tasks
@@ -316,75 +413,90 @@ async def test_spec_mark_task_flips_checkbox(
         - [ ] 1c. third
         """
     ).strip()
-    _write_spec(project, "f", tasks=tasks)
-
+    # Two calls: (1) cat to read, (2) sh -c 'base64 -d > tmp && mv tmp path'
+    backend = FakeBackend(responses=[_ok(stdout=tasks), _ok(stdout="")])
     tool = tool_registry.lookup("spec_mark_task")
     result = await tool.callable(
-        {"project": "hub", "feature": "f", "task_id": "1b"}, _ctx(projects)
+        {"project": "hub", "feature": "f", "task_id": "1b"},
+        _ctx(projects, backend),
     )
     assert not result.is_error
     assert "Marked task '1b' done" in result.payload
 
-    after = (Path(project.path) / ".kiro/specs/f/tasks.md").read_text(encoding="utf-8")
-    assert "- [ ] 1a. first" in after
-    assert "- [x] 1b. second" in after
-    assert "- [ ] 1c. third" in after
+    # Verify the write call actually embeds the new content
+    # (base64-decoded) — we shouldn't have flipped 1a or 1c.
+    write_cmd = backend.calls[1]["cmd"][2]
+    # The payload is embedded as a base64 argument after `printf %s `.
+    # Extract it.
+    import re
+
+    m = re.search(r"printf %s (?:'|\")?([A-Za-z0-9+/=]+)", write_cmd)
+    assert m, write_cmd
+    decoded = base64.b64decode(m.group(1)).decode("utf-8")
+    assert "- [ ] 1a. first" in decoded
+    assert "- [x] 1b. second" in decoded
+    assert "- [ ] 1c. third" in decoded
 
 
-@pytest.mark.asyncio
 async def test_spec_mark_task_already_done_is_noop(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
-    _write_spec(project, "f", tasks="- [x] 1a. done\n")
+    projects, _ = hub_project
+    backend = FakeBackend(responses=[_ok(stdout="- [x] 1a. done\n")])
     tool = tool_registry.lookup("spec_mark_task")
     result = await tool.callable(
-        {"project": "hub", "feature": "f", "task_id": "1a"}, _ctx(projects)
+        {"project": "hub", "feature": "f", "task_id": "1a"},
+        _ctx(projects, backend),
     )
     assert not result.is_error
     assert "already marked done" in result.payload
+    # Only the read dispatched; no write.
+    assert len(backend.calls) == 1
 
 
-@pytest.mark.asyncio
 async def test_spec_mark_task_unknown_id_errors(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
-    _write_spec(project, "f", tasks="- [ ] 1a. first\n")
+    projects, _ = hub_project
+    backend = FakeBackend(responses=[_ok(stdout="- [ ] 1a. first\n")])
     tool = tool_registry.lookup("spec_mark_task")
     result = await tool.callable(
-        {"project": "hub", "feature": "f", "task_id": "9z"}, _ctx(projects)
+        {"project": "hub", "feature": "f", "task_id": "9z"},
+        _ctx(projects, backend),
     )
     assert result.is_error
     assert "No task '9z'" in result.payload
 
 
-@pytest.mark.asyncio
 async def test_spec_mark_task_ambiguous_id_errors(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
-    projects, project = hub_project
+    projects, _ = hub_project
     tasks = dedent(
         """
         - [ ] 1a. first
         - [ ] 1a. also first (duplicate id)
         """
     ).strip()
-    _write_spec(project, "f", tasks=tasks)
+    backend = FakeBackend(responses=[_ok(stdout=tasks)])
     tool = tool_registry.lookup("spec_mark_task")
     result = await tool.callable(
-        {"project": "hub", "feature": "f", "task_id": "1a"}, _ctx(projects)
+        {"project": "hub", "feature": "f", "task_id": "1a"},
+        _ctx(projects, backend),
     )
     assert result.is_error
     assert "ambiguous" in result.payload
 
 
-@pytest.mark.asyncio
 async def test_spec_mark_task_missing_args_errors(
-    tool_registry: ToolRegistry, hub_project: tuple[ProjectRegistry, Project]
+    tool_registry: ToolRegistry,
+    hub_project: tuple[ProjectRegistry, Project],
 ) -> None:
     projects, _ = hub_project
     tool = tool_registry.lookup("spec_mark_task")
-    result = await tool.callable({"project": "hub"}, _ctx(projects))
+    result = await tool.callable({"project": "hub"}, _ctx(projects, FakeBackend()))
     assert result.is_error
     assert "feature" in result.payload
