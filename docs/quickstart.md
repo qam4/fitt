@@ -1015,6 +1015,19 @@ first-response `smoke-compose.sh` script.
     container (App Center -> Tailscale). Creates a real
     `tailscale0` interface on the host, adds the tailnet route,
     and bridge-networked containers inherit it automatically.
+- **Gateway can't resolve Tailscale hostnames (`*.ts.net` or
+  MagicDNS short names) from inside the container, even after
+  installing the Tailscale QPKG on the NAS.** Docker bridge
+  containers get their DNS from Docker's embedded resolver,
+  which forwards to whatever's in `/etc/resolv.conf`. Tailscale's
+  MagicDNS lives on `100.100.100.100`, which the container's
+  upstream DNS doesn't know about.
+  docker-compose.yml now sets `dns: [100.100.100.100, 1.1.1.1]`
+  on the gateway service so bridge containers resolve tailnet
+  names directly via MagicDNS. If you're still on an older
+  compose file, add that two-line block under the gateway
+  service and recreate. Using raw `100.x.y.z` Tailscale IPs in
+  config.yaml also works and skips DNS entirely.
 - **Container Station GUI didn't read `.env`** when importing the
   compose file. Expected — the GUI's compose importer doesn't
   support `.env` substitution. Use 6.B (`docker compose up -d`

@@ -46,6 +46,18 @@ services:
       # Reachable over Tailscale on the host. The OS firewall (not
       # compose) is what scopes this to the tailnet.
       - "${GATEWAY_HOST_PORT:-8421}:${FITT_PORT:-8421}"
+    # The gateway reaches Ollama satellites over the tailnet. By
+    # default, Docker's bridge inherits the host's DNS (your
+    # router / ISP), which has no idea what *.ts.net or MagicDNS
+    # short names are. Pointing resolution at Tailscale's MagicDNS
+    # resolver (100.100.100.100) fixes that. Cloudflare's public
+    # resolver follows so lookups for non-tailnet names (e.g.
+    # api.openrouter.ai) still work. Only the gateway needs this;
+    # the bot and open-webui only reach the gateway itself via
+    # Docker service name on the compose bridge.
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
     logging:
       driver: json-file
       options:
