@@ -86,18 +86,24 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 8. Approval middleware
 
-- [ ] 8a. `gateway/approval.py` scaffolding: `ApprovalMiddleware`
+Slim version landed in `ef7fa49` — enough for the `auto`/`block`
+path used by read-only tools today. Session-trust and YOLO state
+ship alongside Task 9 when there's a UI to set them.
+
+- [x] 8a. `gateway/approval.py` scaffolding: `ApprovalMiddleware`
        with `check(tool, args, context)`. Returns
        `ApprovalDecision`.
-- [ ] 8b. Integration with the tool registry's `resolve_bucket`.
+- [x] 8b. Integration with the tool registry's `resolve_bucket`.
 - [ ] 8c. Session-trust tracking (in-memory dict, per-session
-       trusted tools).
+       trusted tools). Placeholder `trust_session()` /
+       `clear_session()` no-ops exist; real state pairs with
+       Task 9.
 - [ ] 8d. YOLO tracking with per-client expiry (30 min for
-       telegram/webui, 6 h for ide/cli).
-- [ ] 8e. Hook approval into tool execution path: before dispatch,
+       telegram/webui, 6 h for ide/cli). Pairs with Task 9.
+- [x] 8e. Hook approval into tool execution path: before dispatch,
        call `approval.check`. Block and not-executed decisions
        short-circuit.
-- [ ] 8f. Tests with mock client contexts.
+- [x] 8f. Tests with mock client contexts.
 
 ## 9. Telegram approval UI
 
