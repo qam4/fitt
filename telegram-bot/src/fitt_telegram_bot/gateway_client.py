@@ -23,7 +23,12 @@ _STREAM_TIMEOUT_S = 120.0
 
 class GatewayClient:
     def __init__(
-        self, base_url: str, bearer_token: str, *, timeout: float = _STREAM_TIMEOUT_S
+        self,
+        base_url: str,
+        bearer_token: str,
+        *,
+        timeout: float = _STREAM_TIMEOUT_S,
+        enable_tools: bool = True,
     ) -> None:
         self._base = base_url.rstrip("/")
         self._headers = {
@@ -31,6 +36,13 @@ class GatewayClient:
             "Content-Type": "application/json",
         }
         self._timeout = timeout
+        # Opt into the gateway's tool-forwarding loop by sending
+        # `tool_choice: "auto"` on every chat call. The gateway
+        # treats "tool_choice present" as the signal to append its
+        # registered tools and run the tool-execution loop. Set to
+        # False only for tests or for a debugging pass that wants
+        # to bypass tools entirely.
+        self._enable_tools = enable_tools
 
     # ---------- public API ----------------------------------------
 
@@ -58,11 +70,18 @@ class GatewayClient:
         Yields successive chunks of assistant text. On error, yields
         a single ``⚠️`` message and stops.
         """
-        body = {
+        body: dict[str, Any] = {
             "model": alias,
             "messages": messages,
             "stream": True,
         }
+        if self._enable_tools:
+            # Opt into the gateway's tool-forwarding loop. The
+            # gateway will force non-streaming on this request
+            # and wrap the final answer in a one-shot SSE frame,
+            # so the bot's existing streaming-consumer code keeps
+            # working.
+            body["tool_choice"] = "auto"
         headers = {**self._headers, "X-FITT-Session": session_id}
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:

@@ -132,3 +132,71 @@ async def test_chat_upstream_stream_abort() -> None:
             )
         )
     assert "upstream stream aborted" in deltas[0]
+
+
+async def test_chat_request_includes_tool_choice_auto() -> None:
+    """Bot opts every chat request into the gateway's tool loop by
+    sending `tool_choice: "auto"`. This is the signal the gateway
+    uses to decide whether to inject its registered tools and run
+    the tool-execution loop."""
+    import json as _json
+
+    captured: dict[str, object] = {}
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        captured["body"] = _json.loads(request.content.decode("utf-8"))
+        return httpx.Response(
+            200,
+            content=b"data: [DONE]\n\n",
+            headers={"Content-Type": "text/event-stream"},
+        )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(side_effect=_record)
+        # Drain the iterator so the request actually fires.
+        async for _ in _client().chat(
+            messages=[{"role": "user", "content": "hi"}],
+            alias="fitt-smart",
+            session_id="main",
+        ):
+            pass
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body.get("tool_choice") == "auto"
+    # Backwards-compat: other keys still present.
+    assert body.get("model") == "fitt-smart"
+    assert body.get("stream") is True
+
+
+async def test_chat_request_skips_tool_choice_when_disabled() -> None:
+    """Tests / debug mode can pass `enable_tools=False` to bypass
+    the tool loop entirely. Used for isolating chat behaviour from
+    tool-call plumbing when debugging."""
+    import json as _json
+
+    from fitt_telegram_bot.gateway_client import GatewayClient
+
+    captured: dict[str, object] = {}
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        captured["body"] = _json.loads(request.content.decode("utf-8"))
+        return httpx.Response(
+            200,
+            content=b"data: [DONE]\n\n",
+            headers={"Content-Type": "text/event-stream"},
+        )
+
+    client = GatewayClient("http://127.0.0.1:8080", "TEST_TOKEN", enable_tools=False)
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(side_effect=_record)
+        async for _ in client.chat(
+            messages=[{"role": "user", "content": "hi"}],
+            alias="fitt-smart",
+            session_id="main",
+        ):
+            pass
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert "tool_choice" not in body
