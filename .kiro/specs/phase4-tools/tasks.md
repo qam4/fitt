@@ -101,16 +101,82 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 9. Telegram approval UI
 
-- [ ] 9a. Telegram bot: `approval_callback_query` handler.
-       Parses callback-data, resolves a futures table.
-- [ ] 9b. `TelegramNotifier.ask(tool, args, timeout_secs)`:
-       sends a formatted message with inline keyboard, returns
-       `asyncio.Future` resolved by the callback handler.
-- [ ] 9c. 2-hour default timeout; auto-rejects on expiry.
-- [ ] 9d. Respects allowlist: only the single allowlisted user can
-       approve.
-- [ ] 9e. Tests: mock Telegram client; verify keyboard shape and
-       callback handling.
+**Design note (added before implementation).** The gateway and the
+Telegram bot are two separate processes that need to coordinate to
+resolve `ask` / `trust_session` tool calls. Three shapes considered:
+
+- **A. Polling.** Gateway exposes `/v1/approvals/pending` and
+  `/v1/approvals/{id}/decide`. Bot polls pending every 500-1000ms,
+  surfaces to Telegram, posts decisions back.
+- **B. SSE push.** Gateway streams approval events to a long-lived
+  bot connection.
+- **C. Webhook back to bot.** Gateway POSTs approval requests to a
+  bot-owned HTTP endpoint.
+
+**Chosen: A (polling).** Rationale:
+- No new network plumbing (reuses the existing gateway HTTP surface).
+- Survives bot or gateway restart cleanly — pending approvals live
+  on the gateway; bot reconnects and picks up where it left off.
+- Polling at 500ms adds ~0ms perceived latency for a feature that
+  already has a 2-hour human timeout.
+- SSE and webhook shapes earn their complexity only once we need
+  sub-500ms push — not today.
+
+**On-disk state.** Pending approvals live in an in-memory dict on
+the gateway for v1 (keyed by approval id, value has tool/args/
+context/future). Lost on gateway restart. Phase 4.5's event log
+is where persistent approval records should go; doing it here
+would duplicate work.
+
+**Futures plumbing.** When the chat loop hits an `ask` tool, the
+gateway creates an `asyncio.Future`, stores it in the pending
+dict under a fresh UUID, and awaits it with a 2-hour timeout.
+Bot polls, shows the Telegram prompt, user clicks, bot POSTs the
+decision. Gateway's decide endpoint looks up the UUID, resolves
+the future, dispatch continues.
+
+### Tasks
+
+- [ ] 9a. `gateway/approval.py`: `ApprovalMiddleware` holds a
+       pending-approvals dict. `request_approval(tool, args,
+       context)` creates the future, stores it, returns
+       `(approval_id, future)`. Caller awaits the future.
+- [ ] 9b. `gateway/approval.py`: `resolve_approval(approval_id,
+       decision)` sets the future. Called by the decide HTTP
+       handler. Idempotent on already-resolved.
+- [ ] 9c. Gateway HTTP: `GET /v1/approvals/pending?client=X`
+       returns `[{id, tool, args_summary, client, session, age_s}, ...]`.
+       Only pending (not yet resolved) entries. Filters by
+       client tag.
+- [ ] 9d. Gateway HTTP: `POST /v1/approvals/{id}/decide` with body
+       `{decision: "approve" | "reject" | "trust_session"}`.
+       Resolves the future. Requires the requesting token's
+       client tag to match the approval's target client (so the
+       ide token can't approve a telegram-bound prompt).
+- [ ] 9e. Telegram bot: add `ApprovalPoller` task that runs
+       alongside the chat handler. `while True: fetch pending,
+       post new ones to Telegram, sleep 500ms`. Tracks which
+       approval ids it's already surfaced so we don't re-post.
+- [ ] 9f. Telegram bot: `on_callback_query` handler for the
+       inline keyboard buttons. Parses callback-data shape
+       `approve:<id>` / `reject:<id>` / `trust:<id>` and POSTs
+       to gateway's decide endpoint.
+- [ ] 9g. Wire the middleware: when `check` returns `ask` /
+       `trust_session` and `request_approval` is available,
+       await the future (2-hour timeout). Map the resolved
+       decision to an `ApprovalDecision`. Keep the "not wired"
+       fallback for `yolo` — that comes later.
+- [ ] 9h. Respects allowlist: only allowlisted Telegram user ids
+       see the prompt. Other chat members on a group (if any)
+       get nothing. The bot already filters messages this way;
+       we just inherit the same check for callback queries.
+- [ ] 9i. 2-hour default timeout; auto-rejects on expiry with a
+       clear detail message. Configurable via
+       `tools.approval_timeout_secs`.
+- [ ] 9j. Tests: approval future lifecycle (pending, resolved,
+       timeout), HTTP endpoint auth + client-tag matching, bot
+       poller fetches + dedupes, callback handler posts back the
+       right shape.
 
 ## 10. Write-gated inline tools
 
