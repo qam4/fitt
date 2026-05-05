@@ -183,6 +183,20 @@ class ExecutionBackend:
 
     # ---------------------------------------------- argv builders
 
+    def build_ssh_argv(
+        self, project: Project, cmd: list[str], cwd: str | None = None
+    ) -> tuple[list[str], str | None]:
+        """Public helper: return the exact argv that ``run_shell``
+        would dispatch for an SSH project. Used by ``fitt ssh test``
+        so users can see (and paste into a shell) the invocation
+        that's about to run.
+
+        Mirrors ``_build_ssh_argv`` one-to-one; kept as a public
+        facade so the private method can evolve without breaking
+        the CLI. No side effects — does not spawn a process.
+        """
+        return self._build_ssh_argv(project, cmd, cwd)
+
     def _build_local_argv(
         self, project: Project, cmd: list[str], cwd: str | None
     ) -> tuple[list[str], str]:

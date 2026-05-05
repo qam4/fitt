@@ -634,11 +634,18 @@ def ssh_test(ssh_host: str, command: str, timeout: int) -> None:
     the same key + options the ExecutionBackend uses at runtime. A
     success here means tools targeting a project with this
     ``ssh_host`` will work.
+
+    The output shows the exact argv being dispatched so the user can
+    copy/paste it into a shell for further debugging. On success it
+    also classifies the remote shell (Git Bash, WSL, Linux, macOS,
+    cmd.exe, ...) — useful when "SSH worked but what did I land in?"
+    is the actual question.
     """
     import asyncio
 
     from .projects import Project
     from .ssh_identity import default_key_path, ensure_key
+    from .ssh_probe import detect_shell
     from .tools import ExecutionBackend
 
     async def run() -> int:
@@ -653,9 +660,16 @@ def ssh_test(ssh_host: str, command: str, timeout: int) -> None:
             ssh_host=ssh_host,
             path="~",
         )
+        remote_cmd = ["sh", "-c", command]
+
+        # Show the argv we're about to run. Users can paste this
+        # into a terminal to debug without going through fitt.
+        argv, _cwd = backend.build_ssh_argv(project, remote_cmd)
+        _console.print("[dim]→[/dim] " + " ".join(_quote_argv(argv)))
+
         result = await backend.run_shell(
             project,
-            ["sh", "-c", command],
+            remote_cmd,
             timeout_secs=timeout,
         )
         if result.timed_out:
@@ -666,12 +680,31 @@ def ssh_test(ssh_host: str, command: str, timeout: int) -> None:
         if result.exit != 0:
             _console.print(f"[red]exit={result.exit}[/red]\n{result.stderr.strip()}")
             return 1
-        _console.print("[green]ok[/green]")
+
+        # Success path — print stdout, then the detection verdict.
         if result.stdout:
             _console.print(result.stdout.strip())
+        detection = detect_shell(result.stdout)
+        _console.print(f"[dim]detected:[/dim] {detection.label}")
+        _console.print("[green]ok[/green]")
         return 0
 
     sys.exit(asyncio.run(run()))
+
+
+def _quote_argv(argv: list[str]) -> list[str]:
+    """Shell-quote an argv for display only. Not used for execution."""
+    import shlex
+
+    out = []
+    for a in argv:
+        # Double-quote args that contain spaces or shell metacharacters
+        # so the line is copy-paste-safe in a POSIX shell.
+        if any(c in a for c in " \t\"'$`\\;&|><*?[](){}#"):
+            out.append(shlex.quote(a))
+        else:
+            out.append(a)
+    return out
 
 
 if __name__ == "__main__":

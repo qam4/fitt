@@ -273,7 +273,7 @@ commit of its own; pick them up when the pain actually shows up.
       one conditional in `_build_ssh_argv`, one CLI flag on
       `fitt project add`.
 
-- [ ] F3. **Upgrade `fitt ssh test` output.** Print the full
+- [x] F3. **Upgrade `fitt ssh test` output.** Print the full
       argv that was sent (users can paste it directly into a
       shell for debugging) and detect the remote shell from the
       `uname -a && pwd` output (MSYS = Git Bash, Linux +
