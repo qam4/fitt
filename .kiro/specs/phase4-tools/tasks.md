@@ -241,3 +241,52 @@ Status legend: `[x]` done, `[ ]` not yet.
 - Ruff + mypy clean on the gateway package.
 - The live-validation checklist (19a-19i) all green.
 - Author has used Phase 4 for 1 week without wanting to revert.
+
+## Follow-ups (not in Phase 4 scope)
+
+Deferred from the Phase 4 SSH discussion. Tracked here so they
+don't drift, but none block Phase 4 exit. Each is a future
+commit of its own; pick them up when the pain actually shows up.
+
+- [ ] F1. **Simplify backend ssh argv.** Move
+      `-o StrictHostKeyChecking=accept-new` out of the argv into
+      a container-side `$FITT_HOME/ssh/config` (accessed via
+      `-F`). Keep `-i` and `-o BatchMode=yes` on the argv — the
+      key path varies with `FITT_HOME` across deployments (Docker
+      vs native Linux vs native Windows) and BatchMode is a
+      backend invariant. The config file is the natural home for
+      per-host overrides the user wants to tweak without
+      touching FITT code. Requires a Dockerfile change (copy a
+      default `config` file into the image), a startup check
+      that copies the default to `$FITT_HOME/ssh/config` if
+      absent, and an argv change in `backend.py`.
+
+- [ ] F2. **Optional per-project `shell:` field on `Project`.**
+      When set (e.g. `"/usr/bin/bash -lc"` or
+      `"C:\\Tools\\Git\\usr\\bin\\bash.exe -lc"`), the backend
+      wraps the remote command as
+      `<shell> 'cd <path> && <cmd>'` instead of passing the
+      command straight through. When unset, today's behaviour —
+      remote sshd's default shell runs the command. Solves the
+      WSL-vs-Git-Bash ambiguity on Windows satellites without
+      forcing everyone to touch `DefaultShell`. Adds one field,
+      one conditional in `_build_ssh_argv`, one CLI flag on
+      `fitt project add`.
+
+- [ ] F3. **Upgrade `fitt ssh test` output.** Print the full
+      argv that was sent (users can paste it directly into a
+      shell for debugging) and detect the remote shell from the
+      `uname -a && pwd` output (MSYS = Git Bash, Linux +
+      `/mnt/c/` = WSL, Linux + `/home/` = native Linux). Named
+      in the CLI output so failure modes like "landed in WSL
+      instead of Git Bash" are immediately visible. No backend
+      change.
+
+- [ ] F4. **Native-install quickstart.** Sibling doc to today's
+      Docker-focused `quickstart.md`. Covers: systemd unit on
+      Linux, Windows service via NSSM (or revived
+      `install-service.ps1`), direct `uv run fitt serve` for dev
+      loops. No code change — the gateway is already
+      deployment-neutral; this is pure docs. Probably 1-2 hours.
+      Flagged in `project-overview.md` as an intentional future
+      direction.

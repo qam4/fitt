@@ -83,6 +83,38 @@ Firewall on the Hub).
 - **Interfaces**: IDE (Continue, Cursor, Kiro) via the
   OpenAI-compatible endpoint. Later: Telegram, Open WebUI, voice.
 
+## Deployment neutrality
+
+The gateway, telegram-bot, and open-webui are all **deployment-
+neutral**: the code must run identically as a plain Python process
+(native Linux, native Windows, or `uv run fitt serve` in a dev
+loop) and as a Docker container. This is a code-level rule, not a
+deployment choice — the current `docker compose` layout is the
+recommended setup for a NAS hub, but not the only one.
+
+Concretely:
+
+- No `if running_in_container()` branches. Paths flow from
+  `FITT_HOME` (env var, defaulting to `~/.fitt`) and resolve
+  identically under both modes.
+- SSH identity lives at `$FITT_HOME/ssh/id_ed25519` whether the
+  container bind-mounts that directory or it sits on the host's
+  native filesystem.
+- Docker-specific glue (compose file, DNS for Tailscale MagicDNS,
+  bind mounts) lives in the compose file and `.env`, not in the
+  Python code.
+- A future native-install doc will sit alongside today's
+  Docker-focused `docs/quickstart.md`. Until that lands, users who
+  want a native install follow the pre-Phase-3.5 instructions
+  (Windows service via `scripts/install-service.ps1`) — today's
+  gateway code already supports both paths; only the docs are
+  Docker-first.
+
+If a change forces a `if container: ... else: ...` branch or
+embeds a path like `/fitt/...` directly in gateway code, that's a
+smell; prefer surfacing a new env var / config option that both
+deployments can set.
+
 ## Spec convention
 
 Every phase from Phase 1 onward has a three-file spec under

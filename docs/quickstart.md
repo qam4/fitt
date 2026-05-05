@@ -966,6 +966,38 @@ the entry, and dispatch to the execution host.
 Three universal steps (1-3), then an OS-specific step (4) for how
 the satellite accepts the gateway's public key.
 
+### What actually runs, end to end
+
+Useful to have in mind before you start debugging.
+
+1. The gateway container runs:
+   `ssh -i /fitt/ssh/id_ed25519 <user>@<host> "<command>"`
+2. The satellite's sshd receives the connection and checks
+   `authorized_keys` for a matching public key.
+3. sshd launches the remote **login shell** and feeds it
+   `"<command>"` as a single string.
+4. The shell resolves the PATH, finds the binary, runs it.
+
+Step 3 is where most surprises live. Which shell sshd picks
+depends on the satellite's OS:
+
+- **Linux/macOS**: the user's login shell from `/etc/passwd`
+  (change with `chsh -s /bin/bash` on the satellite).
+- **Windows**: whatever `HKLM:\SOFTWARE\OpenSSH\DefaultShell`
+  points at, or `cmd.exe` if unset. cmd.exe doesn't resolve
+  POSIX tools like `cat`, `uname`, `grep`, so every FITT tool
+  that shells out will fail with `command not found`.
+
+There are two levers to force a specific shell:
+
+- **Satellite-side**: change the default shell (below, step 18).
+  OS-native, applies to every SSH session on that machine.
+  `chsh` on POSIX, `DefaultShell` registry key on Windows.
+- **Per-project override on the hub** (later, if you need it):
+  FITT will support pinning a specific shell in the project
+  record so the backend wraps the command with that shell. Not
+  wired in today; today's doc covers the satellite-side lever.
+
 ## Step 17 - Read the gateway's public key
 
 The gateway generates its own SSH identity on first boot. No
@@ -1001,12 +1033,22 @@ sudo launchctl list | grep ssh # macOS
 If SSH isn't running, on Linux: `sudo systemctl enable --now ssh`.
 On macOS: System Settings → General → Sharing → Remote Login → On.
 
+If your login shell isn't bash/zsh and you want a different one
+for FITT's sessions, run `chsh -s /bin/bash` on the satellite.
+Changes the shell for every SSH session on that machine, not
+just FITT's.
+
 ### 18.b — Windows satellite with Git Bash
 
 Windows is the trickiest path. Three things have to line up:
-OpenSSH Server installed, default shell set to Git Bash (so
-POSIX utilities like `cat`, `ls`, `grep` work), and the public
-key placed where Windows' sshd actually looks for admin accounts.
+OpenSSH Server installed, default shell set to a POSIX shell
+(so tools like `cat`, `ls`, `grep` work), and the public key
+placed where Windows' sshd actually looks for admin accounts.
+
+FITT tools assume POSIX semantics. On Windows that means either
+Git Bash (recommended — tight install, no VM) or WSL (heavier
+but more complete; see 18.c). **Don't use cmd.exe or PowerShell
+as the default shell** — FITT tools will fail.
 
 **Install OpenSSH Server.** In an admin PowerShell:
 
@@ -1035,8 +1077,11 @@ Get-Command bash | Format-List Source
 # (NOT C:\Windows\System32\bash.exe, which is WSL).
 ```
 
-If Git Bash is at `C:\Program Files\Git\usr\bin\bash.exe` or
-`C:\Tools\Git\usr\bin\bash.exe`, register it:
+If you have both Git Bash and WSL installed, `Get-Command bash`
+will resolve to whichever appears first on PATH — often WSL.
+Don't rely on it. Pick the explicit path to Git Bash's bash.exe
+(usually `C:\Program Files\Git\usr\bin\bash.exe` or
+`C:\Tools\Git\usr\bin\bash.exe`) and register that.
 
 ```powershell
 $bash = "C:\Tools\Git\usr\bin\bash.exe"   # adjust to your install
