@@ -598,6 +598,25 @@ for 3 days without intervention.
 - Automatic preferences/projects consolidation (LLM rewrite of `preferences.md` from recent messages).
 - Cross-session memory bleed (each session's history stays isolated; identity + lessons shared).
 
+**Known issue to address in this phase — tool-turn structure.**
+
+Today (Phase 4) history persists only two pieces of each turn: the user message and the assistant's final natural-language reply. Tool calls and tool results are ephemeral — they live inside the tool-call loop for one turn and are never written to disk.
+
+This is fine for turns without tools. For turns *with* tools it poisons future context. Observed: in a session where SSH was briefly unreachable, the assistant's final reply ("I can't reach SSH, please configure keys...") got persisted as if it were a factual claim. On subsequent turns — even after SSH was fixed — the model read its own past refusal, pattern-matched on it, and kept refusing to call the tool. The tool result (`ok`) was never visible because tool results aren't persisted.
+
+Fix (to be specced inside this phase): persist tool-using turns with a structured tool-call record so reloading gives the model something like:
+
+- `role: user`: verbatim
+- `role: assistant` with `tool_calls`: name + args summary (short, factual)
+- `role: tool`: the outcome only (`ok` / brief error summary — not the full output which may be large and may be stale tomorrow)
+- `role: assistant`: the final natural-language reply (as today)
+
+On-disk format stays markdown-first. The tool-call record lives in a structured block inside the turn (parseable header like `[tool calls]` with one bullet per call, similar to how the `##` timestamp headers work today). Decay policy applies uniformly: older tool-using turns get truncated the same way older text-only turns do.
+
+The critical rule: the natural-language paraphrase is never loaded without the tool-call record that generated it. A model reading history can tell that the paraphrase "I can't reach SSH" contradicts the tool outcome `ok` and discount it.
+
+Until this ships, the workaround is to start a fresh session when poisoning happens: `fitt session new <name>` (or manually delete today's history file for the session).
+
 *Full spec: `.kiro/specs/phase5-lessons/` (to be written when this phase starts).*
 
 ---
