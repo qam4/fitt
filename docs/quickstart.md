@@ -573,25 +573,62 @@ models:
     fallback: qwen-coder-small     # optional; another model id in this file
 ```
 
-**Which IP goes in `endpoint:`?** Use the satellite's **LAN IP**
-when the hub and satellite share a home network — the packet
-stays on the LAN, doesn't need Tailscale to route, and keeps
-working even if Tailscale is down. Use the satellite's **tailnet
-IP** (`100.x.y.z`) only when the satellite lives off-LAN — e.g.
-a work laptop, a cloud dev box. Tailscale's job in most setups is
-*you* reaching the hub from outside; hub-to-satellite stays local.
+**Which endpoint address should you use?** Three good options,
+in rough order of complexity. Pick the one that matches your
+failure-mode priorities.
 
-**LAN IPs can drift.** A DHCP lease renewal after a
-reboot/sleep/wake can change the satellite's IP and the gateway
-will log `/ready` failures until you update `config.yaml`. Two
-defences:
+1. **LAN IP (simplest).** `http://192.168.1.50:11434`. Packet
+   stays on the home LAN, doesn't depend on Tailscale to route,
+   and keeps working even if Tailscale is down. Downside: an IP
+   can change when the satellite wakes from sleep unless you
+   reserve it on the router. Best default when the hub and
+   satellite share a network.
+2. **Tailnet hostname.** `http://laptop.ts-name.ts.net:11434` or
+   the short MagicDNS name. Stable across sleep/wake, reboots,
+   even moving a satellite between home and office. Needs
+   Tailscale up on both hub and satellite, and the gateway's
+   Docker bridge DNS pointing at `100.100.100.100` (the default
+   compose file does this). Use when satellites roam or when
+   you prefer names over IP bookkeeping.
+3. **Tailnet raw IP (`100.x.y.z`).** Splits the difference:
+   stable hostnames' benefit without the DNS dependency. IPs on
+   the tailnet are assigned once per device and don't drift
+   unless you deliberately rotate them.
 
-- **DHCP reservation.** In your router's admin, bind the
-  satellite's MAC address to a fixed LAN IP. Five minutes, once.
-- **mDNS / local hostname.** On many routers
-  `http://<laptop-hostname>.local:11434` or `.home:11434`
-  resolves. `curl` that form once to confirm before putting it
-  in config.yaml.
+**The tradeoff: "everything needs Tailscale" vs "everything
+needs stable LAN."** Pick whichever failure you'd rather handle:
+
+- Tailnet names/IPs mean the hub can't reach satellites when
+  Tailscale has a bad day. (Rare. Personal experience: a handful
+  of minutes per year.)
+- LAN IPs mean an unexpected IP change takes satellites offline
+  until you notice and update config.yaml.
+
+**Want both?** The alias chain gives you free fallback. Define
+two models for the same backend — one using the tailnet name
+and one using the LAN IP — then make the second the fallback
+for the first:
+
+```yaml
+models:
+  - id: qwen-coder-big
+    backend: ollama
+    endpoint: http://laptop.your-tailnet.ts.net:11434
+    model: qwen2.5-coder:14b
+    fallback: qwen-coder-big-lan
+  - id: qwen-coder-big-lan
+    backend: ollama
+    endpoint: http://192.168.1.50:11434
+    model: qwen2.5-coder:14b
+```
+
+When the primary's DNS or route fails, the router automatically
+retries the LAN endpoint. Belt-and-suspenders, zero code.
+
+**If you go with a LAN IP**, set a DHCP reservation on your
+router so the IP doesn't drift, or use an mDNS hostname like
+`http://<laptop-hostname>.local:11434` when your router serves
+one.
 
 Then make sure at least one alias points at it:
 
