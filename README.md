@@ -21,6 +21,7 @@ Phase 0 complete, Phase 1 in at-home verification.
 - **Install it:** [`docs/quickstart.md`](./docs/quickstart.md) - one page, ~30 minutes, start to finish.
 - **How it works:** [`gateway/README.md`](./gateway/README.md) - config reference, HTTP API, CLI, troubleshooting.
 - **Why it's built this way:** [`FITT_ROADMAP.md`](./FITT_ROADMAP.md) - guiding principles and phased plan.
+- **Design FAQ:** [`docs/faq.md`](./docs/faq.md) - rationale for the non-obvious design choices. Read when you catch yourself asking "why not just X?".
 - **Original vision:** [`FITT_PRD.md`](./FITT_PRD.md) - the product requirements document that seeded the design.
 - **Active spec:** [`.kiro/specs/phase1-gateway/`](./.kiro/specs/phase1-gateway/) - three-file Kiro spec (requirements / design / tasks).
 

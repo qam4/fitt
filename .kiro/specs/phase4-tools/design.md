@@ -521,6 +521,25 @@ Telegram ask flow:
    future with the decision.
 5. On timeout: auto-reject.
 
+**Non-goal: pattern-based command allowlists.** Some agent
+frameworks let users say "trust commands matching `sleep *`"
+so invocations starting with `sleep ` auto-approve. This is a
+known shell-injection surface: `sleep 1; git commit -am evil`
+also matches the prefix, and the approval middleware sees only
+the syntax while the shell resolves the semantics. Bash chainers
+(`;`, `&&`, `||`, `|`, `&`, `$(...)`, backticks, `eval`) make a
+safe pattern allowlist effectively impossible.
+
+FITT's primitives are **named-tool approval** (per invocation)
+and **session-scoped tool trust** (per tool, per session). If a
+`project_shell` tool is ever added (see Phase 4 follow-ups), it
+will use the same primitives — never patterns. The command
+string gets parsed via `shlex` before any matching; chainer
+tokens reject; the deny list runs on parsed argv; the user sees
+the full string before approving.
+
+See `docs/faq.md` for the user-facing version of this rationale.
+
 ### `gateway/audit.py`
 
 ```python
