@@ -576,5 +576,103 @@ def project_show(name: str) -> None:
     _console.print(f"  build command: {p.build_command or '-'}")
 
 
+# --------------------------------------------------------------- fitt ssh
+
+
+@main.group("ssh")
+def ssh_group() -> None:
+    """Manage the gateway's SSH identity and test reachability."""
+
+
+@ssh_group.command("pubkey")
+def ssh_pubkey() -> None:
+    """Print the gateway's public SSH key.
+
+    Generates the key pair on first use if it doesn't exist yet,
+    matching the startup behaviour so running this command in a
+    fresh container is enough to bootstrap. Paste the output into
+    the satellite's authorized_keys file.
+    """
+    import asyncio
+
+    from .ssh_identity import default_key_path, ensure_key, read_public_key
+
+    key_path = default_key_path()
+    try:
+        asyncio.run(ensure_key(key_path))
+        _console.print(read_public_key(key_path))
+    except FileNotFoundError as e:
+        _console.print(
+            f"[red]ssh-keygen not available: {e}[/red]\n"
+            f"Install it (on a Linux host: `apt install openssh-client`), "
+            f"or run this CLI from inside the gateway container where "
+            f"the image bundles openssh-client."
+        )
+        sys.exit(1)
+    except RuntimeError as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+
+
+@ssh_group.command("test")
+@click.argument("ssh_host")
+@click.option(
+    "--command",
+    default="uname -a && pwd",
+    help="Command to run on the remote (default: uname -a && pwd).",
+)
+@click.option(
+    "--timeout",
+    type=int,
+    default=15,
+    help="Seconds to wait for the probe (default: 15).",
+)
+def ssh_test(ssh_host: str, command: str, timeout: int) -> None:
+    """Probe an ssh host with the gateway's identity.
+
+    Runs a harmless command (``uname -a && pwd`` by default) using
+    the same key + options the ExecutionBackend uses at runtime. A
+    success here means tools targeting a project with this
+    ``ssh_host`` will work.
+    """
+    import asyncio
+
+    from .projects import Project
+    from .ssh_identity import default_key_path, ensure_key
+    from .tools import ExecutionBackend
+
+    async def run() -> int:
+        key_path = await ensure_key(default_key_path())
+        backend = ExecutionBackend(ssh_key_path=key_path)
+        # A throwaway Project: the backend only needs ssh_host + path,
+        # and cd {path} without a valid path just surfaces as stderr.
+        # We use "~" so the remote shell lands somewhere sane across
+        # Linux / macOS / Git Bash.
+        project = Project(
+            name="ssh-test",
+            ssh_host=ssh_host,
+            path="~",
+        )
+        result = await backend.run_shell(
+            project,
+            ["sh", "-c", command],
+            timeout_secs=timeout,
+        )
+        if result.timed_out:
+            _console.print(
+                f"[red]timed out after {timeout}s — host unreachable or sshd not responding[/red]"
+            )
+            return 1
+        if result.exit != 0:
+            _console.print(f"[red]exit={result.exit}[/red]\n{result.stderr.strip()}")
+            return 1
+        _console.print("[green]ok[/green]")
+        if result.stdout:
+            _console.print(result.stdout.strip())
+        return 0
+
+    sys.exit(asyncio.run(run()))
+
+
 if __name__ == "__main__":
     main()

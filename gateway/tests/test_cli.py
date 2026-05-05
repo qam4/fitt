@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from textwrap import dedent
 
+import pytest
 from click.testing import CliRunner
 
 from gateway.cli import main as fitt_cli
@@ -290,3 +292,55 @@ def test_cli_session_path(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "main" in result.output
     assert "history" in result.output
+
+
+# --------------------------------------------------------------- fitt ssh
+
+_SSH_KEYGEN_AVAILABLE = shutil.which("ssh-keygen") is not None
+
+
+@pytest.mark.skipif(
+    not _SSH_KEYGEN_AVAILABLE,
+    reason="ssh-keygen not on PATH; gateway runtime image installs it",
+)
+def test_cli_ssh_pubkey_generates_then_prints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`fitt ssh pubkey` generates the key pair if missing and
+    prints the public line. Running a second time prints the same
+    line without regenerating."""
+    key_path = tmp_path / "ssh" / "id_ed25519"
+    monkeypatch.setenv("FITT_SSH_KEY_PATH", str(key_path))
+
+    runner = CliRunner()
+
+    first = runner.invoke(fitt_cli, ["ssh", "pubkey"])
+    assert first.exit_code == 0, first.output
+    assert first.output.strip().startswith("ssh-ed25519 ")
+
+    # Second run doesn't regenerate.
+    pub_bytes_first = (tmp_path / "ssh" / "id_ed25519.pub").read_bytes()
+    second = runner.invoke(fitt_cli, ["ssh", "pubkey"])
+    assert second.exit_code == 0
+    assert second.output.strip() == first.output.strip()
+    assert (tmp_path / "ssh" / "id_ed25519.pub").read_bytes() == pub_bytes_first
+
+
+@pytest.mark.skipif(
+    not _SSH_KEYGEN_AVAILABLE,
+    reason="ssh-keygen not on PATH; gateway runtime image installs it",
+)
+def test_cli_ssh_test_reports_unreachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fitt ssh test` surfaces a human-friendly error when the
+    host is unreachable. We deliberately target an RFC5737
+    TEST-NET-1 address that should never respond."""
+    key_path = tmp_path / "ssh" / "id_ed25519"
+    monkeypatch.setenv("FITT_SSH_KEY_PATH", str(key_path))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        fitt_cli,
+        ["ssh", "test", "user@192.0.2.1", "--timeout", "1"],
+    )
+    assert result.exit_code == 1
+    assert "ok" not in result.output.lower()

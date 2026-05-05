@@ -85,6 +85,7 @@ def create_app(config: Config) -> FastAPI:
     #     later tasks.
     from .approval import ApprovalMiddleware
     from .projects import ProjectRegistry, default_projects_path
+    from .ssh_identity import default_key_path, ensure_key
     from .tools import (
         ExecutionBackend,
         ToolPolicy,
@@ -95,7 +96,36 @@ def create_app(config: Config) -> FastAPI:
     )
 
     app.state.project_registry = ProjectRegistry(default_projects_path())
-    app.state.execution_backend = ExecutionBackend()
+
+    # Generate the gateway's SSH identity on first boot. Idempotent:
+    # existing keys are preserved; only missing ones are created.
+    # Without a key, tools that need to reach satellites fail with
+    # "ssh: Could not resolve hostname / permission denied" on
+    # first use, which is easy to mistake for a config problem.
+    # Doing it here moves the "wait, how do I make a key" step out
+    # of the operator's setup path.
+    ssh_key = default_key_path()
+    try:
+        # create_app is synchronous; run the async ssh-keygen wrapper
+        # in a private event loop. Only runs once per process start.
+        import asyncio
+
+        asyncio.run(ensure_key(ssh_key))
+        app.state.ssh_key_path = ssh_key
+    except (FileNotFoundError, RuntimeError) as exc:
+        # ssh-keygen missing (Dockerfile regression) or keygen
+        # itself failed. Log loudly but don't block startup -
+        # the chat path works without tools, and the operator
+        # can fix things by running `fitt ssh pubkey` later
+        # (which re-triggers the same code path).
+        import logging as _stdlog
+
+        _stdlog.getLogger("fitt.gateway").warning(
+            "ssh.identity.unavailable", extra={"error": str(exc)}
+        )
+        app.state.ssh_key_path = None
+
+    app.state.execution_backend = ExecutionBackend(ssh_key_path=app.state.ssh_key_path)
 
     tool_policy = ToolPolicy.from_config(config.tools)
     tool_registry = ToolRegistry(tool_policy)

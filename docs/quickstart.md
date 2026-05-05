@@ -951,6 +951,265 @@ Then redo the two bootstrap steps above.
 
 ---
 
+# Part D — Wire up a project (optional; needed for tool-capable chat)
+
+Everything up to here gives you a *chat* hub: the LLM talks, you
+reply. To let the LLM **read code and run commands** on your
+behalf, you register a *project* and give the gateway SSH access
+to the machine where the code actually lives.
+
+A project is a logical workspace: a name + a filesystem path +
+optionally an SSH host. Tools that touch files (`read_file`,
+`grep_repo`, `git_status`, etc.) take a project argument, look up
+the entry, and dispatch to the execution host.
+
+Three universal steps (1-3), then an OS-specific step (4) for how
+the satellite accepts the gateway's public key.
+
+## Step 17 - Read the gateway's public key
+
+The gateway generates its own SSH identity on first boot. No
+ssh-keygen on your part.
+
+On the hub:
+
+```bash
+docker compose exec gateway fitt ssh pubkey
+```
+
+Prints a single line starting with `ssh-ed25519 AAAA... fitt-gateway`.
+Copy it; you'll paste it on the satellite in step 20.
+
+If this is a fresh install and the key doesn't exist yet, the
+command generates it on first run. Calling it a second time
+prints the same key — the gateway never rotates the key silently.
+
+## Step 18 - Install and enable SSH on the satellite
+
+The satellite is whatever machine holds the code you want FITT to
+read: your laptop, a desktop, a cloud dev box. OS-specific below.
+
+### 18.a — Linux / macOS satellite
+
+Usually already running. Check from the satellite:
+
+```bash
+sudo systemctl status ssh      # Linux (systemd)
+sudo launchctl list | grep ssh # macOS
+```
+
+If SSH isn't running, on Linux: `sudo systemctl enable --now ssh`.
+On macOS: System Settings → General → Sharing → Remote Login → On.
+
+### 18.b — Windows satellite with Git Bash
+
+Windows is the trickiest path. Three things have to line up:
+OpenSSH Server installed, default shell set to Git Bash (so
+POSIX utilities like `cat`, `ls`, `grep` work), and the public
+key placed where Windows' sshd actually looks for admin accounts.
+
+**Install OpenSSH Server.** In an admin PowerShell:
+
+```powershell
+Add-WindowsCapability -Online -Name "OpenSSH.Server~~~~0.0.1.0"
+```
+
+If `Get-WindowsCapability -Online -Name "OpenSSH.Server~~~~0.0.1.0"`
+reports `State : InstallPending`, **reboot** for the install to
+complete.
+
+Then start and enable sshd:
+
+```powershell
+Start-Service sshd
+Set-Service -Name sshd -StartupType Automatic
+Get-Service sshd                 # Status: Running
+```
+
+**Point sshd at Git Bash as the default shell.** Still in admin
+PowerShell, first confirm where bash lives:
+
+```powershell
+Get-Command bash | Format-List Source
+# Accept only if this is a Git Bash installation
+# (NOT C:\Windows\System32\bash.exe, which is WSL).
+```
+
+If Git Bash is at `C:\Program Files\Git\usr\bin\bash.exe` or
+`C:\Tools\Git\usr\bin\bash.exe`, register it:
+
+```powershell
+$bash = "C:\Tools\Git\usr\bin\bash.exe"   # adjust to your install
+New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" `
+    -Name DefaultShell -Value $bash -PropertyType String -Force
+# `-lc` invokes bash as a login shell. Without it, PATH is
+# minimal and `uname`, `cat`, `ls` don't resolve when sshd
+# runs a remote command non-interactively.
+New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" `
+    -Name DefaultShellCommandOption -Value "-lc" `
+    -PropertyType String -Force
+Restart-Service sshd
+```
+
+Verify:
+
+```powershell
+Get-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" |
+    Select-Object DefaultShell, DefaultShellCommandOption
+```
+
+### 18.c — Windows satellite via WSL
+
+If you have WSL installed and your repo lives inside the WSL
+distro (`/home/you/src/...`), SSH to that distro directly and
+skip Git Bash entirely. Treat it as a Linux satellite (18.a).
+Cleaner if you can.
+
+## Step 19 - Confirm port 22 is reachable from the hub
+
+From the hub shell (not inside the gateway container):
+
+```bash
+nc -zv <satellite-hostname> 22
+# or
+curl -v telnet://<satellite-hostname>:22 2>&1 | grep Connected
+```
+
+If it connects, sshd is running and reachable. If not, check the
+satellite's firewall rules for inbound 22 (Windows auto-creates
+`OpenSSH-Server-In-TCP` during install — confirm it's Enabled).
+
+## Step 20 - Authorise the gateway's public key on the satellite
+
+Different location depending on the satellite's OS and user type.
+
+### 20.a — Linux / macOS satellite
+
+In the satellite's shell:
+
+```bash
+mkdir -p ~/.ssh && chmod 0700 ~/.ssh
+echo "<paste the pubkey from step 17 here>" >> ~/.ssh/authorized_keys
+chmod 0600 ~/.ssh/authorized_keys
+```
+
+### 20.b — Windows satellite, regular user account
+
+```powershell
+# PowerShell as the user whose account you'll SSH as
+$keyPath = "$env:USERPROFILE\.ssh\authorized_keys"
+if (-not (Test-Path $keyPath)) {
+    New-Item -ItemType File -Path $keyPath -Force | Out-Null
+}
+notepad $keyPath
+# Paste the pubkey as one line, save, close.
+
+# Tighten ACLs so sshd accepts the file.
+$acl = Get-Acl $keyPath
+$acl.SetAccessRuleProtection($true, $false)
+$acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    "$env:USERNAME", "FullControl", "Allow")
+$acl.AddAccessRule($rule)
+Set-Acl $keyPath $acl
+```
+
+### 20.c — Windows satellite, Administrator account
+
+Admin accounts on Windows bypass `~/.ssh/authorized_keys`. Use
+`C:\ProgramData\ssh\administrators_authorized_keys` instead.
+
+Check if you're an admin:
+
+```powershell
+net localgroup administrators
+# If your username appears, this section applies to you.
+```
+
+Then, in **admin PowerShell**:
+
+```powershell
+$keyPath = "C:\ProgramData\ssh\administrators_authorized_keys"
+if (-not (Test-Path $keyPath)) {
+    New-Item -ItemType File -Path $keyPath -Force | Out-Null
+}
+notepad $keyPath
+# Paste the pubkey from step 17 as one line, save, close.
+
+# ACLs for administrators_authorized_keys: Administrators + SYSTEM only.
+icacls $keyPath /inheritance:r
+icacls $keyPath /grant "Administrators:F" "SYSTEM:F"
+icacls $keyPath /remove "Authenticated Users" "BUILTIN\Users" 2>$null
+icacls $keyPath
+# The final output should list ONLY Administrators and SYSTEM.
+```
+
+## Step 21 - Test the SSH handshake
+
+Back on the hub:
+
+```bash
+docker compose exec gateway fitt ssh test \
+    <user>@<satellite-hostname> \
+    --command "uname -a && pwd"
+```
+
+Expected: a line containing the satellite's uname output, then
+the remote home directory, then `ok`. If the command errors, the
+stderr is printed verbatim so you can debug. Common failures:
+
+| symptom | likely cause |
+|---|---|
+| `Permission denied (publickey)` | key isn't in the right `authorized_keys`, or ACLs on the keys file are too permissive |
+| `Host key verification failed` | extremely rare; delete `$FITT_HOME/ssh/known_hosts` and retry |
+| `Connection refused` | sshd not listening; revisit step 18 |
+| `Connection timed out` | firewall or network; revisit step 19 |
+| `uname: command not found` (Windows) | sshd's default shell isn't Git Bash with `-lc`; revisit step 18.b |
+
+## Step 22 - Register the project
+
+Once the test passes:
+
+```bash
+docker compose exec gateway fitt project add <name> \
+    --ssh-host <user>@<satellite-hostname> \
+    --path <absolute-path-to-repo-on-satellite> \
+    --test-command "<how to run tests, e.g. 'pytest -q'>"
+```
+
+Path format: POSIX on Linux/macOS/WSL (`/home/you/src/my-project`);
+Git-Bash-style on Windows Git Bash (`/c/src/my-project`).
+
+Verify:
+
+```bash
+docker compose exec gateway fitt project list
+```
+
+## Step 23 - Smoke-test end to end
+
+In Telegram, using a tool-capable alias, send:
+
+> Call spec_list with project set to `<name>` and tell me what comes back.
+
+You should see real output. Check logs if it stalls:
+
+```bash
+tail -f "$FITT_HOME/logs/gateway.log" | grep -v telegram
+```
+
+Look for a `tool.invoked` event with `ok: true`. That's the marker
+that SSH dispatch is working end-to-end.
+
+## Adding another project
+
+Repeat steps 20-22 for each project/satellite pair. Step 17's key
+(the gateway's public SSH key) is the same for every satellite —
+one key, authorised on N machines. Step 18 also stays put: sshd
+is a per-machine thing, not a per-project thing.
+
+---
+
 ## Resilience checks (5 min)
 
 On the Hub:
