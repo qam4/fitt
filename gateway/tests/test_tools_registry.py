@@ -215,6 +215,31 @@ def test_policy_entry_without_default_is_skipped() -> None:
     assert p.per_tool_default == {}
 
 
+def test_policy_approval_timeout_secs_roundtrip() -> None:
+    """The ``approval_timeout_secs`` top-level knob flows from raw
+    YAML through to the runtime policy. Tested explicitly because
+    the ``from_raw`` helper has to separate this reserved key from
+    tool-name keys without confusing them."""
+    p = ToolPolicy.from_config({"approval_timeout_secs": 30})
+    assert p.approval_timeout_secs == 30
+    # Tool entries alongside the knob still parse correctly.
+    p2 = ToolPolicy.from_config(
+        {
+            "approval_timeout_secs": 90,
+            "read_file": {"default": "ask"},
+        }
+    )
+    assert p2.approval_timeout_secs == 90
+    assert p2.per_tool_default == {"read_file": ApprovalBucket.ASK}
+
+
+def test_policy_approval_timeout_secs_default_is_none() -> None:
+    """When the knob isn't set, the policy reports None so the app
+    falls back to the middleware's built-in default."""
+    p = ToolPolicy.from_config({"read_file": {"default": "auto"}})
+    assert p.approval_timeout_secs is None
+
+
 def test_policy_config_rejects_unknown_bucket_value() -> None:
     """Typos in the bucket name surface at config load, not tool call time."""
     from pydantic import ValidationError

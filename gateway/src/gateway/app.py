@@ -140,7 +140,13 @@ def create_app(config: Config) -> FastAPI:
     for t in build_git_tools():
         tool_registry.register(t)
     app.state.tool_registry = tool_registry
-    app.state.approval = ApprovalMiddleware(tool_registry)
+    if tool_policy.approval_timeout_secs is not None:
+        app.state.approval = ApprovalMiddleware(
+            tool_registry,
+            approval_timeout_s=tool_policy.approval_timeout_secs,
+        )
+    else:
+        app.state.approval = ApprovalMiddleware(tool_registry)
 
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)

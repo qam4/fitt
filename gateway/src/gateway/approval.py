@@ -73,10 +73,23 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
-_DEFAULT_APPROVAL_TIMEOUT_S = 2 * 60 * 60
-"""Two hours. Long enough that a user who's stepped away for
-lunch can still approve; short enough that a forgotten prompt
-doesn't stall the chat loop forever."""
+_DEFAULT_APPROVAL_TIMEOUT_S = 45.0
+"""45 seconds.
+
+Short because the gateway's HTTP chat request holds its TCP
+connection open for this long waiting on the approval future,
+and most HTTP clients (including the Telegram bot) cap at
+60-120s. If we wait two hours for the tap, the bot's httpx
+client gives up at ~60s and the user sees "gateway unreachable"
+even though the gateway is fine.
+
+Two-hour workflows belong in Phase 4.5 (event log + proactive
+push) so the chat turn can return immediately while the tool
+result arrives asynchronously as a new Telegram message.
+
+Override via ``tools.approval_timeout_secs`` in config.yaml if
+you're testing end-to-end latency or running a client with a
+longer HTTP timeout."""
 
 
 DecisionLiteral = Literal["approve", "reject", "trust_session"]

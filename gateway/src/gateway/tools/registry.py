@@ -95,6 +95,22 @@ class ToolPolicyConfig(BaseModel):
     per_tool: dict[str, _ToolEntry] = Field(default_factory=dict)
     per_client: dict[str, dict[str, ApprovalBucket]] = Field(default_factory=dict)
 
+    # How long the middleware waits for a human to respond to an
+    # ``ask`` / ``trust_session`` prompt before timing out the
+    # pending approval. Short default (45s) because the
+    # gateway's HTTP chat request holds its TCP connection for
+    # this long and most HTTP clients (including the Telegram
+    # bot) cap at 60-120s. Two-hour-plus workflows belong in
+    # Phase 4.5 (event log + proactive push) so the chat turn
+    # can return immediately while the tool result is delivered
+    # asynchronously. Set in config.yaml with:
+    #
+    # .. code-block:: yaml
+    #
+    #     tools:
+    #       approval_timeout_secs: 30
+    approval_timeout_secs: float | None = None
+
     # Pydantic 2 handles the custom layout via a before-validator
     # so we don't force users to type an extra ``per_tool:`` key
     # in the YAML.
@@ -104,18 +120,22 @@ class ToolPolicyConfig(BaseModel):
 
         The YAML lets users write ``tools: {read_file: ...,
         per_client: ...}`` where everything except ``per_client``
-        is a tool entry. We split that apart here.
+        and a handful of reserved scalar knobs is a tool entry.
+        We split that apart here.
         """
         if not raw:
             return cls()
         per_client = raw.get("per_client", {}) or {}
-        per_tool_raw = {k: v for k, v in raw.items() if k != "per_client"}
+        approval_timeout_secs = raw.get("approval_timeout_secs")
+        reserved = {"per_client", "approval_timeout_secs"}
+        per_tool_raw = {k: v for k, v in raw.items() if k not in reserved}
         return cls(
             per_tool={k: _ToolEntry.model_validate(v or {}) for k, v in per_tool_raw.items()},
             per_client={
                 client: {tool: ApprovalBucket(bucket) for tool, bucket in (overrides or {}).items()}
                 for client, overrides in per_client.items()
             },
+            approval_timeout_secs=approval_timeout_secs,
         )
 
 
@@ -139,6 +159,12 @@ class ToolPolicy:
     """Nested overrides keyed by client tag, then by tool name.
     e.g. ``{"ide": {"write_file": AUTO}, "webui": {"write_file": BLOCK}}``."""
 
+    approval_timeout_secs: float | None = None
+    """How long the middleware waits on an ``ask`` /
+    ``trust_session`` future before auto-rejecting. ``None`` means
+    use the middleware's built-in default (see
+    ``gateway.approval._DEFAULT_APPROVAL_TIMEOUT_S``)."""
+
     @classmethod
     def from_config(cls, raw_tools: dict[str, Any] | None) -> ToolPolicy:
         """Parse the ``tools:`` block from config.yaml."""
@@ -157,6 +183,7 @@ class ToolPolicy:
             per_tool_default=per_tool_default,
             per_tool_wildcard=per_tool_wildcard,
             per_client=dict(parsed.per_client),
+            approval_timeout_secs=parsed.approval_timeout_secs,
         )
 
 

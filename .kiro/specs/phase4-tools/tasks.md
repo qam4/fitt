@@ -184,6 +184,22 @@ the future, dispatch continues.
        poller fetches + dedupes, callback handler posts back the
        right shape.
 
+**Known limitation (real-world end-to-end).** The approval
+future blocks the chat HTTP request until resolved. Telegram
+bot's httpx client times out at ~60s, so the user has to tap
+within that window or the chat response never lands — even
+though the tool runs correctly on the gateway side. We cap the
+approval timeout at 45s by default (configurable via
+`tools.approval_timeout_secs`) so the failure mode is
+predictable instead of the bot silently disappearing.
+
+The correct long-term fix is detached execution: chat turn
+returns a placeholder immediately, tool runs in the background
+after approval, result is pushed to Telegram as a new message.
+That's the same push channel Phase 4.5 builds for cron +
+proactive notifications, so this is not a Phase 4 blocker —
+just a known rough edge.
+
 ## 10. Write-gated inline tools
 
 - [ ] 10a. `write_file(project, path, content)`.
