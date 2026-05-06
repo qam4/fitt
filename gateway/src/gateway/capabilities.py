@@ -171,16 +171,33 @@ def parse_gap(
     m = _GAP_RE.search(reply)
     if m is None:
         return None
-    action = (m.group("action") or "").strip()
+    action = _tidy(m.group("action") or "")
     if not action:
         return None
-    suggestion = (m.group("suggestion") or "").strip()
+    suggestion = _tidy(m.group("suggestion") or "")
     return GapReport(
         ts=ts if ts is not None else time(),
         session_key=session_key,
         action=action,
         suggestion=suggestion,
     )
+
+
+def _tidy(s: str) -> str:
+    """Clean up one captured phrase.
+
+    The model routinely wraps file names in backticks (e.g.
+    ``I'd need a tool to read `README.md`.``), which survive the
+    non-greedy ``[^\\n.!?]+?`` capture. Worse, the ``.`` inside
+    ``README.md`` terminates the regex early, stranding a lone
+    opening backtick in the middle of the captured phrase. The
+    ranked output then renders things like ``read the `readme``
+    and fails to dedupe against the no-backticks form.
+
+    Backticks are always markdown formatting in this context,
+    never action content, so nuke them wholesale. Also collapse
+    runs of whitespace that survived the markdown strip."""
+    return " ".join(s.replace("`", "").split())
 
 
 # --------------------------------------------------------------- log

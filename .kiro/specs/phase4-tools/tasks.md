@@ -286,9 +286,9 @@ just a known rough edge.
 
 ## 17. Integration tests
 
-- [ ] 17a. End-to-end Telegram → tool call → execution → reply.
+- [x] 17a. End-to-end Telegram → tool call → execution → reply.
        Stubbed LLM and SSH.
-- [ ] 17b. End-to-end Continue-style IDE request: client tools
+- [x] 17b. End-to-end Continue-style IDE request: client tools
        preserved, FITT tools appended, dispatch correctly split.
 
 ## 18. Docs

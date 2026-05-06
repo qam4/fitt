@@ -128,6 +128,23 @@ def test_parse_gap_accepts_i_would() -> None:
     assert got.action == "tail a log file"
 
 
+def test_parse_gap_strips_backticks_around_action() -> None:
+    """Regression: the model routinely wraps filenames in backticks
+    (``read `README.md```). Those backticks must not leak into the
+    canonicalised action, or similar gap reports fail to dedupe in
+    ``rank_gaps`` and the log entries render with a stray
+    backtick."""
+    reply = "I'd need a tool to read the `README.md`. Consider adding `read_file`."
+    got = parse_gap(reply)
+    assert got is not None
+    assert "`" not in got.action
+    assert "`" not in got.suggestion
+    # And dedupes with the no-backticks form.
+    other = parse_gap("I'd need a tool to read the README.md.")
+    assert other is not None
+    assert got.action.rstrip(".") == other.action.rstrip(".")
+
+
 def test_parse_gap_finds_mid_sentence() -> None:
     """The gap phrase need not be at the start of the reply;
     models often say 'Happy to help! I'd need a tool to ...'"""
