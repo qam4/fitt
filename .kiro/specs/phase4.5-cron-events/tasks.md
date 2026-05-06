@@ -4,13 +4,13 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 1. Event log primitive
 
-- [ ] 1a. `gateway/events.py`: `EventEntry` dataclass, `EventLog`
+- [x] 1a. `gateway/events.py`: `EventEntry` dataclass, `EventLog`
        with `append`, `read` (with `since` / `kind` /
        `session` / `limit` filters), `prune` (delete old entries).
-- [ ] 1b. Persistence at `$FITT_HOME/events.jsonl`. One JSON
+- [x] 1b. Persistence at `$FITT_HOME/events.jsonl`. One JSON
        object per line. Append uses `open(..., 'a')`, flush after
        each write.
-- [ ] 1c. Tests: round-trip, filters, pruning (streamed rewrite).
+- [x] 1c. Tests: round-trip, filters, pruning (streamed rewrite).
 
 ## 2. Cron data model + persistence
 
