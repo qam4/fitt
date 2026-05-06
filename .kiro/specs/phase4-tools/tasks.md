@@ -293,13 +293,13 @@ just a known rough edge.
 
 ## 18. Docs
 
-- [ ] 18a. Gateway README: new sections on tools, project
+- [x] 18a. Gateway README: new sections on tools, project
        registry, approval model.
-- [ ] 18b. Quickstart: new step for `fitt project add` after
+- [x] 18b. Quickstart: new step for `fitt project add` after
        install.
-- [ ] 18c. `.kiro/steering/project-overview.md`: note the new
+- [x] 18c. `.kiro/steering/project-overview.md`: note the new
        architecture (tools, ssh backend, project registry).
-- [ ] 18d. Mention the SSH key requirement on the execution host
+- [x] 18d. Mention the SSH key requirement on the execution host
        and the one-time `ssh-copy-id` setup.
 
 ## 19. Live validation

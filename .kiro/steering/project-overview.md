@@ -83,8 +83,20 @@ Firewall on the Hub).
 - **Memory** (Phase 2+): markdown-first, three layers - identity
   (always injected), project context (swap by cwd), daily history
   (time-decayed).
-- **Tools** (Phase 4+): MCP servers, with an approval-gate
-  middleware in the gateway and a tamper-resistant deny list.
+- **Tools** (Phase 4): inline tools for file / git / shell /
+  HTTP operations, plus optional MCP servers. A **project
+  registry** at `$FITT_HOME/projects.yaml` names logical
+  workspaces; the **SSH execution backend** dispatches each
+  tool's shell command either locally or over `ssh <host> 'cd
+  <path> && <cmd>'`. An **approval middleware** runs a deny
+  list, per-session trust, per-client config overrides, and
+  finally the tool's default bucket; `ask` prompts flow out
+  over the Telegram poller to an inline keyboard. An
+  **HMAC-chained audit log** records every tool call (including
+  rejected and errored ones) at `$FITT_HOME/audit.jsonl`. A
+  **capability-gap log** tracks "I'd need a tool to X"
+  complaints for the natural next-tool backlog. See
+  `gateway/README.md` for the operator-facing tour.
 - **Interfaces**: IDE (Continue, Cursor, Kiro) via the
   OpenAI-compatible endpoint. Later: Telegram, Open WebUI, voice.
 

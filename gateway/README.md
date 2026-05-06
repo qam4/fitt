@@ -435,3 +435,209 @@ See [`../.kiro/specs/phase1-gateway/design.md`](../.kiro/specs/phase1-gateway/de
 for the full design document: architecture diagram, module breakdown,
 design decisions with rationale, correctness properties, and the
 testing strategy.
+
+## Tools (Phase 4)
+
+The gateway can execute tools on the model's behalf as part of a
+chat turn. A turn looks like:
+
+1. Client sends `/v1/chat/completions` with `tool_choice: "auto"`
+   (any truthy value is fine — its presence opts in).
+2. Gateway injects a `[Capabilities]` block into the system
+   prompt and appends its registered tools to the `tools` array
+   the upstream model sees.
+3. Model returns one or more `tool_calls`. The gateway executes
+   each one, adds the result as a `role: "tool"` message, and
+   re-dispatches to the same model.
+4. Loop terminates when the model returns text (no tool call),
+   or at an iteration cap of 10, whichever comes first.
+
+Non-tool-capable chat (no `tool_choice`) flows through the
+original streaming passthrough unchanged.
+
+### Tool surface (today)
+
+| Name                  | What it does                                          | Default approval |
+|-----------------------|-------------------------------------------------------|------------------|
+| `list_capabilities`   | Returns the registered tool list as JSON.             | `auto`           |
+| `spec_list` / `spec_read` / `spec_next_task` / `spec_mark_task` | Walk and update `.kiro/specs/` markdown. | `auto`           |
+| `read_file` / `list_directory` / `grep_repo` / `glob_search` | Read-only project filesystem access.        | `auto`           |
+| `git_status` / `git_diff` | Read-only git inspection.                         | `auto`           |
+| `write_file` / `edit_file` / `git_commit` | Mutating file and VCS ops.            | `ask`            |
+| `run_tests`           | Run the project's `test_command`.                     | `ask`            |
+| `http_get`            | Gateway-local HTTP GET. Honours `deny_hosts`.         | `auto`           |
+| `mcp.<server>.<tool>` | Any tool exposed by a configured MCP server.          | `ask`            |
+
+Every tool call is recorded in the audit log (see below),
+including rejected and errored ones.
+
+### Project registry
+
+Tools that touch a filesystem take a `project` argument that
+looks up a **project registry** entry at
+`$FITT_HOME/projects.yaml`. Each entry has:
+
+- `name` — stable identifier the model uses in tool calls.
+- `path` — absolute filesystem path on the *execution host*.
+- `ssh_host` — empty for hub-local; otherwise `<user>@<host>`
+  (typically a Tailscale name) so the execution backend
+  dispatches the shell command over SSH.
+- `test_command` / `build_command` — optional, used by
+  `run_tests` and `run_build`.
+
+Add a project with the CLI:
+
+```bash
+docker compose exec gateway fitt project add myproject \
+    --path /home/fred/myproject \
+    --ssh-host laptop.tailnet \
+    --test-command "uv run pytest -q"
+```
+
+List and inspect:
+
+```bash
+docker compose exec gateway fitt project list
+docker compose exec gateway fitt project show myproject
+```
+
+The registry is re-read on every request, so CLI edits are
+visible without a restart.
+
+### Execution backend (SSH)
+
+The `ExecutionBackend` dispatches every shell command. If a
+project has `ssh_host` set, the backend wraps the command as
+`ssh -i <key> -o BatchMode=yes ... <host> 'cd <path> && <cmd>'`
+and runs it from the hub. Otherwise the command runs locally in
+the project's directory.
+
+The gateway generates an SSH identity on first boot at
+`$FITT_HOME/ssh/id_ed25519` (idempotent; existing keys are
+preserved). Print the public key:
+
+```bash
+docker compose exec gateway fitt ssh pubkey
+```
+
+Authorize it on each satellite via the satellite-OS-specific
+steps in [`../docs/quickstart.md`](../docs/quickstart.md) Part D.
+Confirm reachability with:
+
+```bash
+docker compose exec gateway fitt ssh test user@host --command "uname -a && pwd"
+```
+
+### Approval model
+
+Every tool call resolves to one of four **approval buckets**:
+
+- `auto` — run immediately.
+- `ask` — send an approval prompt to the tagged client (today:
+  the Telegram bot's inline keyboard). User taps approve / reject
+  / trust-session.
+- `trust_session` — auto-approve this tool for the remainder of
+  the current session. Default: off; clients opt in per-call.
+- `block` — refuse outright with a message back to the model.
+
+Precedence for resolving a tool's bucket:
+
+1. A hardcoded **deny list** short-circuits to `block` for
+   commands that match any pattern (e.g. `rm -rf /`,
+   `git push --force`, `DROP DATABASE`, fork bombs). See
+   `gateway/tools/deny_list.py` for the complete list and the
+   rationale per pattern.
+2. Per-session trust (if set).
+3. Per-client overrides from `config.yaml`'s `tools:` section
+   (e.g. `ide` gets `auto` for `write_file` during pair
+   programming, `telegram` keeps `ask`).
+4. The tool's `default_bucket`.
+
+The approval prompt is polled from the Telegram bot on a
+500 ms cycle via `GET /v1/approvals/pending`; decisions come
+back via `POST /v1/approvals/{id}/decide`. A 45-second default
+timeout on pending approvals matches the bot's HTTP-client
+timeout. Configurable via `tools.approval_timeout_secs`. See
+the Phase 4 spec for the push-channel design that replaces this
+timeout-bounded shape in Phase 4.5.
+
+### Audit log
+
+Every tool call appends one HMAC-chained JSONL entry to
+`$FITT_HOME/audit.jsonl`. The chain makes mid-log tampering
+detectable:
+
+```bash
+docker compose exec gateway fitt audit verify
+#=> ok — 14 entries verified
+
+docker compose exec gateway fitt audit tail --tool write_file --since 1h
+docker compose exec gateway fitt audit tail --session probe
+```
+
+The HMAC key lives at `$FITT_HOME/audit.key` (0600 perms on
+POSIX, generated lazily on first append). Keep it out of
+backups that touch adversarial environments; leaking it doesn't
+enable forgery on existing entries but does on new ones.
+
+Redaction: values matching known secret shapes (`sk-...`,
+`ghp_...`, JWTs, keys named `api_key`) are replaced with
+`<redacted>` before the entry is hashed, so the log stays
+useful in support threads.
+
+### MCP
+
+The gateway can spawn one or more MCP (Model Context Protocol)
+servers as subprocesses and expose their tools through the same
+tool-forwarding path. Tool names are prefixed
+`mcp.<server>.<tool>` so collisions with inline tools aren't
+possible. Configure in `config.yaml`:
+
+```yaml
+mcp_servers:
+  - name: fs
+    command: uvx
+    args: ["awslabs.mcp-filesystem-server@latest"]
+    env: {}
+```
+
+Supervision: on crash, the manager retries with exponential
+backoff (1 → 16 s) and gives up after 5 consecutive failures.
+Inspect and restart:
+
+```bash
+docker compose exec gateway fitt mcp list
+docker compose exec gateway fitt mcp restart fs
+```
+
+### Capability awareness
+
+The model sees a short `[Capabilities]` block at the top of
+every system prompt listing the live tools. When a user asks
+for something the model can't do, we prompt it to reply in the
+exact form:
+
+> I'd need a tool to `<action>`. Consider adding `<suggestion>`.
+
+Those replies are parsed and appended to
+`$FITT_HOME/capability_gaps.log`. Ranked summary:
+
+```bash
+docker compose exec gateway fitt capability-gaps
+```
+
+The ranked list is the natural backlog for which tool to build
+next.
+
+### Tool forwarding and IDE clients
+
+A client's own tools (e.g. Continue's Agent-mode toolkit) are
+preserved and listed *first* in the upstream `tools` array so
+client-owned names take precedence on lookup. FITT's own tools
+are appended behind them. When the model calls a FITT-owned
+name, the gateway executes locally and returns the result to
+the model. When the model calls a client-owned name that FITT
+doesn't know about, the gateway today returns a structured
+"not registered" tool result so the model can retry. Full
+forward-back-to-client behaviour is tracked in the Phase 4
+spec.
