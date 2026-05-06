@@ -159,27 +159,27 @@ the future, dispatch continues.
        Resolves the future. Requires the requesting token's
        client tag to match the approval's target client (so the
        ide token can't approve a telegram-bound prompt).
-- [ ] 9e. Telegram bot: add `ApprovalPoller` task that runs
+- [x] 9e. Telegram bot: add `ApprovalPoller` task that runs
        alongside the chat handler. `while True: fetch pending,
        post new ones to Telegram, sleep 500ms`. Tracks which
        approval ids it's already surfaced so we don't re-post.
-- [ ] 9f. Telegram bot: `on_callback_query` handler for the
+- [x] 9f. Telegram bot: `on_callback_query` handler for the
        inline keyboard buttons. Parses callback-data shape
        `approve:<id>` / `reject:<id>` / `trust:<id>` and POSTs
        to gateway's decide endpoint.
-- [ ] 9g. Wire the middleware: when `check` returns `ask` /
+- [x] 9g. Wire the middleware: when `check` returns `ask` /
        `trust_session` and `request_approval` is available,
        await the future (2-hour timeout). Map the resolved
        decision to an `ApprovalDecision`. Keep the "not wired"
        fallback for `yolo` — that comes later.
-- [ ] 9h. Respects allowlist: only allowlisted Telegram user ids
+- [x] 9h. Respects allowlist: only allowlisted Telegram user ids
        see the prompt. Other chat members on a group (if any)
        get nothing. The bot already filters messages this way;
        we just inherit the same check for callback queries.
-- [ ] 9i. 2-hour default timeout; auto-rejects on expiry with a
+- [x] 9i. 2-hour default timeout; auto-rejects on expiry with a
        clear detail message. Configurable via
        `tools.approval_timeout_secs`.
-- [ ] 9j. Tests: approval future lifecycle (pending, resolved,
+- [x] 9j. Tests: approval future lifecycle (pending, resolved,
        timeout), HTTP endpoint auth + client-tag matching, bot
        poller fetches + dedupes, callback handler posts back the
        right shape.

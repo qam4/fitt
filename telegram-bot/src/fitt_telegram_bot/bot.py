@@ -9,15 +9,22 @@ module can be unit-tested without pulling in the full PTB graph.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from gateway.sessions import SessionRegistry
-from telegram import Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+)
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -25,6 +32,12 @@ from telegram.ext import (
 )
 
 from . import handlers
+from .approval import (
+    ApprovalPoller,
+    build_callback_data,
+    format_prompt,
+    parse_callback_data,
+)
 from .config import TelegramBotConfig
 from .gateway_client import GatewayClient
 from .handlers import IncomingUpdate, Services
@@ -62,7 +75,145 @@ def build_application(bot_config: TelegramBotConfig) -> Application[Any, Any, An
     app.add_handler(MessageHandler(filters.VOICE & ~filters.COMMAND, _wrap_command(_on_voice)))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _wrap_command(_on_text)))
 
+    # Approval UI: inline-keyboard callback handler + background
+    # poller. The poller is started via post_init so it runs
+    # alongside update-processing on the same event loop. The
+    # post_init/post_shutdown assignments are type-ignored because
+    # PTB's stubs type these as a concrete (overly-parameterised)
+    # Application type; we hand in generic Any-parameterised
+    # callables so our code works against any Application shape.
+    app.add_handler(CallbackQueryHandler(_on_approval_callback))
+    app.post_init = _make_post_init(bot_config, services)  # type: ignore[assignment]
+    app.post_shutdown = _on_post_shutdown
+
     return app
+
+
+# ---------- approval poller lifecycle ----------------------------
+
+
+def _make_post_init(
+    bot_config: TelegramBotConfig, services: Services
+) -> Callable[[Application[Any, Any, Any, Any, Any, Any]], Awaitable[None]]:
+    """Returns a PTB `post_init` coroutine that starts the
+    approval poller as a background task."""
+
+    async def _post_init(app: Application[Any, Any, Any, Any, Any, Any]) -> None:
+        poller = ApprovalPoller(
+            gateway=services.gateway,
+            allowlist=bot_config.allowlist_user_ids,
+            on_prompt=_make_on_prompt(app),
+        )
+        task = asyncio.create_task(poller.run(), name="approval-poller")
+        app.bot_data["approval_poller"] = poller
+        app.bot_data["approval_poller_task"] = task
+        _log.info("telegram.approval_poller.scheduled")
+
+    return _post_init
+
+
+async def _on_post_shutdown(app: Application[Any, Any, Any, Any, Any, Any]) -> None:
+    """Stop the poller cleanly on bot shutdown."""
+    poller = app.bot_data.get("approval_poller")
+    if poller is not None:
+        poller.stop()
+    task = app.bot_data.get("approval_poller_task")
+    if task is not None:
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (TimeoutError, asyncio.CancelledError):
+            task.cancel()
+
+
+def _make_on_prompt(
+    app: Application[Any, Any, Any, Any, Any, Any],
+) -> Callable[[int, dict[str, Any]], Awaitable[None]]:
+    """Return an ``on_prompt`` callback bound to this PTB app's
+    bot handle. The poller uses this to post approval messages
+    to allowlisted users."""
+
+    async def _on_prompt(user_id: int, entry: dict[str, Any]) -> None:
+        ap_id = entry.get("id", "")
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Approve", callback_data=build_callback_data("approve", ap_id)
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Reject", callback_data=build_callback_data("reject", ap_id)
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔓 Trust session",
+                        callback_data=build_callback_data("trust_session", ap_id),
+                    )
+                ],
+            ]
+        )
+        try:
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=format_prompt(entry),
+                reply_markup=keyboard,
+            )
+        except Exception as e:
+            _log.warning(
+                "telegram.approval_prompt_failed",
+                extra={"user_id": user_id, "approval_id": ap_id, "error": str(e)},
+            )
+
+    return _on_prompt
+
+
+async def _on_approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle an inline-keyboard button press on an approval prompt.
+
+    Validates the callback payload, enforces the allowlist, posts
+    the decision to the gateway, edits the original message to
+    show the outcome.
+    """
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+
+    services = cast(Services, context.bot_data["services"])
+    user = update.effective_user
+    if user is None or user.id not in services.allowlist:
+        # Silently acknowledge to dismiss the spinner; don't
+        # give any signal about what the callback is for.
+        await query.answer()
+        return
+
+    try:
+        decision, approval_id = parse_callback_data(query.data)
+    except ValueError as e:
+        _log.warning("telegram.approval_callback.malformed", extra={"error": str(e)})
+        await query.answer("Invalid callback data.", show_alert=False)
+        return
+
+    ok, detail = await services.gateway.decide_approval(approval_id, decision)
+    await query.answer()  # dismiss the spinner
+
+    # Edit the original message so the user sees the outcome.
+    outcome = f"✅ {decision.replace('_', ' ')}" if ok else f"⚠️ Failed: {detail or 'unknown error'}"
+    msg = query.message
+    if isinstance(msg, Message):
+        try:
+            original_text = msg.text or ""
+            await context.bot.edit_message_text(
+                chat_id=msg.chat_id,
+                message_id=msg.message_id,
+                text=f"{original_text}\n\n{outcome}",
+            )
+        except Exception as e:
+            # The message may already have been edited (double-tap);
+            # don't let the UX hiccup propagate as an error.
+            _log.debug(
+                "telegram.approval_edit_failed",
+                extra={"error": str(e), "approval_id": approval_id},
+            )
 
 
 # ---------- wrappers ---------------------------------------------

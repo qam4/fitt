@@ -58,6 +58,76 @@ class GatewayClient:
         data = r.json().get("data", [])
         return [m["id"] for m in data if isinstance(m, dict) and "id" in m]
 
+    async def list_pending_approvals(self, client: str | None = None) -> list[dict[str, Any]]:
+        """GET /v1/approvals/pending[?client=...].
+
+        Returns the ``pending`` array from the response, or an empty
+        list on any error. The approval poller calls this every
+        second, so we swallow transient failures rather than
+        bubbling them up — a logged warning is enough.
+        """
+        params: dict[str, str] = {}
+        if client is not None:
+            params["client"] = client
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            try:
+                r = await http.get(
+                    f"{self._base}/v1/approvals/pending",
+                    headers=self._headers,
+                    params=params,
+                )
+                r.raise_for_status()
+            except httpx.HTTPError as e:
+                _log.warning(
+                    "gateway.list_pending_approvals.failed",
+                    extra={"error": str(e)},
+                )
+                return []
+        pending = r.json().get("pending", [])
+        if not isinstance(pending, list):
+            return []
+        return pending
+
+    async def decide_approval(self, approval_id: str, decision: str) -> tuple[bool, str | None]:
+        """POST /v1/approvals/{id}/decide with {decision: ...}.
+
+        Returns ``(ok, error_detail)``:
+        - ``(True, None)`` on 2xx where the gateway resolved the
+          future.
+        - ``(False, detail)`` on 404/403/etc. ``detail`` is a short
+          human-readable reason suitable for surfacing to the user.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            try:
+                r = await http.post(
+                    f"{self._base}/v1/approvals/{approval_id}/decide",
+                    headers=self._headers,
+                    json={"decision": decision},
+                )
+            except httpx.HTTPError as e:
+                _log.warning(
+                    "gateway.decide_approval.transport_failed",
+                    extra={"error": str(e)},
+                )
+                return False, f"transport error: {e}"
+        if r.status_code // 100 == 2:
+            payload = r.json() if r.content else {}
+            return bool(payload.get("resolved", True)), None
+        # Surface the detail for the user.
+        try:
+            detail = r.json().get("detail", "")
+        except ValueError:
+            detail = r.text
+        _log.info(
+            "gateway.decide_approval.failed",
+            extra={
+                "approval_id": approval_id,
+                "status": r.status_code,
+                "detail": detail,
+            },
+        )
+        return False, f"HTTP {r.status_code}: {detail}"
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
