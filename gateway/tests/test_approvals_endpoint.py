@@ -58,7 +58,7 @@ def client(tmp_path: Path) -> TestClient:
     )
     app = create_app(cfg)
     # Inject a throwaway tool so approvals can be created.
-    app.state.tool_registry.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    app.state.tool_registry.register(_mk_tool("_test_stub_ask", ApprovalBucket.ASK))
     return TestClient(app)
 
 
@@ -89,7 +89,7 @@ def test_list_filters_by_client(client: TestClient, tmp_path: Path) -> None:
     reg = ProjectRegistry(config_path=tmp_path / "projects.yaml")
 
     async def seed() -> tuple[str, str]:
-        tool = app.state.tool_registry.lookup("edit_file")
+        tool = app.state.tool_registry.lookup("_test_stub_ask")
         tg = await approval.request_approval(
             tool,
             {"path": "a.py"},
@@ -134,7 +134,7 @@ def test_list_returns_age_and_summary(client: TestClient, tmp_path: Path) -> Non
     reg = ProjectRegistry(config_path=tmp_path / "projects.yaml")
 
     async def seed() -> str:
-        tool = app.state.tool_registry.lookup("edit_file")
+        tool = app.state.tool_registry.lookup("_test_stub_ask")
         p = await approval.request_approval(
             tool,
             {"path": "foo.py", "message": "fix"},
@@ -149,7 +149,7 @@ def test_list_returns_age_and_summary(client: TestClient, tmp_path: Path) -> Non
         assert len(pending) == 1
         entry = pending[0]
         assert entry["id"] == ap_id
-        assert entry["tool"] == "edit_file"
+        assert entry["tool"] == "_test_stub_ask"
         assert entry["client"] == "telegram"
         assert entry["session"] == "main"
         assert "path='foo.py'" in entry["args_summary"]
@@ -177,7 +177,7 @@ def test_decide_blocks_cross_client(client: TestClient, tmp_path: Path) -> None:
     reg = ProjectRegistry(config_path=tmp_path / "projects.yaml")
 
     async def seed() -> str:
-        tool = app.state.tool_registry.lookup("edit_file")
+        tool = app.state.tool_registry.lookup("_test_stub_ask")
         p = await approval.request_approval(
             tool,
             {},
@@ -207,7 +207,7 @@ def test_decide_resolves_future(client: TestClient, tmp_path: Path) -> None:
     reg = ProjectRegistry(config_path=tmp_path / "projects.yaml")
 
     async def seed_and_wait() -> tuple[str, asyncio.Future[str]]:
-        tool = app.state.tool_registry.lookup("edit_file")
+        tool = app.state.tool_registry.lookup("_test_stub_ask")
         p = await approval.request_approval(
             tool,
             {},

@@ -41,6 +41,7 @@ class FakeBackend:
         cwd: str | None = None,
         timeout_secs: int = 300,
         extra_env: dict[str, str] | None = None,
+        stdin: bytes | None = None,
     ) -> ShellResult:
         self.calls.append(
             {
@@ -114,12 +115,15 @@ def _ctx(projects: ProjectRegistry, backend: FakeBackend) -> ToolContext:
 # --------------------------------------------------------------- registration
 
 
-def test_builder_registers_two_tools(tool_registry: ToolRegistry) -> None:
-    assert tool_registry.list_names() == ["git_diff", "git_status"]
+def test_builder_registers_three_tools(tool_registry: ToolRegistry) -> None:
+    assert tool_registry.list_names() == ["git_commit", "git_diff", "git_status"]
 
 
-def test_all_git_tools_default_to_auto(tool_registry: ToolRegistry) -> None:
-    for t in tool_registry.list_all():
+def test_read_tools_default_to_auto(tool_registry: ToolRegistry) -> None:
+    """Read tools auto-approve. git_commit is separately asserted
+    as ASK in its own test below."""
+    for name in ("git_status", "git_diff"):
+        t = tool_registry.lookup(name)
         assert t.default_bucket == ApprovalBucket.AUTO, t.name
         assert t.requires_project is True
 
@@ -399,3 +403,140 @@ async def test_git_diff_path_wrong_type_errors(
     result = await tool.callable({"project": "hub", "path": ["x"]}, _ctx(project_registry, backend))
     assert result.is_error
     assert "path" in result.payload
+
+
+# --------------------------------------------------------------- git_commit
+
+
+async def test_git_commit_runs_add_then_commit(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """Standard path: stage everything, commit, return git's output."""
+    backend = FakeBackend(
+        responses=[
+            _ok(),  # git add -A
+            _ok(stdout="[main abc1234] Fix the thing\n 1 file changed\n"),  # git commit
+        ]
+    )
+    tool = tool_registry.lookup("git_commit")
+    result = await tool.callable(
+        {"project": "hub", "message": "Fix the thing"},
+        _ctx(project_registry, backend),
+    )
+    assert not result.is_error
+    assert "[main abc1234]" in result.payload
+    assert len(backend.calls) == 2
+    assert backend.calls[0]["cmd"] == ["git", "add", "-A"]
+    assert backend.calls[1]["cmd"] == ["git", "commit", "-m", "Fix the thing"]
+
+
+async def test_git_commit_nothing_to_commit_is_ok(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """Clean working tree → exit 1 with 'nothing to commit' on stdout.
+    That's not a failure; return a friendly OK so the model can
+    tell the difference between 'I didn't need to commit' and
+    'commit broke'."""
+    backend = FakeBackend(
+        responses=[
+            _ok(),  # git add
+            ShellResult(
+                exit=1,
+                stdout=("On branch main\nnothing to commit, working tree clean\n"),
+                stderr="",
+                timed_out=False,
+            ),
+        ]
+    )
+    tool = tool_registry.lookup("git_commit")
+    result = await tool.callable(
+        {"project": "hub", "message": "no-op"},
+        _ctx(project_registry, backend),
+    )
+    assert not result.is_error
+    assert "nothing to commit" in result.payload.lower()
+
+
+async def test_git_commit_surfaces_real_failure(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """Non-zero exit without 'nothing to commit' is a real failure."""
+    backend = FakeBackend(
+        responses=[
+            _ok(),  # git add
+            _err(1, "error: hook rejected the commit\n"),  # git commit
+        ]
+    )
+    tool = tool_registry.lookup("git_commit")
+    result = await tool.callable(
+        {"project": "hub", "message": "wip"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "hook rejected" in result.payload
+
+
+async def test_git_commit_add_failure_short_circuits(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """If git add fails (e.g. permission issue, not a repo), don't
+    attempt the commit."""
+    backend = FakeBackend(responses=[_err(128, "fatal: not a git repository\n")])
+    tool = tool_registry.lookup("git_commit")
+    result = await tool.callable(
+        {"project": "hub", "message": "wip"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "not a git repository" in result.payload
+    # Only the add call ran, no commit.
+    assert len(backend.calls) == 1
+
+
+async def test_git_commit_rejects_empty_message(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    backend = FakeBackend()
+    tool = tool_registry.lookup("git_commit")
+    result = await tool.callable(
+        {"project": "hub", "message": ""},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "non-empty" in result.payload
+    assert backend.calls == []
+
+
+async def test_git_commit_rejects_whitespace_only_message(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    backend = FakeBackend()
+    tool = tool_registry.lookup("git_commit")
+    result = await tool.callable(
+        {"project": "hub", "message": "   \n\t  "},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "non-empty" in result.payload
+
+
+async def test_git_commit_preserves_multiline_message(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """The commit message may contain newlines (subject + body);
+    argv passthrough handles this cleanly via the ExecutionBackend."""
+    message = "Fix the thing\n\nLong explanation\nwith newlines.\n"
+    backend = FakeBackend(responses=[_ok(), _ok(stdout="[main abc] Fix the thing\n")])
+    tool = tool_registry.lookup("git_commit")
+    result = await tool.callable(
+        {"project": "hub", "message": message},
+        _ctx(project_registry, backend),
+    )
+    assert not result.is_error
+    # The message flows through as a single argv element.
+    assert backend.calls[1]["cmd"] == ["git", "commit", "-m", message]
+
+
+async def test_git_commit_default_bucket_is_ask(tool_registry: ToolRegistry) -> None:
+    tool = tool_registry.lookup("git_commit")
+    assert tool.default_bucket == ApprovalBucket.ASK

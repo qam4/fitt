@@ -120,6 +120,7 @@ class ExecutionBackend:
         cwd: str | None = None,
         timeout_secs: int = _DEFAULT_TIMEOUT_S,
         extra_env: dict[str, str] | None = None,
+        stdin: bytes | None = None,
     ) -> ShellResult:
         """Run ``cmd`` on the project's execution host.
 
@@ -128,6 +129,12 @@ class ExecutionBackend:
         is non-empty the command is wrapped in
         ``ssh <host> 'cd <cwd> && <cmd>'``; when empty the command
         runs locally with ``cwd`` as the working directory.
+
+        When ``stdin`` is provided, the bytes are piped into the
+        child's stdin. For SSH projects this flows through the ssh
+        client to the remote command — useful for streaming file
+        contents to a ``cat > <path>`` on the satellite without
+        having to escape them inside an argv.
 
         The result's ``stdout``/``stderr`` are UTF-8 decoded with
         ``errors="replace"`` so a binary blob in stderr can't crash
@@ -149,6 +156,7 @@ class ExecutionBackend:
                 "argv": argv,
                 "cwd": local_cwd,
                 "timeout_secs": timeout_secs,
+                "stdin_bytes": len(stdin) if stdin else 0,
             },
         )
 
@@ -156,11 +164,19 @@ class ExecutionBackend:
             *argv,
             cwd=local_cwd,
             env=env,
+            stdin=asyncio.subprocess.PIPE if stdin is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_secs)
+            if stdin is not None:
+                stdout_b, stderr_b = await asyncio.wait_for(
+                    proc.communicate(input=stdin), timeout=timeout_secs
+                )
+            else:
+                stdout_b, stderr_b = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout_secs
+                )
         except TimeoutError:
             proc.kill()
             # Drain pipes so the child doesn't zombie.

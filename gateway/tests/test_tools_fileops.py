@@ -48,6 +48,7 @@ class FakeBackend:
         cwd: str | None = None,
         timeout_secs: int = 300,
         extra_env: dict[str, str] | None = None,
+        stdin: bytes | None = None,
     ) -> ShellResult:
         self.calls.append(
             {
@@ -57,6 +58,7 @@ class FakeBackend:
                 "cwd": cwd,
                 "timeout_secs": timeout_secs,
                 "extra_env": dict(extra_env) if extra_env else None,
+                "stdin": stdin,
             }
         )
         if not self.responses:
@@ -122,15 +124,33 @@ def _ctx(projects: ProjectRegistry, backend: FakeBackend) -> ToolContext:
 # --------------------------------------------------------------- registration
 
 
-def test_builder_registers_four_tools(tool_registry: ToolRegistry) -> None:
+def test_builder_registers_six_tools(tool_registry: ToolRegistry) -> None:
     names = tool_registry.list_names()
-    assert names == ["glob_search", "grep_repo", "list_directory", "read_file"]
+    assert names == [
+        "edit_file",
+        "glob_search",
+        "grep_repo",
+        "list_directory",
+        "read_file",
+        "write_file",
+    ]
 
 
-def test_all_fileops_default_to_auto(tool_registry: ToolRegistry) -> None:
+def test_read_tools_default_to_auto(tool_registry: ToolRegistry) -> None:
+    """Read tools auto-approve (fast, harmless)."""
+    read_tool_names = {"read_file", "list_directory", "grep_repo", "glob_search"}
     for t in tool_registry.list_all():
-        assert t.default_bucket == ApprovalBucket.AUTO, t.name
+        if t.name in read_tool_names:
+            assert t.default_bucket == ApprovalBucket.AUTO, t.name
         assert t.requires_project is True
+
+
+def test_write_tools_default_to_ask(tool_registry: ToolRegistry) -> None:
+    """Write tools require approval by default. Per-client policy
+    (e.g. ide=auto) is configured in config.yaml, not here."""
+    for name in ("write_file", "edit_file"):
+        tool = tool_registry.lookup(name)
+        assert tool.default_bucket == ApprovalBucket.ASK
 
 
 # --------------------------------------------------------------- read_file
@@ -507,3 +527,281 @@ async def test_glob_search_missing_pattern(
     result = await tool.callable({"project": "hub"}, _ctx(project_registry, backend))
     assert result.is_error
     assert "pattern" in result.payload
+
+
+# --------------------------------------------------------------- write_file
+
+
+async def test_write_file_pipes_content_through_stdin(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """write_file uses `cat > <path>` piped with stdin so content
+    with quotes, newlines, or shell metacharacters passes through
+    unchanged."""
+    backend = FakeBackend(responses=[_ok()])
+    tool = tool_registry.lookup("write_file")
+    content = 'line 1\nline "2"\n$not_a_var\n'
+    result = await tool.callable(
+        {"project": "hub", "path": "src/new_file.py", "content": content},
+        _ctx(project_registry, backend),
+    )
+    assert not result.is_error
+    assert "wrote" in result.payload
+    # The command runs sh -c so parent dirs are made and cat reads stdin.
+    assert backend.calls[0]["cmd"][0] == "sh"
+    assert backend.calls[0]["cmd"][1] == "-c"
+    script = backend.calls[0]["cmd"][2]
+    assert "mkdir -p" in script
+    assert "cat > " in script
+    # stdin should carry the exact content bytes.
+    assert backend.calls[0]["stdin"] == content.encode("utf-8")
+
+
+async def test_write_file_rejects_traversal(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    backend = FakeBackend()
+    tool = tool_registry.lookup("write_file")
+    result = await tool.callable(
+        {"project": "hub", "path": "../escape.txt", "content": "x"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "Path rejected" in result.payload
+    assert backend.calls == []
+
+
+async def test_write_file_rejects_project_root(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """Writing to `.` / the project root itself doesn't make sense
+    (there's no file to create) and would be confusing; reject."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("write_file")
+    result = await tool.callable(
+        {"project": "hub", "path": ".", "content": "x"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "project root" in result.payload
+
+
+async def test_write_file_rejects_nonstring_content(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    backend = FakeBackend()
+    tool = tool_registry.lookup("write_file")
+    result = await tool.callable(
+        {"project": "hub", "path": "x.py", "content": 42},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "content" in result.payload
+
+
+async def test_write_file_rejects_oversized_content(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """Guard against the model trying to write a multi-megabyte
+    single file (usually a bug: a dump, a long log)."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("write_file")
+    huge = "x" * 600_000
+    result = await tool.callable(
+        {"project": "hub", "path": "big.bin", "content": huge},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "exceeds" in result.payload
+    assert backend.calls == []
+
+
+async def test_write_file_surfaces_backend_error(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    backend = FakeBackend(responses=[_err(1, "sh: cannot create file: Permission denied\n")])
+    tool = tool_registry.lookup("write_file")
+    result = await tool.callable(
+        {"project": "hub", "path": "src/x.py", "content": "pass"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "Permission denied" in result.payload
+
+
+async def test_write_file_works_over_ssh(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """Same tool, remote project; stdin flows through ssh."""
+    backend = FakeBackend(responses=[_ok()])
+    tool = tool_registry.lookup("write_file")
+    result = await tool.callable(
+        {"project": "remote", "path": "src/a.py", "content": "y = 2\n"},
+        _ctx(project_registry, backend),
+    )
+    assert not result.is_error
+    assert backend.calls[0]["ssh_host"] == "laptop.tailnet"
+    assert backend.calls[0]["stdin"] == b"y = 2\n"
+
+
+# --------------------------------------------------------------- edit_file
+
+
+async def test_edit_file_happy_path(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """Read current file, find exactly one occurrence, write the
+    modified content back. Two backend calls: cat then write."""
+    original = "def hello():\n    print('hi')\n"
+    backend = FakeBackend(
+        responses=[
+            _ok(stdout=original),  # cat returns current file
+            _ok(),  # cat > path write succeeds
+        ]
+    )
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "hello.py",
+            "old_str": "print('hi')",
+            "new_str": "print('hello')",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert not result.is_error
+    assert "1 occurrence" in result.payload
+    # Two calls: cat then sh -c 'cat > ...'
+    assert len(backend.calls) == 2
+    assert backend.calls[0]["cmd"][0] == "cat"
+    assert backend.calls[1]["cmd"][0] == "sh"
+    # Written stdin is the original with the replacement applied.
+    written = backend.calls[1]["stdin"].decode("utf-8")
+    assert "print('hello')" in written
+    assert "print('hi')" not in written
+
+
+async def test_edit_file_rejects_zero_occurrences(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """old_str not in file → hard error; don't write anything."""
+    backend = FakeBackend(responses=[_ok(stdout="unrelated content\n")])
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "x.py",
+            "old_str": "never there",
+            "new_str": "replacement",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "not found" in result.payload
+    # Only the read happened; no write.
+    assert len(backend.calls) == 1
+
+
+async def test_edit_file_rejects_multiple_occurrences(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """old_str appears multiple times → ambiguous; refuse."""
+    backend = FakeBackend(responses=[_ok(stdout="foo\nfoo\nfoo\n")])
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "x.py",
+            "old_str": "foo",
+            "new_str": "bar",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "matches 3 places" in result.payload
+    assert len(backend.calls) == 1  # no write
+
+
+async def test_edit_file_empty_old_str(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """Empty old_str would match everywhere; reject."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "x.py",
+            "old_str": "",
+            "new_str": "y",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "non-empty" in result.payload
+    assert backend.calls == []
+
+
+async def test_edit_file_empty_new_str_is_ok(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """Empty new_str means 'delete the matched region', a valid op."""
+    backend = FakeBackend(
+        responses=[
+            _ok(stdout="keep\nremove me\nkeep\n"),
+            _ok(),
+        ]
+    )
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "x.py",
+            "old_str": "remove me\n",
+            "new_str": "",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert not result.is_error
+    written = backend.calls[1]["stdin"].decode("utf-8")
+    assert written == "keep\nkeep\n"
+
+
+async def test_edit_file_rejects_traversal(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    backend = FakeBackend()
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "../../etc/passwd",
+            "old_str": "root",
+            "new_str": "pwn",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "Path rejected" in result.payload
+    assert backend.calls == []
+
+
+async def test_edit_file_read_failure_surfaces(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """If the initial read fails (file doesn't exist), no write
+    attempt happens."""
+    backend = FakeBackend(responses=[_err(1, "cat: nope.py: No such file or directory\n")])
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "nope.py",
+            "old_str": "x",
+            "new_str": "y",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "No such file" in result.payload
+    assert len(backend.calls) == 1

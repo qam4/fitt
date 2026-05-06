@@ -136,3 +136,45 @@ memory:
   # if you need a different location.
   # identity_dir: /absolute/override/only/if/you/care
   # sessions_dir: /absolute/override/only/if/you/care
+
+# ------------------------------------------------------------------
+# Tools (Phase 4+)
+# ------------------------------------------------------------------
+# The tool registry picks sane defaults — reads auto-approve,
+# writes (write_file, edit_file, git_commit) require approval.
+# Override here per tool or per client tag.
+#
+# Most operators don't need this block at all. The common reasons
+# to add it:
+#
+# 1. Loosen write tools for the IDE (Continue shows diffs
+#    natively, so an extra prompt is just friction).
+# 2. Tighten Open WebUI further than the built-in least-trust
+#    default.
+# 3. Raise the approval timeout past the 45s default when you
+#    want more runway to tap approvals on mobile.
+#
+# tools:
+#   # Global knobs:
+#   approval_timeout_secs: 45   # how long to wait for a tap
+#
+#   # Per-tool defaults (can be wildcards for MCP tools):
+#   write_file:
+#     default: ask
+#   edit_file:
+#     default: ask
+#   git_commit:
+#     default: ask
+#
+#   # Per-client overrides: keyed by client tag (ide, telegram,
+#   # webui, cli). Flattens "write_file in the IDE should auto-
+#   # approve but from Telegram should ask":
+#   per_client:
+#     ide:
+#       write_file: auto
+#       edit_file: auto
+#       git_commit: auto
+#     webui:
+#       write_file: block
+#       edit_file: block
+#       git_commit: block

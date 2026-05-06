@@ -27,9 +27,11 @@ from ._types import ApprovalBucket, Tool, ToolContext, ToolResult
 
 _STATUS_CAP_BYTES = 64_000
 _DIFF_CAP_BYTES = 64_000
+_COMMIT_CAP_BYTES = 8_000
 
 _STATUS_TIMEOUT = 30
 _DIFF_TIMEOUT = 60
+_COMMIT_TIMEOUT = 60
 
 # --------------------------------------------------------------- schemas
 
@@ -64,6 +66,24 @@ _SCHEMA_GIT_DIFF: dict[str, Any] = {
         },
     },
     "required": ["project"],
+    "additionalProperties": False,
+}
+
+_SCHEMA_GIT_COMMIT: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "project": _PROJECT_ARG,
+        "message": {
+            "type": "string",
+            "description": (
+                "Commit message. Follows git's conventions: the "
+                "first line is the subject (≤72 chars), blank line, "
+                "then the body. Don't include surrounding quotes; "
+                "pass the raw text."
+            ),
+        },
+    },
+    "required": ["project", "message"],
     "additionalProperties": False,
 }
 
@@ -225,6 +245,62 @@ async def _tool_git_diff(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     return ToolResult.ok(_truncate(out, _DIFF_CAP_BYTES, "diff scope"))
 
 
+# --------------------------------------------------------------- git_commit
+
+
+async def _tool_git_commit(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    """Stage all changes and commit with the given message.
+
+    Implied ``git add -A`` so callers don't have to reason about
+    staging semantics. If there's nothing to commit, returns a
+    clear "(nothing to commit)" rather than an error, so the LLM
+    can distinguish "I didn't need to commit" from "commit broke".
+    """
+    resolved = _resolve_project_for_tool(args, ctx)
+    if isinstance(resolved, ToolResult):
+        return resolved
+    project, backend = resolved
+
+    message = args.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return ToolResult.error("Argument 'message' must be a non-empty string")
+    if len(message.encode("utf-8")) > _COMMIT_CAP_BYTES:
+        return ToolResult.error(
+            f"commit message exceeds {_COMMIT_CAP_BYTES} bytes. "
+            "Shorten it or use a commit-message file workflow outside FITT."
+        )
+
+    # `git add -A` stages every change (tracked, untracked, deletions).
+    add = await backend.run_shell(project, ["git", "add", "-A"], timeout_secs=_COMMIT_TIMEOUT)
+    if add.timed_out:
+        return ToolResult.error(add.stderr)
+    if add.exit != 0:
+        return ToolResult.error((add.stderr or f"git add exited {add.exit}").strip())
+
+    # `--allow-empty-message` isn't set — if the model sends "", we
+    # already caught it above. Use `-m` to pass the message as a
+    # single argv item; argv is quoted by the backend on SSH, so
+    # embedded newlines, quotes, and shell metacharacters all pass
+    # through unchanged.
+    commit = await backend.run_shell(
+        project, ["git", "commit", "-m", message], timeout_secs=_COMMIT_TIMEOUT
+    )
+    if commit.timed_out:
+        return ToolResult.error(commit.stderr)
+    if commit.exit == 0:
+        return ToolResult.ok(_truncate(commit.stdout.strip(), _DIFF_CAP_BYTES, "commit output"))
+
+    # Distinguish "nothing to commit" from real failures. git prints
+    # a message like "nothing to commit, working tree clean" to
+    # stdout with exit 1 in that case.
+    combined = (commit.stdout + commit.stderr).lower()
+    if "nothing to commit" in combined:
+        return ToolResult.ok("(nothing to commit; working tree clean)")
+    return ToolResult.error(
+        (commit.stderr or commit.stdout or f"git commit exited {commit.exit}").strip()
+    )
+
+
 # --------------------------------------------------------------- builder
 
 
@@ -253,6 +329,19 @@ def build_git_tools() -> list[Tool]:
             schema=_SCHEMA_GIT_DIFF,
             callable=_tool_git_diff,
             default_bucket=ApprovalBucket.AUTO,
+            requires_project=True,
+            kind="inline",
+        ),
+        Tool(
+            name="git_commit",
+            description=(
+                "Stage all changes (implied `git add -A`) and commit "
+                "with the given message. Returns '(nothing to commit)' "
+                "cleanly when the working tree is already clean."
+            ),
+            schema=_SCHEMA_GIT_COMMIT,
+            callable=_tool_git_commit,
+            default_bucket=ApprovalBucket.ASK,
             requires_project=True,
             kind="inline",
         ),

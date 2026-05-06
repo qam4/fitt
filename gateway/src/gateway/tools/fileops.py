@@ -42,12 +42,22 @@ _LIST_CAP_BYTES = 64_000
 _GREP_CAP_BYTES = 64_000
 _GLOB_CAP_BYTES = 64_000
 
+_WRITE_CAP_BYTES = 500_000
+"""Cap on ``write_file`` / ``edit_file`` output sizes (content the
+model is asking us to write). Larger than the read cap because a
+programmatic codegen pass may legitimately produce a larger file
+than a human would ever read in one go; smaller than 1 MB because
+the model's own context wouldn't have coherently produced that
+much in a single turn anyway."""
+
 # Timeouts per tool. Read and list are fast; grep and find can
 # traverse large trees, so give them more room but still bounded.
 _READ_TIMEOUT = 30
 _LIST_TIMEOUT = 30
 _GREP_TIMEOUT = 120
 _GLOB_TIMEOUT = 60
+_WRITE_TIMEOUT = 60
+_EDIT_TIMEOUT = 60
 
 
 # --------------------------------------------------------------- schemas
@@ -115,6 +125,50 @@ _SCHEMA_GLOB_SEARCH = {
         },
     },
     "required": ["project", "pattern"],
+    "additionalProperties": False,
+}
+
+_SCHEMA_WRITE_FILE = {
+    "type": "object",
+    "properties": {
+        "project": _PROJECT_ARG,
+        "path": _PATH_ARG,
+        "content": {
+            "type": "string",
+            "description": (
+                "Full new contents of the file. Overwrites if the "
+                "file exists; creates parent directories as needed. "
+                "Use edit_file for a surgical change on a large file."
+            ),
+        },
+    },
+    "required": ["project", "path", "content"],
+    "additionalProperties": False,
+}
+
+_SCHEMA_EDIT_FILE = {
+    "type": "object",
+    "properties": {
+        "project": _PROJECT_ARG,
+        "path": _PATH_ARG,
+        "old_str": {
+            "type": "string",
+            "description": (
+                "Exact string currently in the file to be replaced. "
+                "Must appear exactly once, anywhere in the file. "
+                "Include enough context (surrounding lines) for "
+                "uniqueness."
+            ),
+        },
+        "new_str": {
+            "type": "string",
+            "description": (
+                "Replacement string. May be empty to delete the "
+                "matched region. Whitespace is preserved verbatim."
+            ),
+        },
+    },
+    "required": ["project", "path", "old_str", "new_str"],
     "additionalProperties": False,
 }
 
@@ -307,6 +361,154 @@ async def _tool_glob_search(args: dict[str, Any], ctx: ToolContext) -> ToolResul
     return ToolResult.ok(_truncate(out, _GLOB_CAP_BYTES, "pattern"))
 
 
+# --------------------------------------------------------------- write_file
+
+
+async def _tool_write_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    """Overwrite (or create) a file with the given content.
+
+    Implemented as ``mkdir -p <dir> && cat > <file>`` piped through
+    stdin so content with quotes, newlines, or shell metacharacters
+    flows through unchanged. Works hub-local and over SSH.
+    """
+    resolved = _resolve_project_for_tool(args, ctx)
+    if isinstance(resolved, ToolResult):
+        return resolved
+    project, backend = resolved
+
+    path = args.get("path")
+    if not isinstance(path, str) or not path:
+        return ToolResult.error("Missing required argument: path")
+    content = args.get("content")
+    if not isinstance(content, str):
+        return ToolResult.error("Missing or non-string argument: content")
+    if len(content.encode("utf-8")) > _WRITE_CAP_BYTES:
+        return ToolResult.error(
+            f"content exceeds {_WRITE_CAP_BYTES} bytes. Split the write "
+            "into smaller files, or use edit_file on an existing one."
+        )
+    safe = _safe_path(path, project.path)
+    if safe is None or safe == ".":
+        return ToolResult.error(
+            f"Path rejected (escapes project root, uses '..', or is the "
+            f"project root itself): {path!r}"
+        )
+
+    # Compose `mkdir -p $(dirname <path>) && cat > <path>`. Both
+    # commands run through sh so the shell handles the redirection;
+    # we control `safe` so there's no injection risk (path has been
+    # validated by _safe_path and will be shlex-quoted by the
+    # ExecutionBackend when it builds the ssh remote command).
+    import shlex
+
+    script = f"mkdir -p -- {shlex.quote(_dirname(safe))} && cat > {shlex.quote(safe)}"
+    result = await backend.run_shell(
+        project,
+        ["sh", "-c", script],
+        timeout_secs=_WRITE_TIMEOUT,
+        stdin=content.encode("utf-8"),
+    )
+    if result.timed_out:
+        return ToolResult.error(result.stderr)
+    if result.exit != 0:
+        return ToolResult.error((result.stderr or f"write exited {result.exit}").strip())
+    return ToolResult.ok(f"wrote {len(content)} chars to {safe}")
+
+
+def _dirname(path: str) -> str:
+    """Return the directory portion of a POSIX-style path.
+
+    Not using ``os.path.dirname`` because the path will be
+    interpreted on the execution host which may be Linux while
+    the gateway runs on Windows — POSIX semantics are what
+    matter, not local OS semantics."""
+    if "/" not in path:
+        return "."
+    head = path.rsplit("/", 1)[0]
+    return head if head else "/"
+
+
+# --------------------------------------------------------------- edit_file
+
+
+async def _tool_edit_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    """Surgical replacement: find ``old_str`` once, replace with
+    ``new_str``.
+
+    Refuses if ``old_str`` appears zero times (caller's context is
+    stale) or more than once (caller's context is ambiguous and
+    the LLM should include more surrounding text). This is the
+    tool contract every agent-IDE uses for the same reason: a
+    silent multi-replace is a silent bug."""
+    resolved = _resolve_project_for_tool(args, ctx)
+    if isinstance(resolved, ToolResult):
+        return resolved
+    project, backend = resolved
+
+    path = args.get("path")
+    if not isinstance(path, str) or not path:
+        return ToolResult.error("Missing required argument: path")
+    old_str = args.get("old_str")
+    new_str = args.get("new_str")
+    if not isinstance(old_str, str) or old_str == "":
+        return ToolResult.error("Argument 'old_str' must be a non-empty string")
+    if not isinstance(new_str, str):
+        return ToolResult.error("Argument 'new_str' must be a string (may be empty)")
+    safe = _safe_path(path, project.path)
+    if safe is None or safe == ".":
+        return ToolResult.error(
+            f"Path rejected (escapes project root, uses '..', or is the "
+            f"project root itself): {path!r}"
+        )
+
+    # Read current content via cat.
+    read_result = await backend.run_shell(project, ["cat", "--", safe], timeout_secs=_READ_TIMEOUT)
+    if read_result.timed_out:
+        return ToolResult.error(read_result.stderr)
+    if read_result.exit != 0:
+        return ToolResult.error((read_result.stderr or f"cat exited {read_result.exit}").strip())
+    current = read_result.stdout
+
+    # Validate exactly-one-occurrence.
+    count = current.count(old_str)
+    if count == 0:
+        return ToolResult.error(
+            f"old_str not found in {safe}. Re-read the file with read_file "
+            "and include enough surrounding context for a unique match."
+        )
+    if count > 1:
+        return ToolResult.error(
+            f"old_str matches {count} places in {safe}. Include more "
+            "surrounding context so the match is unique."
+        )
+
+    new_content = current.replace(old_str, new_str, 1)
+    if len(new_content.encode("utf-8")) > _WRITE_CAP_BYTES:
+        return ToolResult.error(
+            f"edited content would exceed {_WRITE_CAP_BYTES} bytes. "
+            "Consider splitting the file instead."
+        )
+
+    # Stream the new content back via cat > path. Parent dir is
+    # known to exist because we just read from it.
+    import shlex
+
+    script = f"cat > {shlex.quote(safe)}"
+    write_result = await backend.run_shell(
+        project,
+        ["sh", "-c", script],
+        timeout_secs=_EDIT_TIMEOUT,
+        stdin=new_content.encode("utf-8"),
+    )
+    if write_result.timed_out:
+        return ToolResult.error(write_result.stderr)
+    if write_result.exit != 0:
+        return ToolResult.error(
+            (write_result.stderr or f"write exited {write_result.exit}").strip()
+        )
+    return ToolResult.ok(f"replaced 1 occurrence in {safe} ({len(old_str)} → {len(new_str)} chars)")
+
+
 # --------------------------------------------------------------- builder
 
 
@@ -353,6 +555,33 @@ def build_fileops_tools() -> list[Tool]:
             schema=_SCHEMA_GLOB_SEARCH,
             callable=_tool_glob_search,
             default_bucket=ApprovalBucket.AUTO,
+            requires_project=True,
+            kind="inline",
+        ),
+        Tool(
+            name="write_file",
+            description=(
+                "Create or overwrite a file with the given content. "
+                "Parent directories are created as needed. Fails if "
+                "the path escapes the project root. Prefer edit_file "
+                "for surgical changes on large files."
+            ),
+            schema=_SCHEMA_WRITE_FILE,
+            callable=_tool_write_file,
+            default_bucket=ApprovalBucket.ASK,
+            requires_project=True,
+            kind="inline",
+        ),
+        Tool(
+            name="edit_file",
+            description=(
+                "Replace an exact substring in a file. Fails if "
+                "old_str appears zero or more than once; include "
+                "enough surrounding context to make the match unique."
+            ),
+            schema=_SCHEMA_EDIT_FILE,
+            callable=_tool_edit_file,
+            default_bucket=ApprovalBucket.ASK,
             requires_project=True,
             kind="inline",
         ),

@@ -202,13 +202,14 @@ just a known rough edge.
 
 ## 10. Write-gated inline tools
 
-- [ ] 10a. `write_file(project, path, content)`.
-- [ ] 10b. `edit_file(project, path, old_str, new_str)`. Verifies
+- [x] 10a. `write_file(project, path, content)`.
+- [x] 10b. `edit_file(project, path, old_str, new_str)`. Verifies
        the old string appears exactly once before replacing.
-- [ ] 10c. `git_commit(project, message)`. Implied `git add -A`.
-- [ ] 10d. Default bucket `ask` per config; auto for `ide` client
-       via per-client override.
-- [ ] 10e. Tests.
+- [x] 10c. `git_commit(project, message)`. Implied `git add -A`.
+- [x] 10d. Default bucket `ask` per config; auto for `ide` client
+       via per-client override. (Documented in
+       `configs/config.example.yaml`; operators opt in.)
+- [x] 10e. Tests.
 
 ## 11. Shell-adjacent tools
 
