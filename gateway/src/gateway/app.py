@@ -93,6 +93,7 @@ def create_app(config: Config) -> FastAPI:
         build_fileops_tools,
         build_git_tools,
         build_inline_tools,
+        build_shell_tools,
     )
 
     app.state.project_registry = ProjectRegistry(default_projects_path())
@@ -138,6 +139,8 @@ def create_app(config: Config) -> FastAPI:
     for t in build_fileops_tools():
         tool_registry.register(t)
     for t in build_git_tools():
+        tool_registry.register(t)
+    for t in build_shell_tools():
         tool_registry.register(t)
     app.state.tool_registry = tool_registry
     if tool_policy.approval_timeout_secs is not None:

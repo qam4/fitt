@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     # Avoid the import cycle: projects.py already imports from config
     # and we don't want tools/* to pull the project registry eagerly.
     from ..projects import ProjectRegistry
+    from .registry import ToolPolicy
 
 
 # --------------------------------------------------------------- buckets
@@ -182,6 +183,14 @@ class ToolContext:
     projects imports nothing in tools). Tools that need it
     should cast/type-ignore at the call site. Optional because
     the Task 4 read-only spec tools don't need it."""
+
+    policy: ToolPolicy | None = None
+    """The parsed ``tools:`` section of config.yaml. Tools that
+    have per-tool config fields (``deny_hosts`` on ``http_get``,
+    for example) read them via
+    ``ctx.policy.per_tool_extras.get(tool_name, {})``. Optional
+    so tests can supply a minimal context without building a
+    policy."""
 
     # Future additions (Task 13+):
     #   audit:   AuditLog           -- write one entry per call

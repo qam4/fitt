@@ -213,9 +213,9 @@ just a known rough edge.
 
 ## 11. Shell-adjacent tools
 
-- [ ] 11a. `run_tests(project)`. Uses `project.test_command`.
-- [ ] 11b. `http_get(url)`. Respects `deny_hosts` from config.
-- [ ] 11c. Tests.
+- [x] 11a. `run_tests(project)`. Uses `project.test_command`.
+- [x] 11b. `http_get(url)`. Respects `deny_hosts` from config.
+- [x] 11c. Tests.
 
 ## 12. Deny list
 

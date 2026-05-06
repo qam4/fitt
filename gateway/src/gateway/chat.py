@@ -485,6 +485,7 @@ def _build_tool_context(request: Request) -> ToolContext:
         session_key="main",
         projects=request.app.state.project_registry,
         backend=request.app.state.execution_backend,
+        policy=request.app.state.tool_registry.policy,
     )
 
 
@@ -736,6 +737,7 @@ async def chat_completions(request: Request) -> Response:
             session_key=session_id,
             projects=request.app.state.project_registry,
             backend=request.app.state.execution_backend,
+            policy=tool_registry.policy,
         )
         return await _run_tool_loop(
             parsed=parsed,

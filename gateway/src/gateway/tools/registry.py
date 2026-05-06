@@ -159,6 +159,14 @@ class ToolPolicy:
     """Nested overrides keyed by client tag, then by tool name.
     e.g. ``{"ide": {"write_file": AUTO}, "webui": {"write_file": BLOCK}}``."""
 
+    per_tool_extras: dict[str, dict[str, Any]] = field(default_factory=dict)
+    """Extra config fields declared under a tool entry, excluding
+    ``default``. For example ``{"http_get": {"deny_hosts": [...]}}``.
+    Tools read their own extras via
+    ``ctx.policy.per_tool_extras.get(tool_name, {})``. Exposed as a
+    dict so individual tools don't have to share a Pydantic schema
+    just to carry a couple of config fields."""
+
     approval_timeout_secs: float | None = None
     """How long the middleware waits on an ``ask`` /
     ``trust_session`` future before auto-rejecting. ``None`` means
@@ -171,18 +179,26 @@ class ToolPolicy:
         parsed = ToolPolicyConfig.from_raw(raw_tools)
         per_tool_default: dict[str, ApprovalBucket] = {}
         per_tool_wildcard: list[tuple[str, ApprovalBucket]] = []
+        per_tool_extras: dict[str, dict[str, Any]] = {}
         for name, entry in parsed.per_tool.items():
-            if entry.default is None:
-                # Name appears in YAML but defines no bucket; skip.
-                continue
-            if _is_wildcard(name):
-                per_tool_wildcard.append((name, entry.default))
-            else:
-                per_tool_default[name] = entry.default
+            if entry.default is not None:
+                if _is_wildcard(name):
+                    per_tool_wildcard.append((name, entry.default))
+                else:
+                    per_tool_default[name] = entry.default
+            # Capture extras regardless of whether ``default`` was
+            # set — a tool entry with only ``deny_hosts`` is still
+            # valid (keeps the default bucket, tweaks behaviour).
+            extras = {
+                k: v for k, v in entry.model_dump(exclude_none=False).items() if k != "default"
+            }
+            if extras:
+                per_tool_extras[name] = extras
         return cls(
             per_tool_default=per_tool_default,
             per_tool_wildcard=per_tool_wildcard,
             per_client=dict(parsed.per_client),
+            per_tool_extras=per_tool_extras,
             approval_timeout_secs=parsed.approval_timeout_secs,
         )
 
@@ -212,6 +228,17 @@ class ToolRegistry:
         self._policy = policy or ToolPolicy()
         # session_key -> set of tool names the user has trust-session-approved
         self._session_trust: dict[str, set[str]] = {}
+
+    @property
+    def policy(self) -> ToolPolicy:
+        """Read-only view of the registry's policy.
+
+        Callers (chat.py, tests) use this to build a ToolContext
+        without reaching into the registry's internals. Read-only
+        because mutating policy at runtime would be a surprise —
+        policy is expected to be parsed once from config.yaml at
+        startup."""
+        return self._policy
 
     # ---------------------------------------------- register / lookup
 
