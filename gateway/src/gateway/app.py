@@ -232,6 +232,36 @@ def create_app(config: Config) -> FastAPI:
     async def _stop_mcp() -> None:  # pragma: no cover - lifespan hook
         await app.state.mcp.stop_all()
 
+    # Cron scheduler (Phase 4.5 task 4): ticks every
+    # cron.poll_interval_secs, fires due jobs. Task 5 will
+    # replace this stub on_fire with a real agent-session
+    # spawner; today the stub just logs so smoke tests don't
+    # try to run a nonexistent agent loop.
+    from .cron import CronJob
+    from .cron_scheduler import CronScheduler
+
+    async def _stub_fire(job: CronJob) -> None:  # pragma: no cover - placeholder
+        import logging as _stdlog
+
+        _stdlog.getLogger("fitt.gateway").info(
+            "cron.fired_stub",
+            extra={
+                "cron_id": job.id,
+                "cron_name": job.name,
+                "note": "task 5 will replace this with an agent-session spawner",
+            },
+        )
+
+    app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=_stub_fire)
+
+    @app.on_event("startup")
+    async def _start_cron_scheduler() -> None:  # pragma: no cover - lifespan hook
+        await app.state.cron_scheduler.start()
+
+    @app.on_event("shutdown")
+    async def _stop_cron_scheduler() -> None:  # pragma: no cover - lifespan hook
+        await app.state.cron_scheduler.stop()
+
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)
 

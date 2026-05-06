@@ -39,14 +39,14 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 4. Scheduler loop
 
-- [ ] 4a. `CronService.start()` starts an asyncio timer loop.
+- [x] 4a. `CronService.start()` starts an asyncio timer loop.
        Every 30s (or sooner if a job is due): scan `list()`, fire
        due jobs as independent asyncio tasks.
-- [ ] 4b. `_is_due(job, now)` for each schedule kind.
-- [ ] 4c. Fired jobs run under `asyncio.wait_for(..., timeout_secs)`.
+- [x] 4b. `_is_due(job, now)` for each schedule kind.
+- [x] 4c. Fired jobs run under `asyncio.wait_for(..., timeout_secs)`.
        Timeout → `last_status="error"`, `last_error="timeout"`.
-- [ ] 4d. `_fire(job)` calls the registered `on_fire(job)` callback.
-- [ ] 4e. Tests with a 1-second interval and a no-op callback.
+- [x] 4d. `_fire(job)` calls the registered `on_fire(job)` callback.
+- [x] 4e. Tests with a 1-second interval and a no-op callback.
 
 ## 5. Cron firing → agent session integration
 
