@@ -870,5 +870,95 @@ def _parse_since(s: str) -> float:
     )
 
 
+# --------------------------------------------------------------- mcp
+
+
+@main.group("mcp")
+def mcp_group() -> None:
+    """Inspect and manage MCP servers the gateway spawns.
+
+    FITT runs MCP servers as subprocesses configured under
+    ``mcp_servers:`` in config.yaml. These commands talk to the
+    running gateway's ``/v1/mcp`` endpoint — you need the gateway
+    up."""
+
+
+def _mcp_gateway_url() -> str:
+    (
+        """Default to the gateway's local port. Override via
+    ``FITT_GATEWAY_URL`` for remote management."""
+        ""
+    )
+    import os as _os
+
+    return _os.environ.get("FITT_GATEWAY_URL", "http://127.0.0.1:8421").rstrip("/")
+
+
+def _mcp_bearer_token() -> str:
+    """Read the first allowed_tokens entry from secrets.yaml for CLI auth."""
+    cfg = load_config(default_config_path(), default_secrets_path())
+    if cfg.secrets is None or not cfg.secrets.allowed_tokens:
+        raise click.ClickException(
+            "no allowed_tokens in secrets.yaml; cannot authenticate to the gateway."
+        )
+    return cfg.secrets.allowed_tokens[0].token
+
+
+@mcp_group.command("list")
+def mcp_list() -> None:
+    """Show configured MCP servers and their running state."""
+    import httpx
+
+    try:
+        r = httpx.get(
+            f"{_mcp_gateway_url()}/v1/mcp",
+            headers={
+                "Authorization": f"Bearer {_mcp_bearer_token()}",
+                "X-FITT-Client": "cli",
+            },
+            timeout=10.0,
+        )
+    except httpx.HTTPError as e:
+        raise click.ClickException(f"gateway unreachable: {e}") from None
+    if r.status_code != 200:
+        raise click.ClickException(f"HTTP {r.status_code}: {r.text}")
+
+    servers = r.json().get("servers", [])
+    if not servers:
+        _console.print("[dim](no MCP servers configured)[/dim]")
+        return
+    for s in servers:
+        status = "[green]running[/green]" if s.get("running") else "[red]stopped[/red]"
+        _console.print(
+            f"{s.get('name'):<20} {status}  "
+            f"tools: {len(s.get('tools', []))}  "
+            f"command: {' '.join(s.get('command', []))}"
+        )
+
+
+@mcp_group.command("restart")
+@click.argument("name")
+def mcp_restart(name: str) -> None:
+    """Stop and re-spawn the named MCP server."""
+    import httpx
+
+    try:
+        r = httpx.post(
+            f"{_mcp_gateway_url()}/v1/mcp/{name}/restart",
+            headers={
+                "Authorization": f"Bearer {_mcp_bearer_token()}",
+                "X-FITT-Client": "cli",
+            },
+            timeout=30.0,
+        )
+    except httpx.HTTPError as e:
+        raise click.ClickException(f"gateway unreachable: {e}") from None
+    if r.status_code == 404:
+        raise click.ClickException(f"no MCP server named {name!r}")
+    if r.status_code != 200:
+        raise click.ClickException(f"HTTP {r.status_code}: {r.text}")
+    _console.print(f"[green]restarted[/green] {name}")
+
+
 if __name__ == "__main__":
     main()

@@ -142,6 +142,13 @@ class Config(BaseModel):
     # all defaults from the registry's client table.
     tools: dict[str, Any] | None = None
 
+    # ``mcp_servers:`` block is Phase 4+: zero or more MCP
+    # subprocess servers the gateway spawns and proxies. Parsed
+    # strictly by MCPServerConfig at startup in app.py; we keep
+    # the config-layer type loose so a missing or empty block
+    # doesn't break config loading.
+    mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
+
     # Populated after secrets load. Not serialised.
     secrets: Secrets | None = Field(default=None, exclude=True)
 

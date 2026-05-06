@@ -161,6 +161,49 @@ def create_app(config: Config) -> FastAPI:
     audit_path, audit_key_path = default_audit_paths(fitt_home())
     app.state.audit = AuditLog(path=audit_path, key_path=audit_key_path)
 
+    # MCP: parse the mcp_servers config block once at startup
+    # and attach an MCPManager. The manager only actually spawns
+    # subprocesses when the app's lifespan starts (so tests that
+    # instantiate the app without entering its lifespan don't
+    # spawn real processes). Invalid entries log a warning and
+    # are skipped; one bad server shouldn't block the gateway.
+    from .mcp import MCPManager, MCPServerConfig
+
+    mcp_configs: list[MCPServerConfig] = []
+    for raw in config.mcp_servers or []:
+        try:
+            mcp_configs.append(MCPServerConfig(**raw))
+        except Exception as e:
+            import logging as _stdlog
+
+            _stdlog.getLogger("fitt.gateway").warning(
+                "mcp.config_invalid",
+                extra={"entry": raw, "error": str(e)},
+            )
+    app.state.mcp = MCPManager(configs=mcp_configs)
+
+    # MCP lifespan: spawn servers on startup, tear down on
+    # shutdown. We use on_event (still supported in FastAPI, and
+    # simpler than migrating create_app to a full lifespan
+    # context manager for one concern). Startup failures log
+    # loudly but don't crash the app — the chat path works
+    # without MCP tools.
+    @app.on_event("startup")
+    async def _start_mcp() -> None:  # pragma: no cover - lifespan hook
+        if not mcp_configs:
+            return
+        import logging as _stdlog
+
+        _stdlog.getLogger("fitt.gateway").info(
+            "mcp.starting",
+            extra={"count": len(mcp_configs)},
+        )
+        await app.state.mcp.start_all(app.state.tool_registry)
+
+    @app.on_event("shutdown")
+    async def _stop_mcp() -> None:  # pragma: no cover - lifespan hook
+        await app.state.mcp.stop_all()
+
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)
 
@@ -222,11 +265,13 @@ def create_app(config: Config) -> FastAPI:
     # Routers - imported lazily to keep import graph acyclic.
     from .approvals_endpoint import router as approvals_router
     from .health import router as health_router
+    from .mcp_endpoint import router as mcp_router
     from .models_endpoint import router as models_router
 
     app.include_router(health_router)
     app.include_router(models_router)
     app.include_router(approvals_router)
+    app.include_router(mcp_router)
 
     try:
         from .chat import router as chat_router

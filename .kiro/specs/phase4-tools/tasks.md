@@ -244,17 +244,19 @@ just a known rough edge.
 
 ## 14. MCP client
 
-- [ ] 14a. `gateway/tools/mcp_client.py`: subprocess spawn with
-       pipe I/O; JSON-RPC framing.
-- [ ] 14b. Server supervisor: crash detection, exponential backoff,
+- [x] 14a. `gateway/tools/mcp_client.py`: subprocess spawn with
+       pipe I/O; JSON-RPC framing. *(Landed as
+       `gateway/mcp.py` — kept out of `tools/` to avoid a
+       circular import cycle with the registry.)*
+- [x] 14b. Server supervisor: crash detection, exponential backoff,
        give-up after 5 consecutive failures.
-- [ ] 14c. Tool discovery at startup: `initialize` + `tools/list`,
+- [x] 14c. Tool discovery at startup: `initialize` + `tools/list`,
        register tools with `mcp.<server>.<tool>` prefix, default
        bucket `ask` (wildcards from config).
-- [ ] 14d. Tool invocation path: `tools/call` JSON-RPC, result
+- [x] 14d. Tool invocation path: `tools/call` JSON-RPC, result
        back to the model via the standard tool-result message.
-- [ ] 14e. `fitt mcp list`, `fitt mcp restart <name>` CLI.
-- [ ] 14f. Tests: mock MCP server fixture, full round-trip.
+- [x] 14e. `fitt mcp list`, `fitt mcp restart <name>` CLI.
+- [x] 14f. Tests: mock MCP server fixture, full round-trip.
 
 ## 15. Capability awareness
 
