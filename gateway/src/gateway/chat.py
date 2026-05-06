@@ -28,27 +28,25 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
-from .audit import new_entry as new_audit_entry
-from .capabilities import build_capability_block, parse_gap
+from .agent_loop import (
+    _MAX_TOOL_CALL_ITERATIONS,
+    record_gap,
+    response_to_dict,
+    run_agent_loop,
+)
+from .capabilities import build_capability_block
 from .config import Config
 from .cost import estimate_cost
-from .errors import ModelIdNotAlias, NoBackendAvailable, UnknownAlias, UnknownTool
+from .errors import ModelIdNotAlias, NoBackendAvailable, UnknownAlias
 from .logging_config import get_logger, log_request
 from .memory import LoadedContext, MemoryStore
 from .models import ChatCompletionRequest
 from .router import AliasRouter, backend_tag
 from .sessions import SessionRegistry, resolve_session_id
-from .tools import ApprovalDecision, Tool, ToolContext, ToolRegistry, ToolResult
+from .tools import ToolContext, ToolRegistry
 
 router = APIRouter()
 _log = get_logger("fitt.gateway.chat")
-
-
-# Safety rail on tool-call loops. The model could in principle call
-# tools forever; we bound it. Picked by feel - enough for a
-# multi-step "read a few files, grep, summarize" turn without giving
-# a runaway loop room to fester.
-_MAX_TOOL_CALL_ITERATIONS = 10
 
 
 # -------- request parsing -----------------------------------------
@@ -347,144 +345,9 @@ def _inject_fitt_tools(body: dict[str, Any], registry: ToolRegistry) -> dict[str
 
 
 def _response_to_dict(response: Any) -> dict[str, Any] | None:
-    if response is None:
-        return None
-    if hasattr(response, "model_dump"):
-        dumped = response.model_dump(exclude_none=True)
-        return dumped if isinstance(dumped, dict) else None
-    if isinstance(response, dict):
-        return response
-    return None
-
-
-def _extract_tool_calls(response: Any) -> list[dict[str, Any]]:
-    """Return the model's ``tool_calls`` array from a non-streaming
-    response, or [] if the response didn't request any tool."""
-    dumped = _response_to_dict(response)
-    if dumped is None:
-        return []
-    choices = dumped.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return []
-    choice0 = choices[0]
-    if not isinstance(choice0, dict):
-        return []
-    # Finish reason tells us unambiguously whether the model wants
-    # to call tools. Older libraries emit tool_calls on the message
-    # without flipping finish_reason, so we also check directly.
-    finish_reason = choice0.get("finish_reason")
-    msg = choice0.get("message")
-    if not isinstance(msg, dict):
-        return []
-    tool_calls = msg.get("tool_calls")
-    if not isinstance(tool_calls, list) or not tool_calls:
-        return []
-    if finish_reason not in (None, "tool_calls"):
-        # The model already stopped. Don't try to run tools listed
-        # on a message whose finish_reason says "stop"; that's
-        # ambiguous and not worth the complexity.
-        return []
-    return [tc for tc in tool_calls if isinstance(tc, dict)]
-
-
-def _assistant_message_from_response(response: Any) -> dict[str, Any] | None:
-    dumped = _response_to_dict(response)
-    if dumped is None:
-        return None
-    choices = dumped.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return None
-    choice0 = choices[0]
-    if not isinstance(choice0, dict):
-        return None
-    msg = choice0.get("message")
-    return msg if isinstance(msg, dict) else None
-
-
-async def _execute_tool_call(
-    call: dict[str, Any],
-    *,
-    registry: ToolRegistry,
-    approval: Any,
-    tool_ctx: ToolContext,
-) -> tuple[str, ToolResult, ApprovalDecision, Tool | None]:
-    """Resolve one tool call and return (call_id, result, decision, tool).
-
-    Any failure surface — unknown tool, bad args, approval reject —
-    is expressed as a ``ToolResult`` with ``is_error=True``. The
-    model reads the payload and can decide how to recover.
-    """
-    call_id = str(call.get("id") or "")
-    function = call.get("function") or {}
-    name = function.get("name") if isinstance(function, dict) else None
-    raw_args = function.get("arguments") if isinstance(function, dict) else None
-
-    if not isinstance(name, str) or not name:
-        return (
-            call_id,
-            ToolResult.error("tool_call missing function.name"),
-            ApprovalDecision.rejected(detail="malformed tool_call"),
-            None,
-        )
-
-    # Parse the JSON-string arguments OpenAI sends us. The model
-    # occasionally emits invalid JSON; surface that as a tool error
-    # rather than a 500.
-    if isinstance(raw_args, dict):
-        args = raw_args
-    elif isinstance(raw_args, str) and raw_args.strip():
-        try:
-            args = json.loads(raw_args)
-        except json.JSONDecodeError as e:
-            return (
-                call_id,
-                ToolResult.error(f"tool {name!r} arguments are not valid JSON: {e}"),
-                ApprovalDecision.rejected(detail="bad args"),
-                None,
-            )
-        if not isinstance(args, dict):
-            return (
-                call_id,
-                ToolResult.error(f"tool {name!r} arguments must be a JSON object"),
-                ApprovalDecision.rejected(detail="bad args"),
-                None,
-            )
-    else:
-        args = {}
-
-    try:
-        tool = registry.lookup(name)
-    except UnknownTool:
-        return (
-            call_id,
-            ToolResult.error(
-                f"tool {name!r} is not registered; this is likely a "
-                f"hallucinated call. Try again using only the tools "
-                f"listed in the capabilities block."
-            ),
-            ApprovalDecision.rejected(detail="unknown tool"),
-            None,
-        )
-
-    decision = await approval.check(tool, args, tool_ctx)
-    if not decision.execute:
-        return (
-            call_id,
-            ToolResult.error(decision.detail or f"tool {name!r} not executed"),
-            decision,
-            tool,
-        )
-
-    try:
-        result = await tool.callable(args, tool_ctx)
-    except Exception as exc:
-        _log.warning(
-            "tool.execute_failed",
-            tool=name,
-            error=str(exc),
-        )
-        result = ToolResult.error(f"tool {name!r} raised {type(exc).__name__}: {exc}")
-    return call_id, result, decision, tool
+    # Re-export for anything that imports from chat. New code
+    # should import from gateway.agent_loop directly.
+    return response_to_dict(response)
 
 
 def _build_tool_context(request: Request) -> ToolContext:
@@ -507,49 +370,12 @@ def _build_tool_context(request: Request) -> ToolContext:
     )
 
 
-def _tool_call_args(call: dict[str, Any]) -> dict[str, Any]:
-    """Parse the args dict out of an OpenAI tool_call payload for
-    audit logging. Best-effort: the chat loop already tolerates
-    malformed args, and audit should record what the model
-    *intended* to send even if it was junk. Returns an empty dict
-    on any parse error."""
-    fn = call.get("function") or {}
-    raw = fn.get("arguments") if isinstance(fn, dict) else None
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str) and raw.strip():
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    return {}
-
-
 def _record_gap(request: Request, assistant_text: str, session_key: str) -> None:
     """Parse the assistant reply for a capability-gap statement
     and append to the log. All errors are swallowed with a
     warning — gap logging must never break a successful chat."""
     gap_log = getattr(request.app.state, "capability_gaps", None)
-    _record_gap_to_log(gap_log, assistant_text, session_key)
-
-
-def _record_gap_to_log(gap_log: Any, assistant_text: str, session_key: str) -> None:
-    """Lower-level helper used by the tool-loop path where
-    ``request`` isn't in scope. Takes the log directly."""
-    if not assistant_text or gap_log is None:
-        return
-    try:
-        gap = parse_gap(assistant_text, session_key=session_key)
-    except Exception as exc:
-        _log.debug("capabilities.parse_gap_failed", error=str(exc))
-        return
-    if gap is None:
-        return
-    try:
-        gap_log.append(gap)
-    except Exception as exc:
-        _log.warning("capabilities.gap_append_failed", error=str(exc))
+    record_gap(gap_log, assistant_text, session_key)
 
 
 async def _run_tool_loop(
@@ -570,105 +396,39 @@ async def _run_tool_loop(
 ) -> Response:
     """Dispatch, execute tool calls, re-dispatch, repeat, then return.
 
-    Non-streaming end-to-end; if the client asked for streaming
-    we wrap the final response in a one-shot SSE frame + [DONE] so
-    streaming readers still see what they expect. The tool-execution
-    loop is bounded at _MAX_TOOL_CALL_ITERATIONS to avoid
-    runaway loops.
+    Thin HTTP-specific wrapper around :func:`run_agent_loop`. The
+    loop itself is stateless and reused by cron firings (Phase 4.5)
+    and the spec runner (Phase 6); this function handles the
+    concerns that only apply to a live HTTP request — memory
+    persistence on the original turn, response envelope shaping,
+    request logging, and stream wrapping.
     """
-    messages: list[dict[str, Any]] = list(request_body.get("messages") or [])
-    working_body = dict(request_body)
-    model_used = None
-    fallback_used = False
-    in_tok_total = 0
-    out_tok_total = 0
-    response_obj: Any = None
+    # Strip the messages out of request_body so we don't pass
+    # them twice to run_agent_loop. Everything else (tools,
+    # tool_choice, temperature, ...) flows through unchanged.
+    body_extras = {k: v for k, v in request_body.items() if k != "messages"}
+    original_messages: list[dict[str, Any]] = list(request_body.get("messages") or [])
 
-    for iteration in range(_MAX_TOOL_CALL_ITERATIONS):
-        working_body["messages"] = messages
-        try:
-            dispatch = await alias_router.dispatch(parsed.model, working_body)
-        except (UnknownAlias, NoBackendAvailable):
-            raise
-        except Exception as exc:
-            return _translate_upstream_error(exc)
+    try:
+        result = await run_agent_loop(
+            alias=parsed.model,
+            messages=original_messages,
+            request_body_extras=body_extras,
+            alias_router=alias_router,
+            tool_registry=tool_registry,
+            approval=approval,
+            tool_ctx=tool_ctx,
+            session_key=session_id,
+        )
+    except (UnknownAlias, NoBackendAvailable):
+        raise
 
-        # We forced stream=False upstream; dispatch.response is the
-        # single-shot response object.
-        response_obj = dispatch.response
-        model_used = dispatch.model_used
-        fallback_used = fallback_used or dispatch.fallback_used
-        in_tok, out_tok = _extract_usage(response_obj)
-        in_tok_total += in_tok
-        out_tok_total += out_tok
+    if result.status == "upstream_error" and result.error is not None:
+        return _translate_upstream_error(result.error)
 
-        tool_calls = _extract_tool_calls(response_obj)
-        if not tool_calls:
-            break  # model produced a final answer
-
-        assistant_msg = _assistant_message_from_response(response_obj)
-        if assistant_msg is not None:
-            messages.append(assistant_msg)
-
-        # Execute every tool call requested in this round, in order.
-        for call in tool_calls:
-            tool_started = time.perf_counter()
-            call_id, result, decision, tool = await _execute_tool_call(
-                call,
-                registry=tool_registry,
-                approval=approval,
-                tool_ctx=tool_ctx,
-            )
-            duration_ms = int((time.perf_counter() - tool_started) * 1000)
-            _log.info(
-                "tool.invoked",
-                tool=tool.name if tool else "(unknown)",
-                decision=decision.reason,
-                ok=not result.is_error,
-                session_id=session_id,
-                iteration=iteration,
-            )
-            # Audit every tool call, including short-circuited ones
-            # (unknown tool, rejected, timed-out). The audit log is
-            # the single truthful record of "what did FITT do" —
-            # decisions that *didn't* execute are just as important
-            # to capture.
-            audit_log = tool_ctx.audit
-            if audit_log is not None:
-                try:
-                    audit_log.append(
-                        new_audit_entry(
-                            session_key=session_id,
-                            client=tool_ctx.client,
-                            tool=tool.name if tool else "(unknown)",
-                            args=_tool_call_args(call),
-                            decision=decision.reason,
-                            ok=not result.is_error,
-                            duration_ms=duration_ms,
-                            error=result.payload if result.is_error else "",
-                            extra={"iteration": iteration},
-                        )
-                    )
-                except Exception as e:
-                    # Audit failures must never break the tool
-                    # loop. Log loudly and continue; the
-                    # verification step surfaces chain breaks.
-                    _log.warning(
-                        "audit.append_failed",
-                        extra={"error": str(e)},
-                    )
-            # Standard OpenAI tool-result message shape.
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": result.payload,
-                }
-            )
-    else:
-        # Hit the iteration cap without a natural finish. Return
-        # what we have as an error; the model has been bouncing.
+    if result.status == "tool_loop_exhausted":
         latency_ms = int((time.perf_counter() - started) * 1000)
+        model_used = result.model_used
         log_request(
             _log,
             alias=parsed.model,
@@ -679,11 +439,11 @@ async def _run_tool_loop(
             history_messages=len(ctx.history_messages),
             history_truncated_bytes=ctx.truncated_bytes,
             latency_ms=latency_ms,
-            input_tokens=in_tok_total,
-            output_tokens=out_tok_total,
+            input_tokens=result.in_tokens,
+            output_tokens=result.out_tokens,
             cost_usd=Decimal("0"),
             status="tool_loop_exhausted",
-            fallback=fallback_used,
+            fallback=result.fallback_used,
         )
         return JSONResponse(
             status_code=504,
@@ -699,10 +459,17 @@ async def _run_tool_loop(
         )
 
     # ---- build the final response shape ---------------------------
-    cost = estimate_cost(model_used, in_tok_total, out_tok_total) if model_used else Decimal("0")
+    model_used = result.model_used
+    assistant_text = result.assistant_text
+    response_obj = result.response_obj
+
+    cost = (
+        estimate_cost(model_used, result.in_tokens, result.out_tokens)
+        if model_used
+        else Decimal("0")
+    )
     latency_ms = int((time.perf_counter() - started) * 1000)
 
-    assistant_text = _extract_assistant_text(response_obj)
     if user_message_for_memory and assistant_text:
         try:
             memory.append_turn(session_id, user_message_for_memory, assistant_text)
@@ -712,7 +479,7 @@ async def _run_tool_loop(
                 session_id=session_id,
                 error=str(exc),
             )
-    _record_gap_to_log(capability_gaps, assistant_text, session_id)
+    record_gap(capability_gaps, assistant_text, session_id)
 
     backend_header = backend_tag(model_used) if model_used else "(unknown)"
     log_request(
@@ -725,20 +492,20 @@ async def _run_tool_loop(
         history_messages=len(ctx.history_messages),
         history_truncated_bytes=ctx.truncated_bytes,
         latency_ms=latency_ms,
-        input_tokens=in_tok_total,
-        output_tokens=out_tok_total,
+        input_tokens=result.in_tokens,
+        output_tokens=result.out_tokens,
         cost_usd=cost,
         status="ok",
-        fallback=fallback_used,
+        fallback=result.fallback_used,
     )
 
-    body_dict = _response_to_dict(response_obj) or {}
+    body_dict = response_to_dict(response_obj) or {}
     headers = {
         "X-FITT-Backend": backend_header,
         "X-FITT-Alias": parsed.model,
         "X-FITT-Session": session_id,
     }
-    if fallback_used:
+    if result.fallback_used:
         headers["X-FITT-Fallback"] = "1"
 
     if wanted_stream:
@@ -747,7 +514,6 @@ async def _run_tool_loop(
         # open-webui) parse `choices[0].delta.content` instead, so
         # we rewrite the envelope to a single streaming chunk. Two
         # frames: one for the content delta, one to terminate.
-        assistant_text = _extract_assistant_text(response_obj)
 
         def _chunk(delta: dict[str, Any] | None, finish_reason: str | None) -> dict[str, Any]:
             return {

@@ -233,26 +233,27 @@ def create_app(config: Config) -> FastAPI:
         await app.state.mcp.stop_all()
 
     # Cron scheduler (Phase 4.5 task 4): ticks every
-    # cron.poll_interval_secs, fires due jobs. Task 5 will
-    # replace this stub on_fire with a real agent-session
-    # spawner; today the stub just logs so smoke tests don't
-    # try to run a nonexistent agent loop.
-    from .cron import CronJob
+    # cron.poll_interval_secs, fires due jobs. The CronRunner
+    # (task 5) spawns an agent session per firing using the
+    # headless run_agent_loop, and emits cron_fired /
+    # cron_completed / cron_failed events.
+    from .cron_runner import CronRunner
     from .cron_scheduler import CronScheduler
 
-    async def _stub_fire(job: CronJob) -> None:  # pragma: no cover - placeholder
-        import logging as _stdlog
-
-        _stdlog.getLogger("fitt.gateway").info(
-            "cron.fired_stub",
-            extra={
-                "cron_id": job.id,
-                "cron_name": job.name,
-                "note": "task 5 will replace this with an agent-session spawner",
-            },
-        )
-
-    app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=_stub_fire)
+    cron_runner = CronRunner(
+        config=config,
+        tool_registry=app.state.tool_registry,
+        approval=app.state.approval,
+        memory=app.state.memory,
+        events=app.state.events,
+        audit=app.state.audit,
+        project_registry=app.state.project_registry,
+        execution_backend=app.state.execution_backend,
+        capability_gaps=app.state.capability_gaps,
+        cron_service=app.state.cron,
+    )
+    app.state.cron_runner = cron_runner
+    app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=cron_runner.fire)
 
     @app.on_event("startup")
     async def _start_cron_scheduler() -> None:  # pragma: no cover - lifespan hook

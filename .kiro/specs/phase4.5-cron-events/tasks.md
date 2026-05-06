@@ -50,19 +50,19 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 5. Cron firing → agent session integration
 
-- [ ] 5a. Register `on_fire` callback in the gateway startup that
+- [x] 5a. Register `on_fire` callback in the gateway startup that
        spawns a fresh session (`session_key = "cron:{id}:{ts}"`)
        and runs `job.message` through the agent loop.
-- [ ] 5b. Apply `job.approval_mode` as an override on the approval
+- [x] 5b. Apply `job.approval_mode` as an override on the approval
        middleware for this session.
-- [ ] 5c. If `silent == False`, emit `cron_completed` event with
+- [x] 5c. If `silent == False`, emit `cron_completed` event with
        the agent's final reply as body.
-- [ ] 5d. If `silent == True`, emit `cron_completed` with an
+- [x] 5d. If `silent == True`, emit `cron_completed` with an
        empty body.
-- [ ] 5e. Always emit `cron_fired` at the start.
-- [ ] 5f. On error: emit `cron_failed` with the traceback
+- [x] 5e. Always emit `cron_fired` at the start.
+- [x] 5f. On error: emit `cron_failed` with the traceback
        summary.
-- [ ] 5g. Integration test: create a cron, wait a firing,
+- [x] 5g. Integration test: create a cron, wait a firing,
        verify session spawned + events emitted.
 
 ## 5.5 Detached delivery (closes Phase 4 approval-timeout rough edge)
