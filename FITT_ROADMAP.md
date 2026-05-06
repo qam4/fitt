@@ -561,6 +561,8 @@ for 3 days without intervention.
 - **Per-cron policy fields.** `silent: bool` (suppresses auto-delivery; agent decides via `send_message`), `approval_mode: "" | "auto"`, `session_key` (who created it, for scoped removal).
 - **Event log.** Append-only `$FITT_HOME/events.jsonl`. Every notable async event (cron fired, tool call needing approval, task completed, etc.) logged with metadata: `kind`, `timestamp`, `session_key`, related IDs, human-readable `summary`.
 - **Proactive delivery.** Every event pushed to Telegram by default. A `send_message` tool the agent can call to emit custom events (non-cron). The **same push channel** is what closes the Phase 4 approval-UI rough edge (tool approved > 45s after the prompt → chat turn already returned → result delivered as a new Telegram message instead of being orphaned). Phase 4 tasks.md flags this as a known limitation with a pointer here.
+
+  Related UX gap that the push channel also fixes: today's bot replies by **editing** a placeholder message as the stream arrives. Telegram suppresses notifications on edits (only new messages notify). So if the user asks a long-running question and switches apps, the final response arrives silently — no phone notification, the message is just "there" when they return. Phase 4.5's push channel posts responses as new messages, which restores the notify-on-completion behavior users expect.
 - **`fitt inbox` CLI.** List events with filters (`--since`, `--kind`, `--session`). No web UI in this phase; Telegram + CLI is enough.
 
 **Scope boundaries:**
