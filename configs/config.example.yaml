@@ -158,6 +158,18 @@ memory:
 #   # Global knobs:
 #   approval_timeout_secs: 45   # how long to wait for a tap
 #
+#   # Phase 4.5 Task 5.5: detached delivery. When a tool's
+#   # approval is still pending at this many seconds, the HTTP
+#   # handler returns a placeholder ("⏳ Approval pending ...")
+#   # so the client's connection doesn't stall. The remaining
+#   # tool-loop work continues in the background and delivers
+#   # a late_tool_result / late_tool_rejected event when it
+#   # finishes — you see the answer in Telegram or `fitt inbox`.
+#   # Unset (default) = never detach, same as pre-4.5 behaviour.
+#   # Set below approval_timeout_secs to activate; typical pair:
+#   # approval_detach_threshold_secs: 45   +   approval_timeout_secs: 7200
+#   approval_detach_threshold_secs: 45
+#
 #   # Per-tool defaults (can be wildcards for MCP tools):
 #   write_file:
 #     default: ask

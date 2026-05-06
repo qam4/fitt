@@ -37,6 +37,13 @@ from .agent_loop import (
 from .capabilities import build_capability_block
 from .config import Config
 from .cost import estimate_cost
+from .detach import (
+    PLACEHOLDER_MESSAGE,
+    DetachedPending,
+    build_placeholder_response,
+    finish_detached,
+    run_with_detach,
+)
 from .errors import ModelIdNotAlias, NoBackendAvailable, UnknownAlias
 from .logging_config import get_logger, log_request
 from .memory import LoadedContext, MemoryStore
@@ -378,6 +385,41 @@ def _record_gap(request: Request, assistant_text: str, session_key: str) -> None
     record_gap(gap_log, assistant_text, session_key)
 
 
+async def _peek_latest_pending_tool(approval: Any, session_id: str) -> tuple[str, str]:
+    """Look up the most-recent pending approval for this session.
+
+    Used at detach time to attach a tool name + approval id to
+    the eventual ``late_tool_result`` / ``late_tool_rejected``
+    event's meta. Strictly best-effort — the loop may chain more
+    than one tool before detaching and the middleware doesn't
+    expose per-session history, so the "latest" pending is our
+    best guess. Returns ``("", "")`` when the approval has
+    already resolved (race between detach and user tap).
+    """
+    try:
+        pending = await approval.list_pending()
+    except Exception:
+        return "", ""
+    for entry in reversed(pending):
+        if getattr(entry, "session_key", "") == session_id:
+            return entry.tool_name, entry.approval_id
+    return "", ""
+
+
+def _push_channel_available(request: Request) -> bool:
+    """Is there a push subscriber the detached worker can reach?
+
+    v0 heuristic: the gateway has a Telegram bot token
+    configured. If so, the bot *might* be running; if not, the
+    only consumer is ``fitt inbox``. We warn at detach time
+    when there's no channel so the operator knows their late
+    event is only visible via the CLI."""
+    secrets = getattr(request.app.state.config, "secrets", None)
+    if secrets is None:
+        return False
+    return getattr(secrets, "telegram", None) is not None
+
+
 async def _run_tool_loop(
     *,
     parsed: ChatCompletionRequest,
@@ -393,6 +435,8 @@ async def _run_tool_loop(
     wanted_stream: bool,
     started: float,
     capability_gaps: Any = None,
+    events: Any = None,
+    push_channel_available: bool = True,
 ) -> Response:
     """Dispatch, execute tool calls, re-dispatch, repeat, then return.
 
@@ -402,6 +446,14 @@ async def _run_tool_loop(
     concerns that only apply to a live HTTP request — memory
     persistence on the original turn, response envelope shaping,
     request logging, and stream wrapping.
+
+    Detached delivery (Phase 4.5 Task 5.5): if the policy
+    configures ``tools.approval_detach_threshold_secs`` and the
+    loop is still running at that threshold (almost always
+    because it's waiting on a human approval), the handler
+    returns a placeholder response immediately and hands the
+    remaining work off to a background worker that emits a
+    ``late_tool_result`` / ``late_tool_rejected`` event.
     """
     # Strip the messages out of request_body so we don't pass
     # them twice to run_agent_loop. Everything else (tools,
@@ -409,8 +461,10 @@ async def _run_tool_loop(
     body_extras = {k: v for k, v in request_body.items() if k != "messages"}
     original_messages: list[dict[str, Any]] = list(request_body.get("messages") or [])
 
-    try:
-        result = await run_agent_loop(
+    detach_threshold = tool_registry.policy.approval_detach_threshold_secs
+
+    def _build_loop_coro():  # type: ignore[no-untyped-def]
+        return run_agent_loop(
             alias=parsed.model,
             messages=original_messages,
             request_body_extras=body_extras,
@@ -420,8 +474,115 @@ async def _run_tool_loop(
             tool_ctx=tool_ctx,
             session_key=session_id,
         )
+
+    async def _on_detach(task: Any) -> None:
+        """Scheduled by run_with_detach when the threshold fires.
+
+        The tool loop is still running (``asyncio.shield`` keeps
+        it alive); we hand the same task reference to
+        :func:`finish_detached`, which awaits it and emits the
+        right event when the loop eventually completes."""
+        if not push_channel_available:
+            _log.warning(
+                "chat.detach.no_push_channel",
+                extra={
+                    "session_id": session_id,
+                    "note": (
+                        "no Telegram / push subscriber configured; "
+                        "late_tool_result will only be visible via "
+                        "fitt inbox"
+                    ),
+                },
+            )
+        # Try to pull a tool name from the most recent pending
+        # approval for this session. Best-effort: the exact tool
+        # is unknowable across detach (the loop might chain
+        # several) but surfacing *a* tool name beats "(unknown)"
+        # on the Telegram preview.
+        tool_name, approval_id = await _peek_latest_pending_tool(approval, session_id)
+        await finish_detached(
+            task,
+            session_key=session_id,
+            user_message=user_message_for_memory,
+            events=events,
+            memory=memory,
+            tool_name=tool_name,
+            approval_id=approval_id,
+            original_client=tool_ctx.client,
+            push_channel_available=push_channel_available,
+        )
+
+    try:
+        outcome = await run_with_detach(
+            _build_loop_coro,
+            detach_threshold_s=detach_threshold,
+            on_detach=_on_detach,
+        )
     except (UnknownAlias, NoBackendAvailable):
         raise
+
+    # ---- detached: return a placeholder and let the worker finish
+    if isinstance(outcome, DetachedPending):
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        log_request(
+            _log,
+            alias=parsed.model,
+            model="(detached)",
+            backend="(detached)",
+            backend_actual="(detached)",
+            session_id=session_id,
+            history_messages=len(ctx.history_messages),
+            history_truncated_bytes=ctx.truncated_bytes,
+            latency_ms=latency_ms,
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=Decimal("0"),
+            status="detached",
+            fallback=False,
+        )
+        placeholder_body = build_placeholder_response(model=parsed.model)
+        headers = {
+            "X-FITT-Backend": "(detached)",
+            "X-FITT-Alias": parsed.model,
+            "X-FITT-Session": session_id,
+            "X-FITT-Detached": "1",
+        }
+        if wanted_stream:
+            # Streaming clients get the placeholder as a single
+            # content delta frame + stop terminator, matching the
+            # shape the tool loop uses for natural-stop
+            # responses.
+            def _chunk(delta: dict[str, Any] | None, finish_reason: str | None) -> dict[str, Any]:
+                return {
+                    "id": placeholder_body["id"],
+                    "object": "chat.completion.chunk",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": delta or {},
+                            "finish_reason": finish_reason,
+                        }
+                    ],
+                }
+
+            first = _chunk({"role": "assistant", "content": PLACEHOLDER_MESSAGE}, None)
+            final = _chunk({}, "stop")
+
+            async def _single_chunk() -> AsyncIterator[bytes]:
+                yield f"data: {json.dumps(first)}\n\n".encode()
+                yield f"data: {json.dumps(final)}\n\n".encode()
+                yield b"data: [DONE]\n\n"
+
+            return StreamingResponse(
+                _single_chunk(),
+                media_type="text/event-stream",
+                headers=headers,
+            )
+        return JSONResponse(content=placeholder_body, headers=headers)
+
+    # ---- synchronous happy path (also covers tool_loop_exhausted
+    # and upstream_error below) ------------------------------------
+    result = outcome
 
     if result.status == "upstream_error" and result.error is not None:
         return _translate_upstream_error(result.error)
@@ -622,6 +783,8 @@ async def chat_completions(request: Request) -> Response:
             wanted_stream=wanted_stream,
             started=started,
             capability_gaps=getattr(request.app.state, "capability_gaps", None),
+            events=getattr(request.app.state, "events", None),
+            push_channel_available=_push_channel_available(request),
         )
 
     try:

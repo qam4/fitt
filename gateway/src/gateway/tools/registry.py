@@ -111,6 +111,25 @@ class ToolPolicyConfig(BaseModel):
     #       approval_timeout_secs: 30
     approval_timeout_secs: float | None = None
 
+    # Phase 4.5 Task 5.5. When a chat turn's ask-bucket approval
+    # is still pending after this many seconds, the chat handler
+    # detaches: returns a placeholder HTTP response immediately
+    # and lets the remaining tool-loop iterations finish in the
+    # background. The eventual result lands as a
+    # ``late_tool_result`` (or ``late_tool_rejected``) event so
+    # the user still hears about it, just asynchronously.
+    #
+    # Default ``None`` means "mirror ``approval_timeout_secs``",
+    # which effectively disables the feature — the inner timeout
+    # fires at the same moment the outer detach threshold would,
+    # so the tool loop continues with an error and the handler
+    # returns synchronously. To activate detach, set this below
+    # ``approval_timeout_secs``; a typical "live with it" config
+    # is ``approval_detach_threshold_secs: 45`` +
+    # ``approval_timeout_secs: 7200`` so the HTTP client detaches
+    # at 45s but the approval keeps listening for two hours.
+    approval_detach_threshold_secs: float | None = None
+
     # Pydantic 2 handles the custom layout via a before-validator
     # so we don't force users to type an extra ``per_tool:`` key
     # in the YAML.
@@ -127,7 +146,12 @@ class ToolPolicyConfig(BaseModel):
             return cls()
         per_client = raw.get("per_client", {}) or {}
         approval_timeout_secs = raw.get("approval_timeout_secs")
-        reserved = {"per_client", "approval_timeout_secs"}
+        approval_detach_threshold_secs = raw.get("approval_detach_threshold_secs")
+        reserved = {
+            "per_client",
+            "approval_timeout_secs",
+            "approval_detach_threshold_secs",
+        }
         per_tool_raw = {k: v for k, v in raw.items() if k not in reserved}
         return cls(
             per_tool={k: _ToolEntry.model_validate(v or {}) for k, v in per_tool_raw.items()},
@@ -136,6 +160,7 @@ class ToolPolicyConfig(BaseModel):
                 for client, overrides in per_client.items()
             },
             approval_timeout_secs=approval_timeout_secs,
+            approval_detach_threshold_secs=approval_detach_threshold_secs,
         )
 
 
@@ -173,6 +198,22 @@ class ToolPolicy:
     use the middleware's built-in default (see
     ``gateway.approval._DEFAULT_APPROVAL_TIMEOUT_S``)."""
 
+    approval_detach_threshold_secs: float | None = None
+    """Phase 4.5 Task 5.5. When a chat turn's ask-bucket approval
+    is still pending after this many seconds, the HTTP handler
+    returns a placeholder and hands the remaining tool-loop
+    work to a background worker that emits a
+    ``late_tool_result`` / ``late_tool_rejected`` event when it
+    finishes. ``None`` means "don't detach" (mirror
+    ``approval_timeout_secs`` in effect), which is the zero-
+    configuration default so operators opt in explicitly when
+    they're ready for two-hour workflows.
+
+    Set below ``approval_timeout_secs`` to activate detach: the
+    chat handler detaches at this threshold, while the approval
+    middleware keeps listening for up to ``approval_timeout_secs``
+    in the background."""
+
     @classmethod
     def from_config(cls, raw_tools: dict[str, Any] | None) -> ToolPolicy:
         """Parse the ``tools:`` block from config.yaml."""
@@ -200,6 +241,7 @@ class ToolPolicy:
             per_client=dict(parsed.per_client),
             per_tool_extras=per_tool_extras,
             approval_timeout_secs=parsed.approval_timeout_secs,
+            approval_detach_threshold_secs=parsed.approval_detach_threshold_secs,
         )
 
 

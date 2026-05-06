@@ -67,28 +67,28 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 5.5 Detached delivery (closes Phase 4 approval-timeout rough edge)
 
-- [ ] 5.5a. Config field `tools.approval_detach_threshold_secs`
+- [x] 5.5a. Config field `tools.approval_detach_threshold_secs`
         (default: equals `approval_timeout_secs`). Parsed into
         the same `ToolPolicy` block.
-- [ ] 5.5b. Chat handler: when an approval is still pending at
+- [x] 5.5b. Chat handler: when an approval is still pending at
         the detach threshold, flip the pending-approval record
         to `detached=True` and return a placeholder response
         (`"⏳ Approval pending — I'll message you when this
         completes."`). Kicks off a detached worker coroutine
         that awaits the same future.
-- [ ] 5.5c. Detached worker: on approval resolve, complete the
+- [x] 5.5c. Detached worker: on approval resolve, complete the
         remaining tool-loop iterations in the same session,
         then emit `late_tool_result` (on approve) or
         `late_tool_rejected` (on reject). Memory append runs
         as usual.
-- [ ] 5.5d. `cron_add` / `send_message`-style warning: if no
+- [x] 5.5d. `cron_add` / `send_message`-style warning: if no
         push channel is configured (no Telegram bot running,
         no other subscribers), tool results that detach fall
         back to the event log only. Log a clear WARNING at
         detach time.
-- [ ] 5.5e. Telegram formatter for `late_tool_result` /
+- [x] 5.5e. Telegram formatter for `late_tool_result` /
         `late_tool_rejected` (threaded to original session).
-- [ ] 5.5f. Tests: full detach lifecycle with stubbed LLM +
+- [x] 5.5f. Tests: full detach lifecycle with stubbed LLM +
         stubbed approval future — assert the placeholder lands
         synchronously, the event lands asynchronously, and the
         session memory contains both halves.
