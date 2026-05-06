@@ -230,16 +230,16 @@ just a known rough edge.
 
 ## 13. Audit log
 
-- [ ] 13a. `gateway/audit.py`: `AuditEntry` dataclass, `AuditLog`
+- [x] 13a. `gateway/audit.py`: `AuditEntry` dataclass, `AuditLog`
        class with append + verify.
-- [ ] 13b. HMAC chaining: key stored at
+- [x] 13b. HMAC chaining: key stored at
        `$FITT_HOME/audit.key` with 0600 perms, generated on first
        use.
-- [ ] 13c. Secret redaction helper.
-- [ ] 13d. Hook audit into tool execution path.
-- [ ] 13e. CLI: `fitt audit verify` and `fitt audit tail` with
+- [x] 13c. Secret redaction helper.
+- [x] 13d. Hook audit into tool execution path.
+- [x] 13e. CLI: `fitt audit verify` and `fitt audit tail` with
        filters (`--since`, `--tool`, `--session`).
-- [ ] 13f. Tests: chain integrity, tamper detection, redaction.
+- [x] 13f. Tests: chain integrity, tamper detection, redaction.
        Property-based test for chain.
 
 ## 14. MCP client

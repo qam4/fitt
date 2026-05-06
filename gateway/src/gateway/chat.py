@@ -28,6 +28,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
+from .audit import new_entry as new_audit_entry
 from .config import Config
 from .cost import estimate_cost
 from .errors import ModelIdNotAlias, NoBackendAvailable, UnknownAlias, UnknownTool
@@ -486,7 +487,27 @@ def _build_tool_context(request: Request) -> ToolContext:
         projects=request.app.state.project_registry,
         backend=request.app.state.execution_backend,
         policy=request.app.state.tool_registry.policy,
+        audit=getattr(request.app.state, "audit", None),
     )
+
+
+def _tool_call_args(call: dict[str, Any]) -> dict[str, Any]:
+    """Parse the args dict out of an OpenAI tool_call payload for
+    audit logging. Best-effort: the chat loop already tolerates
+    malformed args, and audit should record what the model
+    *intended* to send even if it was junk. Returns an empty dict
+    on any parse error."""
+    fn = call.get("function") or {}
+    raw = fn.get("arguments") if isinstance(fn, dict) else None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
 
 
 async def _run_tool_loop(
@@ -548,12 +569,14 @@ async def _run_tool_loop(
 
         # Execute every tool call requested in this round, in order.
         for call in tool_calls:
+            tool_started = time.perf_counter()
             call_id, result, decision, tool = await _execute_tool_call(
                 call,
                 registry=tool_registry,
                 approval=approval,
                 tool_ctx=tool_ctx,
             )
+            duration_ms = int((time.perf_counter() - tool_started) * 1000)
             _log.info(
                 "tool.invoked",
                 tool=tool.name if tool else "(unknown)",
@@ -562,6 +585,35 @@ async def _run_tool_loop(
                 session_id=session_id,
                 iteration=iteration,
             )
+            # Audit every tool call, including short-circuited ones
+            # (unknown tool, rejected, timed-out). The audit log is
+            # the single truthful record of "what did FITT do" —
+            # decisions that *didn't* execute are just as important
+            # to capture.
+            audit_log = tool_ctx.audit
+            if audit_log is not None:
+                try:
+                    audit_log.append(
+                        new_audit_entry(
+                            session_key=session_id,
+                            client=tool_ctx.client,
+                            tool=tool.name if tool else "(unknown)",
+                            args=_tool_call_args(call),
+                            decision=decision.reason,
+                            ok=not result.is_error,
+                            duration_ms=duration_ms,
+                            error=result.payload if result.is_error else "",
+                            extra={"iteration": iteration},
+                        )
+                    )
+                except Exception as e:
+                    # Audit failures must never break the tool
+                    # loop. Log loudly and continue; the
+                    # verification step surfaces chain breaks.
+                    _log.warning(
+                        "audit.append_failed",
+                        extra={"error": str(e)},
+                    )
             # Standard OpenAI tool-result message shape.
             messages.append(
                 {
@@ -738,6 +790,7 @@ async def chat_completions(request: Request) -> Response:
             projects=request.app.state.project_registry,
             backend=request.app.state.execution_backend,
             policy=tool_registry.policy,
+            audit=getattr(request.app.state, "audit", None),
         )
         return await _run_tool_loop(
             parsed=parsed,

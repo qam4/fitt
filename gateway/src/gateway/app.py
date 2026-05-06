@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from . import __version__
 from .auth import AuthMiddleware
-from .config import Config, default_config_path, default_secrets_path, load_config
+from .config import Config, default_config_path, default_secrets_path, fitt_home, load_config
 from .errors import (
     ModelIdNotAlias,
     NoBackendAvailable,
@@ -150,6 +150,16 @@ def create_app(config: Config) -> FastAPI:
         )
     else:
         app.state.approval = ApprovalMiddleware(tool_registry)
+
+    # Audit log: one AuditLog per gateway process, chained to
+    # $FITT_HOME/audit.jsonl with a key at audit.key. Lazy key
+    # generation: the key file is created on first append, not
+    # at startup, so a gateway that never serves a tool call
+    # doesn't leave a stray key file behind.
+    from .audit import AuditLog, default_audit_paths
+
+    audit_path, audit_key_path = default_audit_paths(fitt_home())
+    app.state.audit = AuditLog(path=audit_path, key_path=audit_key_path)
 
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)

@@ -210,6 +210,14 @@ class ToolContext:
     so tests can supply a minimal context without building a
     policy."""
 
+    audit: Any = None
+    """The :class:`~gateway.audit.AuditLog` the chat loop uses to
+    record every tool call. Typed ``Any`` to avoid an import
+    cycle between ``_types`` and ``audit`` (which in turn imports
+    nothing from tools; keeping ``_types`` minimal keeps both
+    sides importable). Optional for tests that don't exercise the
+    audit path."""
+
     # Future additions (Task 13+):
     #   audit:   AuditLog           -- write one entry per call
     #   gaps:    CapabilityGapLog   -- record "I need a tool to X"

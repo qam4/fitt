@@ -707,5 +707,168 @@ def _quote_argv(argv: list[str]) -> list[str]:
     return out
 
 
+# --------------------------------------------------------------- audit
+
+
+@main.group("audit")
+def audit_group() -> None:
+    """Verify and inspect the HMAC-chained audit log.
+
+    The log at ``$FITT_HOME/audit.jsonl`` records every tool call
+    the gateway processed (including rejected ones). Each entry
+    chains to the previous via an HMAC keyed off
+    ``$FITT_HOME/audit.key``; ``fitt audit verify`` walks the
+    chain and reports the first inconsistency if any, and
+    ``fitt audit tail`` prints recent entries."""
+
+
+@audit_group.command("verify")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def audit_verify(config_file: Path | None) -> None:
+    """Walk the audit log, re-compute every HMAC, and report.
+
+    Exits 0 when the chain is intact, 1 when something's amiss.
+    On failure, prints the first bad line number and the reason
+    (malformed JSON, prev_hmac mismatch, HMAC mismatch). Use
+    that line number to narrow inspection with
+    ``sed -n '<n>p' audit.jsonl``."""
+    from .audit import AuditLog, default_audit_paths
+    from .config import fitt_home
+
+    cfg = load_config(
+        config_file or default_config_path(),
+        default_secrets_path(),
+        load_secrets_too=False,
+    )
+    _ = cfg  # currently unused; loaded for validation side effects
+    log_path, key_path = default_audit_paths(fitt_home())
+    audit_log = AuditLog(path=log_path, key_path=key_path)
+    result = audit_log.verify()
+    if result.ok:
+        _console.print(f"[green]ok[/green] — {result.total_lines} entries verified")
+        sys.exit(0)
+    _console.print(f"[red]chain broken at line {result.bad_line}[/red]: {result.reason}")
+    sys.exit(1)
+
+
+@audit_group.command("tail")
+@click.option(
+    "-n",
+    "--limit",
+    type=int,
+    default=20,
+    help="Number of most-recent entries to show (default: 20).",
+)
+@click.option(
+    "--tool",
+    default=None,
+    help="Filter by tool name (exact match).",
+)
+@click.option(
+    "--session",
+    default=None,
+    help="Filter by session_key (exact match).",
+)
+@click.option(
+    "--since",
+    default=None,
+    help=(
+        "Only show entries newer than this. Accepts unix epoch "
+        "(1730000000), ISO date (2026-05-06), or relative "
+        "duration (1h, 30m, 7d)."
+    ),
+)
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def audit_tail(
+    limit: int,
+    tool: str | None,
+    session: str | None,
+    since: str | None,
+    config_file: Path | None,
+) -> None:
+    """Print recent audit entries as a compact table."""
+    from datetime import UTC, datetime
+    from time import time as _now
+
+    from .audit import AuditLog, default_audit_paths
+    from .config import fitt_home
+
+    cfg = load_config(
+        config_file or default_config_path(),
+        default_secrets_path(),
+        load_secrets_too=False,
+    )
+    _ = cfg
+    log_path, key_path = default_audit_paths(fitt_home())
+    audit_log = AuditLog(path=log_path, key_path=key_path)
+    entries = audit_log.iter_entries()
+
+    since_ts = _parse_since(since) if since else None
+
+    def matches(entry: dict[str, Any]) -> bool:
+        if tool is not None and entry.get("tool") != tool:
+            return False
+        if session is not None and entry.get("session_key") != session:
+            return False
+        if since_ts is not None and entry.get("ts", 0) < since_ts:
+            return False
+        return True
+
+    filtered = [e for e in entries if matches(e)]
+    tail = filtered[-limit:]
+    if not tail:
+        _console.print(
+            f"[dim](no entries match; log has {len(entries)} total, "
+            f"{len(filtered)} after filters)[/dim]"
+        )
+        return
+    for entry in tail:
+        ts_str = datetime.fromtimestamp(entry.get("ts", _now()), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        decision = entry.get("decision", "?")
+        colour = "green" if entry.get("ok") else "red"
+        _console.print(
+            f"[dim]{ts_str}[/dim] "
+            f"[bold]{entry.get('tool', '?'):<20}[/bold] "
+            f"[{colour}]{decision:<18}[/{colour}] "
+            f"client={entry.get('client', '?')} "
+            f"session={entry.get('session_key', '?')} "
+            f"duration_ms={entry.get('duration_ms', 0)}"
+        )
+        if entry.get("error"):
+            _console.print(f"  [red]error:[/red] {entry['error'][:200]}")
+
+
+def _parse_since(s: str) -> float:
+    """Parse --since into a unix-epoch float. Accepts:
+    - a raw epoch ``1730000000`` or ``1730000000.5``
+    - an ISO date ``2026-05-06`` (UTC midnight)
+    - a relative duration ``30m`` / ``2h`` / ``7d`` (from now, backwards)
+    """
+    from datetime import UTC, date, datetime
+    from time import time as _now
+
+    s = s.strip()
+    # epoch?
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    # relative?
+    if s and s[-1] in "smhd" and s[:-1].isdigit():
+        n = int(s[:-1])
+        mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}[s[-1]]
+        return _now() - n * mult
+    # ISO date?
+    try:
+        d = date.fromisoformat(s)
+        return datetime(d.year, d.month, d.day, tzinfo=UTC).timestamp()
+    except ValueError:
+        pass
+    raise click.BadParameter(
+        f"could not parse --since={s!r}. "
+        "Use an epoch, an ISO date (YYYY-MM-DD), or a duration (30m, 2h, 7d)."
+    )
+
+
 if __name__ == "__main__":
     main()
