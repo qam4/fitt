@@ -219,14 +219,14 @@ just a known rough edge.
 
 ## 12. Deny list
 
-- [ ] 12a. `gateway/tools/deny_list.py` with the hardcoded
+- [x] 12a. `gateway/tools/deny_list.py` with the hardcoded
        `DENY_PATTERNS` list and `check(cmd)` function.
-- [ ] 12b. Tests: one per pattern, verifying both positive (catches
+- [x] 12b. Tests: one per pattern, verifying both positive (catches
        destructive form) and negative (doesn't over-match benign
        forms).
-- [ ] 12c. Wire into approval middleware: deny check happens
+- [x] 12c. Wire into approval middleware: deny check happens
        before bucket resolution.
-- [ ] 12d. Tests: approval middleware + deny list integration.
+- [x] 12d. Tests: approval middleware + deny list integration.
 
 ## 13. Audit log
 

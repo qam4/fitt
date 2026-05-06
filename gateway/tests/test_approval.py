@@ -38,7 +38,11 @@ async def _noop(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 def _mk_tool(
-    name: str, bucket: ApprovalBucket = ApprovalBucket.ASK, *, kind: str = "inline"
+    name: str,
+    bucket: ApprovalBucket = ApprovalBucket.ASK,
+    *,
+    kind: str = "inline",
+    shell_command_for: Any = None,
 ) -> Tool:
     return Tool(
         name=name,
@@ -48,6 +52,7 @@ def _mk_tool(
         default_bucket=bucket,
         requires_project=False,
         kind=kind,  # type: ignore[arg-type]
+        shell_command_for=shell_command_for,
     )
 
 
@@ -303,3 +308,159 @@ def test_trust_session_and_clear_session_are_noop(
     m = ApprovalMiddleware(reg)
     m.trust_session("main", "edit_file")
     m.clear_session("main")
+
+
+# --------------------------------------------------------------- deny list
+
+
+async def test_deny_list_blocks_before_bucket_resolution(
+    project_registry: ProjectRegistry,
+) -> None:
+    """Even if the tool's bucket is AUTO, a deny-list hit takes
+    precedence. This is the 'non-overridable floor' rule: policy
+    buckets are the ceiling, deny list is the floor."""
+    reg = ToolRegistry()
+    reg.register(
+        _mk_tool(
+            "project_shell",
+            ApprovalBucket.AUTO,
+            shell_command_for=lambda args: args.get("command", ""),
+        )
+    )
+    m = ApprovalMiddleware(reg)
+
+    decision = await m.check(
+        reg.lookup("project_shell"),
+        {"command": "rm -rf /"},
+        _ctx(project_registry),
+    )
+    assert not decision.execute
+    assert decision.reason == "denied_deny_list"
+    # Detail should mention the pattern label so operators can tell
+    # what got blocked without reading the source.
+    assert "root filesystem" in decision.detail.lower()
+
+
+async def test_deny_list_blocks_even_on_block_bucket(
+    project_registry: ProjectRegistry,
+) -> None:
+    """BLOCK rejects with reason=blocked; deny-list rejects with
+    reason=denied_deny_list. Deny list runs first, so a destructive
+    command to a BLOCK-bucket tool still reports deny-list, not
+    block. Audit log consumers (Task 13) use reason to route
+    severity."""
+    reg = ToolRegistry()
+    reg.register(
+        _mk_tool(
+            "project_shell",
+            ApprovalBucket.BLOCK,
+            shell_command_for=lambda args: args.get("command", ""),
+        )
+    )
+    m = ApprovalMiddleware(reg)
+
+    decision = await m.check(
+        reg.lookup("project_shell"),
+        {"command": "git push --force origin main"},
+        _ctx(project_registry),
+    )
+    assert not decision.execute
+    assert decision.reason == "denied_deny_list"
+
+
+async def test_deny_list_ignores_tools_without_shell_hook(
+    project_registry: ProjectRegistry,
+) -> None:
+    """The majority of tools don't touch a shell with model input;
+    the deny list should be a no-op for them (bucket resolution
+    runs normally)."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("read_file", ApprovalBucket.AUTO))
+    m = ApprovalMiddleware(reg)
+
+    decision = await m.check(
+        reg.lookup("read_file"),
+        {"path": "rm -rf /"},  # scary-looking ARG, but not a shell command
+        _ctx(project_registry),
+    )
+    # AUTO, not denied — read_file isn't a shell-exposing tool,
+    # its path arg is validated against traversal downstream.
+    assert decision.execute
+    assert decision.reason == "auto"
+
+
+async def test_deny_list_allows_benign_command_via_shell_hook(
+    project_registry: ProjectRegistry,
+) -> None:
+    """shell_command_for returns a safe string → normal bucket
+    resolution kicks in."""
+    reg = ToolRegistry()
+    reg.register(
+        _mk_tool(
+            "project_shell",
+            ApprovalBucket.AUTO,
+            shell_command_for=lambda args: args.get("command", ""),
+        )
+    )
+    m = ApprovalMiddleware(reg)
+
+    decision = await m.check(
+        reg.lookup("project_shell"),
+        {"command": "ls -la"},
+        _ctx(project_registry),
+    )
+    assert decision.execute
+    assert decision.reason == "auto"
+
+
+async def test_deny_list_empty_shell_command_skipped(
+    project_registry: ProjectRegistry,
+) -> None:
+    """If shell_command_for returns None / empty, skip the check
+    entirely (don't match the empty-string regex false positives)."""
+    reg = ToolRegistry()
+    reg.register(
+        _mk_tool(
+            "project_shell",
+            ApprovalBucket.AUTO,
+            shell_command_for=lambda args: None,
+        )
+    )
+    m = ApprovalMiddleware(reg)
+
+    decision = await m.check(
+        reg.lookup("project_shell"),
+        {"command": "whatever"},
+        _ctx(project_registry),
+    )
+    assert decision.execute  # normal bucket applies
+
+
+async def test_deny_list_does_not_prompt_on_ask_when_denied(
+    project_registry: ProjectRegistry,
+) -> None:
+    """Deny-list rejection short-circuits BEFORE the approval
+    prompt is created. The user shouldn't be asked whether
+    they want to rm -rf /."""
+    reg = ToolRegistry()
+    reg.register(
+        _mk_tool(
+            "project_shell",
+            ApprovalBucket.ASK,
+            shell_command_for=lambda args: args.get("command", ""),
+        )
+    )
+    m = ApprovalMiddleware(reg, approval_timeout_s=0.05)
+
+    # If the deny-list didn't short-circuit, this would block for
+    # 50ms waiting on the (nonexistent) user tap. With the deny
+    # list working, we return synchronously with reason=denied.
+    decision = await m.check(
+        reg.lookup("project_shell"),
+        {"command": "rm -rf /"},
+        _ctx(project_registry),
+    )
+    assert decision.reason == "denied_deny_list"
+    # And no approval is pending.
+    async with m._lock:
+        assert m._pending == {}

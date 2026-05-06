@@ -65,7 +65,7 @@ from dataclasses import dataclass, field
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal
 
-from .tools import ApprovalBucket, ApprovalDecision
+from .tools import ApprovalBucket, ApprovalDecision, deny_list
 
 if TYPE_CHECKING:
     from .tools import Tool, ToolContext, ToolRegistry
@@ -161,6 +161,36 @@ class ApprovalMiddleware:
         the bot (or other UI) to resolve it — up to
         ``approval_timeout_s``. ``yolo`` is deferred to Task 8d.
         """
+        # Deny-list runs first. Non-overridable. Covers the case
+        # where a future shell-exposing tool could receive a
+        # destructive command string from the model — we block
+        # before any bucket resolution, audit log, or human
+        # approval. Today no inline tool implements
+        # `shell_command_for`, so this is a no-op for reads and
+        # the curated writes; it's infrastructure waiting for the
+        # future `project_shell` + MCP shell-wrapping tools.
+        if tool.shell_command_for is not None:
+            command_str = tool.shell_command_for(args)
+            if command_str:
+                hit = deny_list.check(command_str)
+                if hit is not None:
+                    _log.warning(
+                        "approval.denied_deny_list",
+                        extra={
+                            "tool": tool.name,
+                            "client": context.client,
+                            "session": context.session_key,
+                            "pattern_label": hit.label,
+                        },
+                    )
+                    return ApprovalDecision.denied_deny_list(
+                        detail=(
+                            f"Tool {tool.name!r} blocked by the deny list: "
+                            f"{hit.label}. This is a hardcoded safety floor; "
+                            f"changing it requires a gateway code change."
+                        )
+                    )
+
         bucket = self._registry.resolve_bucket(
             tool, client=context.client, session_key=context.session_key
         )

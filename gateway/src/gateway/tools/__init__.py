@@ -8,6 +8,7 @@ re-export from here once they're stable enough to commit to an API.
 
 from __future__ import annotations
 
+from . import deny_list
 from ._types import (
     ApprovalBucket,
     ApprovalDecision,
@@ -38,4 +39,5 @@ __all__ = [
     "build_git_tools",
     "build_inline_tools",
     "build_shell_tools",
+    "deny_list",
 ]

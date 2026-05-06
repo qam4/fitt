@@ -138,6 +138,24 @@ class Tool:
     discrimination and for MCP lifecycle management (restart a
     server -> deregister its tools)."""
 
+    shell_command_for: Callable[[dict[str, Any]], str | None] | None = None
+    """Optional hook: given the tool's arguments, return the
+    shell command string that would be dispatched (for deny-list
+    matching), or ``None`` if the tool doesn't feed
+    model-controlled strings into a shell context.
+
+    Today, **no inline tool needs this** — ``run_tests`` uses the
+    operator-configured ``project.test_command`` (not model
+    input), ``git_commit`` passes the message as a single argv
+    element, ``write_file`` and ``edit_file`` isolate content via
+    stdin. The hook exists for the future ``project_shell`` tool
+    (F2 follow-up) and for MCP tools that wrap arbitrary shell
+    commands.
+
+    When the hook returns a non-None string, the approval
+    middleware runs the deny list against it before any bucket
+    resolution; a match hard-blocks regardless of client trust."""
+
     def to_openai_schema(self) -> dict[str, Any]:
         """Render as an entry in an OpenAI ``tools=[]`` request array."""
         return {
