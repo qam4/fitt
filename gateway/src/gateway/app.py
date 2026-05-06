@@ -161,6 +161,13 @@ def create_app(config: Config) -> FastAPI:
     audit_path, audit_key_path = default_audit_paths(fitt_home())
     app.state.audit = AuditLog(path=audit_path, key_path=audit_key_path)
 
+    # Capability-gap log: append-only record of "I'd need a tool
+    # to X" statements from the model. Ranked by `fitt
+    # capability-gaps` into a prioritised list of tools-to-add.
+    from .capabilities import CapabilityGapLog, default_gap_log_path
+
+    app.state.capability_gaps = CapabilityGapLog(default_gap_log_path(fitt_home()))
+
     # MCP: parse the mcp_servers config block once at startup
     # and attach an MCPManager. The manager only actually spawns
     # subprocesses when the app's lifespan starts (so tests that

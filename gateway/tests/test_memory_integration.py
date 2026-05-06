@@ -119,8 +119,16 @@ def test_identity_disabled_injects_nothing(tmp_path: Path, monkeypatch: pytest.M
     client = TestClient(create_app(cfg))
     _post_chat(client, "say hi")
     msgs = captured[0]["messages"]
-    # No system message (the request had none and memory is off).
-    assert not any(m["role"] == "system" for m in msgs)
+    # Memory is off so no identity/history should appear. A
+    # [Capabilities] system block is injected unconditionally
+    # once tools are registered (Phase 4 Task 15), and that's
+    # fine — the test's actual concern is 'no memory content',
+    # which we confirm by looking for the identity marker
+    # instead of 'no system message at all'.
+    system_msgs = [m for m in msgs if m["role"] == "system"]
+    combined = "\n".join(str(m.get("content", "")) for m in system_msgs)
+    assert "Fred" not in combined, "identity should not leak when memory is disabled"
+    assert "# About Me" not in combined
 
 
 # ---------- history injection + append ----------------------------

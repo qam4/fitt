@@ -960,5 +960,68 @@ def mcp_restart(name: str) -> None:
     _console.print(f"[green]restarted[/green] {name}")
 
 
+# --------------------------------------------------------------- capability gaps
+
+
+@main.command("capability-gaps")
+@click.option(
+    "-n",
+    "--limit",
+    type=int,
+    default=30,
+    help="Number of top entries to print (default: 30).",
+)
+@click.option(
+    "--since",
+    default=None,
+    help=(
+        "Only show gaps newer than this. Accepts unix epoch, "
+        "ISO date (YYYY-MM-DD), or relative duration (1h, 7d)."
+    ),
+)
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def capability_gaps_cmd(
+    limit: int,
+    since: str | None,
+    config_file: Path | None,
+) -> None:
+    """Print capability-gap entries ranked by frequency.
+
+    Each time the model replies with \"I'd need a tool to X\", one
+    line lands in $FITT_HOME/capability_gaps.log. This command
+    groups by canonical action text and shows the most-asked-for
+    tools first — the natural backlog for 'what should I build
+    next'."""
+    from datetime import UTC, datetime
+
+    from .capabilities import CapabilityGapLog, default_gap_log_path
+    from .config import fitt_home
+
+    cfg = load_config(
+        config_file or default_config_path(),
+        default_secrets_path(),
+        load_secrets_too=False,
+    )
+    _ = cfg
+    log = CapabilityGapLog(default_gap_log_path(fitt_home()))
+
+    since_ts = _parse_since(since) if since else None
+    gaps = log.read(since=since_ts)
+    if not gaps:
+        _console.print(
+            "[dim](no capability gaps recorded" + (f" since {since}" if since else "") + ")[/dim]"
+        )
+        return
+    from .capabilities import rank_gaps
+
+    ranked = rank_gaps(gaps)[:limit]
+    for action, count, most_recent in ranked:
+        ts_str = datetime.fromtimestamp(most_recent.ts, UTC).strftime("%Y-%m-%d %H:%M")
+        suggestion = (
+            f" — model suggested: {most_recent.suggestion!r}" if most_recent.suggestion else ""
+        )
+        _console.print(f"[bold]{count}x[/bold] [dim]({ts_str})[/dim] {action}{suggestion}")
+
+
 if __name__ == "__main__":
     main()

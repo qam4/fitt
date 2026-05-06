@@ -260,15 +260,15 @@ just a known rough edge.
 
 ## 15. Capability awareness
 
-- [ ] 15a. `gateway/capabilities.py`: `build_capability_block`
+- [x] 15a. `gateway/capabilities.py`: `build_capability_block`
        generating the system-prompt section.
-- [ ] 15b. Inject into the system prompt next to identity and
+- [x] 15b. Inject into the system prompt next to identity and
        session memory. Cap at a reasonable size.
-- [ ] 15c. Gap detection regex on the final model reply.
-- [ ] 15d. `CapabilityGapLog`: append to
+- [x] 15c. Gap detection regex on the final model reply.
+- [x] 15d. `CapabilityGapLog`: append to
        `$FITT_HOME/capability_gaps.log`.
-- [ ] 15e. CLI: `fitt capability-gaps` prints a ranked list.
-- [ ] 15f. Tests.
+- [x] 15e. CLI: `fitt capability-gaps` prints a ranked list.
+- [x] 15f. Tests.
 
 ## 16. Tool forwarding in chat handler
 

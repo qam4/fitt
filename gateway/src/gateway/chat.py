@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from .audit import new_entry as new_audit_entry
+from .capabilities import build_capability_block, parse_gap
 from .config import Config
 from .cost import estimate_cost
 from .errors import ModelIdNotAlias, NoBackendAvailable, UnknownAlias, UnknownTool
@@ -85,9 +86,18 @@ async def _parse_request(request: Request, config: Config) -> ChatCompletionRequ
 def _inject_memory(
     body: dict[str, Any],
     ctx: LoadedContext,
+    *,
+    capability_block: str = "",
 ) -> dict[str, Any]:
-    """Return a shallow copy of ``body`` with memory prepended.
+    """Return a shallow copy of ``body`` with memory (and
+    optionally a capability block) prepended.
 
+    * If ``capability_block`` is non-empty, it becomes the first
+      part of the system prefix — before identity/lessons —
+      because the model's *ability list* is the most urgent
+      piece of context: it stops tool-name hallucination and
+      drives the ``I'd need a tool to ...`` gap-reporting
+      phrasing we hook on the reply side.
     * If ``ctx.system_prefix`` is non-empty, it's merged into the
       system message. If the request already has a system message,
       memory content is appended to it with a separator; otherwise
@@ -100,13 +110,17 @@ def _inject_memory(
     The original ``body`` is not mutated.
     """
     messages: list[dict[str, Any]] = list(body.get("messages") or [])
-    if not ctx.system_prefix and not ctx.history_messages:
+    system_prefix = ctx.system_prefix
+    if capability_block:
+        system_prefix = (
+            capability_block if not system_prefix else f"{capability_block}\n\n{system_prefix}"
+        )
+    if not system_prefix and not ctx.history_messages:
         return body
 
     new_messages: list[dict[str, Any]] = []
 
     # Handle system message first.
-    system_prefix = ctx.system_prefix
     if messages and messages[0].get("role") == "system":
         merged_system = {
             "role": "system",
@@ -510,6 +524,32 @@ def _tool_call_args(call: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _record_gap(request: Request, assistant_text: str, session_key: str) -> None:
+    """Parse the assistant reply for a capability-gap statement
+    and append to the log. All errors are swallowed with a
+    warning — gap logging must never break a successful chat."""
+    gap_log = getattr(request.app.state, "capability_gaps", None)
+    _record_gap_to_log(gap_log, assistant_text, session_key)
+
+
+def _record_gap_to_log(gap_log: Any, assistant_text: str, session_key: str) -> None:
+    """Lower-level helper used by the tool-loop path where
+    ``request`` isn't in scope. Takes the log directly."""
+    if not assistant_text or gap_log is None:
+        return
+    try:
+        gap = parse_gap(assistant_text, session_key=session_key)
+    except Exception as exc:
+        _log.debug("capabilities.parse_gap_failed", error=str(exc))
+        return
+    if gap is None:
+        return
+    try:
+        gap_log.append(gap)
+    except Exception as exc:
+        _log.warning("capabilities.gap_append_failed", error=str(exc))
+
+
 async def _run_tool_loop(
     *,
     parsed: ChatCompletionRequest,
@@ -524,6 +564,7 @@ async def _run_tool_loop(
     tool_ctx: ToolContext,
     wanted_stream: bool,
     started: float,
+    capability_gaps: Any = None,
 ) -> Response:
     """Dispatch, execute tool calls, re-dispatch, repeat, then return.
 
@@ -669,6 +710,7 @@ async def _run_tool_loop(
                 session_id=session_id,
                 error=str(exc),
             )
+    _record_gap_to_log(capability_gaps, assistant_text, session_id)
 
     backend_header = backend_tag(model_used) if model_used else "(unknown)"
     log_request(
@@ -755,7 +797,11 @@ async def chat_completions(request: Request) -> Response:
 
     # ---- memory load + injection ---------------------------------
     ctx = memory.load_context(session_id)
-    request_body = _inject_memory(parsed.to_litellm_body(), ctx)
+    # Capability block goes first in the system prefix so the
+    # model always knows what tools are live. Falls back to an
+    # empty string (no block) when no tools are registered yet.
+    capability_block = build_capability_block(tool_registry) if tool_registry.list_names() else ""
+    request_body = _inject_memory(parsed.to_litellm_body(), ctx, capability_block=capability_block)
 
     # The memory'd body will be dispatched; we remember the original
     # user message to persist later (not the history copy).
@@ -805,6 +851,7 @@ async def chat_completions(request: Request) -> Response:
             tool_ctx=tool_ctx_base,
             wanted_stream=wanted_stream,
             started=started,
+            capability_gaps=getattr(request.app.state, "capability_gaps", None),
         )
 
     try:
@@ -869,6 +916,7 @@ async def chat_completions(request: Request) -> Response:
                 session_id=session_id,
                 error=str(exc),
             )
+    _record_gap(request, assistant_text, session_id)
 
     log_request(
         _log,
