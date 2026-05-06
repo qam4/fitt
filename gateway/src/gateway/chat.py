@@ -502,6 +502,8 @@ def _build_tool_context(request: Request) -> ToolContext:
         backend=request.app.state.execution_backend,
         policy=request.app.state.tool_registry.policy,
         audit=getattr(request.app.state, "audit", None),
+        cron=getattr(request.app.state, "cron", None),
+        events=getattr(request.app.state, "events", None),
     )
 
 
@@ -837,6 +839,8 @@ async def chat_completions(request: Request) -> Response:
             backend=request.app.state.execution_backend,
             policy=tool_registry.policy,
             audit=getattr(request.app.state, "audit", None),
+            cron=getattr(request.app.state, "cron", None),
+            events=getattr(request.app.state, "events", None),
         )
         return await _run_tool_loop(
             parsed=parsed,

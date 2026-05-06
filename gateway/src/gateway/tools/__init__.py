@@ -18,6 +18,7 @@ from ._types import (
     ToolResult,
 )
 from .backend import ExecutionBackend, ShellResult
+from .cron_tools import build_cron_tools
 from .fileops import build_fileops_tools
 from .gitops import build_git_tools
 from .inline import build_inline_tools
@@ -35,6 +36,7 @@ __all__ = [
     "ToolPolicy",
     "ToolRegistry",
     "ToolResult",
+    "build_cron_tools",
     "build_fileops_tools",
     "build_git_tools",
     "build_inline_tools",

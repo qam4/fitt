@@ -218,6 +218,19 @@ class ToolContext:
     sides importable). Optional for tests that don't exercise the
     audit path."""
 
+    cron: Any = None
+    """The :class:`~gateway.cron.CronService` the cron tools
+    (``cron_add``, ``cron_list``, ...) operate on. Typed ``Any``
+    for the same import-cycle reason as ``audit``. ``None`` in
+    contexts where no cron tools are registered — the cron tools
+    themselves fail with a readable error when it's missing."""
+
+    events: Any = None
+    """The :class:`~gateway.events.EventLog`. Written to by cron
+    firings, ``send_message``, and the detached-delivery worker.
+    ``None`` when there's no event log wired (tests); tools that
+    need it fail gracefully."""
+
     # Future additions (Task 13+):
     #   audit:   AuditLog           -- write one entry per call
     #   gaps:    CapabilityGapLog   -- record "I need a tool to X"

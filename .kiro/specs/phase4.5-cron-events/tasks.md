@@ -29,13 +29,13 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 3. Cron inline tools
 
-- [ ] 3a. `cron_add`, `cron_list`, `cron_update`, `cron_remove`,
+- [x] 3a. `cron_add`, `cron_list`, `cron_update`, `cron_remove`,
        `cron_pause`, `cron_resume`. Each calls the corresponding
        `CronService` method.
-- [ ] 3b. Register with the Phase 4 tool registry. Default buckets:
+- [x] 3b. Register with the Phase 4 tool registry. Default buckets:
        `cron_list` / `cron_pause` / `cron_resume` = `auto`;
        `cron_add` / `cron_update` / `cron_remove` = `ask`.
-- [ ] 3c. Tests.
+- [x] 3c. Tests.
 
 ## 4. Scheduler loop
 

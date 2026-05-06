@@ -90,6 +90,7 @@ def create_app(config: Config) -> FastAPI:
         ExecutionBackend,
         ToolPolicy,
         ToolRegistry,
+        build_cron_tools,
         build_fileops_tools,
         build_git_tools,
         build_inline_tools,
@@ -142,6 +143,8 @@ def create_app(config: Config) -> FastAPI:
         tool_registry.register(t)
     for t in build_shell_tools():
         tool_registry.register(t)
+    for t in build_cron_tools():
+        tool_registry.register(t)
     app.state.tool_registry = tool_registry
     if tool_policy.approval_timeout_secs is not None:
         app.state.approval = ApprovalMiddleware(
@@ -160,6 +163,24 @@ def create_app(config: Config) -> FastAPI:
 
     audit_path, audit_key_path = default_audit_paths(fitt_home())
     app.state.audit = AuditLog(path=audit_path, key_path=audit_key_path)
+
+    # Event log (Phase 4.5): append-only user-visible activity.
+    # Distinct from audit (coarse, no HMAC, pruned). Feeds the
+    # Telegram push channel and the `fitt inbox` CLI. See
+    # `.kiro/specs/phase4.5-cron-events/design.md` ("Three logs,
+    # three jobs") for the boundary.
+    from .events import EventLog, default_events_path
+
+    app.state.events = EventLog(default_events_path(fitt_home()))
+
+    # Cron service (Phase 4.5): persistent cron jobs backed by
+    # $FITT_HOME/cron.json. The scheduler loop that actually
+    # fires due jobs lands in Phase 4.5 Task 4; this binding is
+    # what the `cron_*` inline tools read so an operator can
+    # create/list/remove crons today even without the loop.
+    from .cron import CronService, default_cron_path
+
+    app.state.cron = CronService(default_cron_path(fitt_home()))
 
     # Capability-gap log: append-only record of "I'd need a tool
     # to X" statements from the model. Ranked by `fitt
