@@ -165,6 +165,26 @@ Acceptance:
   fire-and-forget and used when the agent isn't currently in a
   user-facing turn).
 
+### U7 — Late approval → detached delivery
+
+> As a Telegram user, when I take 2 minutes to approve a tool
+> call (app was closed, phone was asleep), I don't want the
+> chat turn to disappear. The approved tool should still run
+> and the result should land as a new Telegram message.
+
+Acceptance:
+- A chat turn whose approval resolves *after* the gateway's
+  response has already returned (because the bot's HTTP client
+  timed out) continues running on the gateway side.
+- When the tool completes, its result is packaged as a
+  `late_tool_result` event and pushed to Telegram as a new
+  message, threaded to the original session.
+- The event log records both the original `approval_requested`
+  and the later `late_tool_result` so `fitt inbox` shows a
+  coherent trail.
+- This closes the Phase 4 known limitation flagged in
+  `phase4-tools/tasks.md` section 9.
+
 ## Scope boundaries
 
 **In scope:**
@@ -248,9 +268,26 @@ start of the new log chunk so there's a record.
 **Risk:** The agent in a loop calls `send_message` 100 times per
 minute.
 
-**Decision:** rate-limit `send_message` to a configurable ceiling
-(default 10 per minute per session). Excess calls return an error
-to the model; next call succeeds after the window.
+**Decision:** soft rate-limit on `send_message` (default 10 per
+minute per session). The tool returns a structured error with a
+`retry_after_secs` field so the model can either wait and retry
+or give up gracefully, instead of bouncing blindly against a
+closed door. No queueing — that would paper over a real "agent
+stuck in a loop" bug.
+
+### R6a — No push channel configured
+
+**Risk:** User creates a cron but hasn't set up Telegram. The
+cron fires, produces a reply, and the reply silently vanishes
+into the event log.
+
+**Decision:** `cron_add` detects the absence of a push channel
+and returns a warning in the tool result: "no push channel
+configured; this cron will run but only `fitt inbox` and the
+gateway logs will show its output." The cron still gets created.
+Logic: explicit + reversible beats silent + surprising. Phase 7+
+admin UI might grow other push surfaces (browser push, email);
+the same "no channel" check applies there.
 
 ### R7 — Agent doesn't know about active crons
 

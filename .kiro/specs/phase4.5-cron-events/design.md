@@ -62,6 +62,26 @@ Three principles drive the design.
    and `silent` flags layer on top of per-tool / per-client
    policy. No new bucket; just an additional layer.
 
+## Three logs, three jobs
+
+FITT now has (or will have) three append-only logs. Worth
+pinning the boundaries so we don't accidentally merge them
+during implementation.
+
+| Log | Path | Purpose | Durability |
+|---|---|---|---|
+| Audit (Phase 4) | `audit.jsonl` | Every tool call with before/after context. Security-relevant, tamper-evident. | HMAC-chained. One entry per tool attempt including rejections. |
+| Capability gaps (Phase 4) | `capability_gaps.log` | "I'd need a tool to X" model complaints, ranked. Feeds the next-tool backlog. | Plain JSONL. One entry per parsed gap phrase. |
+| Events (Phase 4.5) | `events.jsonl` | User-visible async activity (cron fired / completed / failed, agent_message, late_tool_result, approval_requested). Feeds Telegram push and `fitt inbox`. | Plain JSONL. Coarse-grained. Pruned after N days. |
+
+They overlap in places — a tool call that was approved late is
+both auditable (audit.jsonl) and user-visible (events.jsonl).
+Keeping them separate keeps each file's semantics tight: audit
+is exhaustive and secure, gaps are a focused backlog, events
+are what the user would scroll through in Telegram. Merging
+earns its place only when a query spans all three and the
+separation becomes a chore.
+
 ## Data model
 
 ### CronJob
@@ -167,7 +187,7 @@ doesn't block others. Per-firing timeout from
 
 Registered in `gateway/tools/cron_tools.py`:
 
-- `cron_add(name, message, schedule_spec, silent=false, approval_mode="", agent_alias="", skip_dates=[], timezone="")` → `{id, name, schedule}`
+- `cron_add(name, message, schedule_spec, silent=false, approval_mode="", agent_alias="", timezone="")` → `{id, name, schedule}`
 - `cron_list()` → formatted string with all jobs + next run times
 - `cron_update(id, **fields)` → confirmation
 - `cron_remove(id)` → confirmation
@@ -176,6 +196,13 @@ Registered in `gateway/tools/cron_tools.py`:
 `schedule_spec` accepts one of: `"every <n>s|m|h"`, `"at <iso>"`,
 `"cron <expr>"`, `"in <n> minutes"`. Parser resolves to a
 `CronSchedule`.
+
+`agent_alias == ""` means "use the gateway's default alias"
+(resolved at fire time from the gateway's `aliases.fitt-default`
+mapping in `config.yaml`, matching what an unqualified chat
+request would route to). Resolving at fire time (not at add
+time) means a cron created before the user switches their
+default alias automatically picks up the new default.
 
 Default approval buckets:
 - `cron_add`: `ask` (creation requires human approval).
@@ -284,6 +311,63 @@ When a cron fires:
    `send_message`.
 8. Emit an `EventEntry(kind="cron_fired")` regardless for the log.
 
+## Detached delivery (late-approved tools)
+
+Closes the Phase 4 rough edge: tool approved after the bot's
+HTTP client has timed out (~45s cap today). Without this, the
+tool runs, succeeds, and its result vanishes — no Telegram
+message, no visible trail except the audit log.
+
+**Rule of thumb.** If a chat turn's approval resolves *after*
+the HTTP response has already been returned to the client, the
+remaining tool-loop work continues on the gateway side and its
+output is delivered via the push channel instead of the now-
+closed request.
+
+Data flow:
+
+1. Chat handler requests approval. The 45s timeout fires before
+   the user taps. Handler catches the timeout, flips the
+   pending approval record to `detached=True`, and returns a
+   placeholder response to the client:
+   `"⏳ Approval pending — I'll message you when this completes."`
+2. User eventually taps approve (or the prompt expires, or the
+   user taps reject). The approval middleware resolves the
+   future as usual.
+3. A background coroutine that was spawned at detach-time is
+   waiting on that future. It wakes, completes the remaining
+   tool-loop iterations in the same session, and emits a
+   `late_tool_result` event when done (or `late_tool_rejected`
+   if the user rejected).
+4. TelegramPusher formats the event as a new message, threaded
+   to the original session via `session_key`.
+
+Key invariants:
+
+- **No silent drops.** Either the synchronous path completes
+  in time, or the detached path pushes an event. Every chat
+  turn with an `ask`-bucket tool produces exactly one user-
+  visible response.
+- **One detached worker per pending approval.** When we flip to
+  `detached=True`, the approval middleware owns the lifecycle;
+  the chat handler is done. If the gateway restarts while a
+  detached worker is running, the tool result is lost (documented
+  limitation). `cron.json`-style persistence for detached
+  approvals is a Phase 7+ hardening item.
+- **Session memory continues to update.** The detached worker
+  uses the same `MemoryStore.append_turn` call path as the
+  synchronous handler, so "what did we talk about earlier" keeps
+  working when you scroll back in Telegram.
+- **No bot changes for delivery.** The bot already consumes
+  events via the normal push pipeline (section above); a
+  `late_tool_result` event is just another event kind.
+
+Config: `tools.approval_detach_threshold_secs` (default: equal to
+`tools.approval_timeout_secs`). When approval wait exceeds this,
+detach. Setting it above `approval_timeout_secs` disables
+detach; set equal (default) to detach exactly when the bot's
+HTTP call would have timed out.
+
 ## Event kinds
 
 Standard taxonomy (extensible per phase):
@@ -297,13 +381,19 @@ Standard taxonomy (extensible per phase):
 - `approval_resolved` — user decided (approved / rejected /
   trust_session). Added regardless of the outcome for trail
   purposes.
+- `late_tool_result` — a tool call that was approved after its
+  chat turn had already detached. Body is the tool result; meta
+  includes `original_session_key`, `tool`, and `approval_id`.
+- `late_tool_rejected` — user rejected after detach; the chat
+  turn's placeholder response is followed up with this event so
+  the user knows the tool did not run.
 - `agent_message` — explicit `send_message` tool call. Body is
   the text.
 - `task_started` / `task_completed` / `task_failed` — reserved
   for Phase 6 (task runner).
-- `capability_gap` — reserved for the Phase 4 capability gap
-  logger (we'll keep that log separate for now; the gap logger
-  and events could merge in a later phase).
+
+(Capability gaps stay in their own log — see "Three logs, three
+jobs" above.)
 
 ## Configuration additions
 
@@ -317,6 +407,13 @@ cron:
   poll_interval_secs: 30
   # Minimum interval-kind schedule.
   min_interval_secs: 60
+
+tools:
+  # Phase 4.5: when an ask-bucket approval is still pending after
+  # this many seconds, the chat handler detaches. The remaining
+  # tool-loop work continues in the background and delivers its
+  # result as a push event. Default: mirror approval_timeout_secs.
+  approval_detach_threshold_secs: 45
 
 events:
   max_age_days: 90

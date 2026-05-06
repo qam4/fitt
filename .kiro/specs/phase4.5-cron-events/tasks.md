@@ -65,12 +65,47 @@ Status legend: `[x]` done, `[ ]` not yet.
 - [ ] 5g. Integration test: create a cron, wait a firing,
        verify session spawned + events emitted.
 
+## 5.5 Detached delivery (closes Phase 4 approval-timeout rough edge)
+
+- [ ] 5.5a. Config field `tools.approval_detach_threshold_secs`
+        (default: equals `approval_timeout_secs`). Parsed into
+        the same `ToolPolicy` block.
+- [ ] 5.5b. Chat handler: when an approval is still pending at
+        the detach threshold, flip the pending-approval record
+        to `detached=True` and return a placeholder response
+        (`"⏳ Approval pending — I'll message you when this
+        completes."`). Kicks off a detached worker coroutine
+        that awaits the same future.
+- [ ] 5.5c. Detached worker: on approval resolve, complete the
+        remaining tool-loop iterations in the same session,
+        then emit `late_tool_result` (on approve) or
+        `late_tool_rejected` (on reject). Memory append runs
+        as usual.
+- [ ] 5.5d. `cron_add` / `send_message`-style warning: if no
+        push channel is configured (no Telegram bot running,
+        no other subscribers), tool results that detach fall
+        back to the event log only. Log a clear WARNING at
+        detach time.
+- [ ] 5.5e. Telegram formatter for `late_tool_result` /
+        `late_tool_rejected` (threaded to original session).
+- [ ] 5.5f. Tests: full detach lifecycle with stubbed LLM +
+        stubbed approval future — assert the placeholder lands
+        synchronously, the event lands asynchronously, and the
+        session memory contains both halves.
+
 ## 6. `send_message` tool
 
 - [ ] 6a. Inline tool with bucket `auto`.
-- [ ] 6b. Per-session rate limiter (configurable).
+- [ ] 6b. Per-session rate limiter. On excess, return a
+       structured error with `retry_after_secs` in the payload
+       so the model can back off. Configurable window /
+       ceiling via `send_message.window_secs` + `max_per_window`.
 - [ ] 6c. Emits `agent_message` event on success.
-- [ ] 6d. Tests: rate limit, event emission.
+- [ ] 6d. When no push channel is configured, log a WARNING
+       once per gateway process (not per call) and still emit
+       the event — `fitt inbox` stays useful.
+- [ ] 6e. Tests: rate limit triggers and reports `retry_after_secs`,
+       event emission on success, no-push-channel warning path.
 
 ## 7. Telegram push
 
