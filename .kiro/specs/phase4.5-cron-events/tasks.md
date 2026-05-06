@@ -14,17 +14,17 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 2. Cron data model + persistence
 
-- [ ] 2a. `gateway/cron.py`: `CronSchedule`, `CronJob` dataclasses.
-- [ ] 2b. `CronService` CRUD: `add`, `update`, `remove`, `enable`,
+- [x] 2a. `gateway/cron.py`: `CronSchedule`, `CronJob` dataclasses.
+- [x] 2b. `CronService` CRUD: `add`, `update`, `remove`, `enable`,
        `get`, `list`. Persistence to `$FITT_HOME/cron.json` with
        atomic writes + fcntl lock.
-- [ ] 2c. Mtime-based sync: reload on external file change.
-- [ ] 2d. Schedule-string parser: `"every 60s"`, `"every 5m"`,
+- [x] 2c. Mtime-based sync: reload on external file change.
+- [x] 2d. Schedule-string parser: `"every 60s"`, `"every 5m"`,
        `"at 2026-05-01T09:00"`, `"in 30 minutes"`, `"cron 0 9 * * *"`.
        Returns a `CronSchedule`.
-- [ ] 2e. `next_run_ts(job, now)` computation for all three
+- [x] 2e. `next_run_ts(job, now)` computation for all three
        schedule kinds.
-- [ ] 2f. Tests: CRUD, persistence, schedule parsing, next-run
+- [x] 2f. Tests: CRUD, persistence, schedule parsing, next-run
        logic.
 
 ## 3. Cron inline tools

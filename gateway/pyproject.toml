@@ -22,6 +22,16 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.1",
     "rich>=13.0",
+    # Phase 4.5: 5-field cron-expression evaluator. Handles DST via
+    # zoneinfo; we pass pytz-compatible zones through unchanged.
+    "croniter>=2.0",
+    # tzdata ships the IANA timezone database for platforms that
+    # don't install it system-wide (notably Windows). Without it,
+    # `zoneinfo.ZoneInfo("America/Los_Angeles")` raises
+    # ZoneInfoNotFoundError on Windows dev machines. Linux (our
+    # production target) usually has /usr/share/zoneinfo; this
+    # package is a no-op there.
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +43,7 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
     "types-pyyaml>=6.0",
+    "types-croniter>=2.0",
 ]
 
 [project.scripts]
