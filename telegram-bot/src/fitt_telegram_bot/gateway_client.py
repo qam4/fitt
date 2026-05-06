@@ -34,6 +34,14 @@ class GatewayClient:
         self._headers = {
             "Authorization": f"Bearer {bearer_token}",
             "Content-Type": "application/json",
+            # Identify this client to the gateway. The gateway uses
+            # this for approval routing (so its Telegram-bound
+            # prompts reach this bot's poller) and per-client tool
+            # policies. Sending it unconditionally means the bot
+            # works even when the operator forgot to tag the token
+            # in secrets.yaml — the single biggest footgun during
+            # Phase 4 bring-up before this header existed.
+            "X-FITT-Client": "telegram",
         }
         self._timeout = timeout
         # Opt into the gateway's tool-forwarding loop by sending

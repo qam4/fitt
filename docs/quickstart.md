@@ -857,6 +857,20 @@ telegram:
     - 123456789
 ```
 
+**Two different tokens, don't confuse them.** The `bot_token`
+above is from `@BotFather` and authenticates the bot *to
+Telegram*. It's distinct from the Bearer token in
+`allowed_tokens:` at the top of the file, which authenticates
+the bot *to the gateway*.
+
+**About the `client:` tag on the gateway token.** The bot sends
+`X-FITT-Client: telegram` on every request, so approval routing
+works even if you leave `client:` unset on the gateway token.
+If you want the config to be self-describing (recommended when
+you start running multiple interfaces), give the bot its own
+gateway token with `client: telegram` — see
+`configs/secrets.example.yaml` for the pattern.
+
 ### 15.3 Restart the bot
 
 From the repo root on the hub:

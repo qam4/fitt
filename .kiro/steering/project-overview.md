@@ -68,6 +68,11 @@ Firewall on the Hub).
 10. Shareable by construction. No personal values, secrets, or
     machine-specific paths in the repo. Users bring their own
     `~/.fitt/` directory.
+11. Fail loud on detectable misconfigurations. Surface the error
+    at boot or first request, never silently degrade. When the
+    system can auto-detect the right answer (e.g. a client sending
+    `X-FITT-Client`), use it — don't ask users to declare things
+    the system can figure out.
 
 ## Architecture highlights
 

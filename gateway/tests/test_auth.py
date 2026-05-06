@@ -158,3 +158,139 @@ def test_auth_sets_client_state_to_webui_for_untagged_token(tmp_path: Path) -> N
     )
     assert r.status_code == 200, r.text
     assert r.json() == {"client": "webui"}
+
+
+# ---------- X-FITT-Client header identification -------------------
+# The header exists so well-behaved clients (the Telegram bot
+# especially) can self-identify without the operator having to tag
+# the token in secrets.yaml. See module docstring in auth.py.
+
+
+def _mount_probe(app) -> None:  # type: ignore[no-untyped-def]
+    """Helper: add a tiny auth-protected GET that echoes the
+    resolved client tag. Kept private to this test module."""
+    router = APIRouter()
+
+    @router.get("/v1/_probe_client")
+    async def _probe(request: Request) -> JSONResponse:
+        return JSONResponse({"client": request.state.client})
+
+    app.include_router(router)
+
+
+def test_auth_header_overrides_untagged_token(tmp_path: Path) -> None:
+    """Untagged token + `X-FITT-Client: telegram` → telegram.
+
+    This is the primary use case: the bot sends the header so its
+    requests are tagged correctly even if the operator forgot to
+    add `client: telegram` to secrets.yaml."""
+    cfg = build_test_config(tmp_path)
+    assert cfg.secrets is not None
+    assert cfg.secrets.allowed_tokens[0].client is None
+    app = create_app(cfg)
+    _mount_probe(app)
+
+    c = TestClient(app)
+    r = c.get(
+        "/v1/_probe_client",
+        headers={
+            "Authorization": f"Bearer {PERSONAL_TOKEN}",
+            "X-FITT-Client": "telegram",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"client": "telegram"}
+
+
+def test_auth_header_agrees_with_token_tag(tmp_path: Path) -> None:
+    """Tagged token + matching header → same tag, no error."""
+    cfg = build_test_config(tmp_path)
+    assert cfg.secrets is not None
+    cfg.secrets = Secrets(
+        allowed_tokens=[AllowedToken(name="bot", token=PERSONAL_TOKEN, client="telegram")],
+        openrouter_api_key=cfg.secrets.openrouter_api_key,
+    )
+    app = create_app(cfg)
+    _mount_probe(app)
+
+    c = TestClient(app)
+    r = c.get(
+        "/v1/_probe_client",
+        headers={
+            "Authorization": f"Bearer {PERSONAL_TOKEN}",
+            "X-FITT-Client": "telegram",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json() == {"client": "telegram"}
+
+
+def test_auth_header_disagrees_with_token_tag_rejects(tmp_path: Path) -> None:
+    """Tagged token + different header → 400, fail loud.
+
+    We don't silently favour one over the other because a silent
+    win could mask an operator mistake. A 400 with both values
+    shows operators exactly what's wrong."""
+    cfg = build_test_config(tmp_path)
+    assert cfg.secrets is not None
+    cfg.secrets = Secrets(
+        allowed_tokens=[AllowedToken(name="ide-token", token=PERSONAL_TOKEN, client="ide")],
+        openrouter_api_key=cfg.secrets.openrouter_api_key,
+    )
+    app = create_app(cfg)
+    _mount_probe(app)
+
+    c = TestClient(app)
+    r = c.get(
+        "/v1/_probe_client",
+        headers={
+            "Authorization": f"Bearer {PERSONAL_TOKEN}",
+            "X-FITT-Client": "telegram",
+        },
+    )
+    assert r.status_code == 400
+    body = r.json()
+    assert body["error"]["code"] == "client_mismatch"
+    # Both values should appear so operators know what to fix.
+    assert "telegram" in body["error"]["message"]
+    assert "ide" in body["error"]["message"]
+
+
+def test_auth_header_with_invalid_value_rejects(tmp_path: Path) -> None:
+    """Header present but not one of ide/telegram/webui/cli → 400."""
+    cfg = build_test_config(tmp_path)
+    app = create_app(cfg)
+    _mount_probe(app)
+
+    c = TestClient(app)
+    r = c.get(
+        "/v1/_probe_client",
+        headers={
+            "Authorization": f"Bearer {PERSONAL_TOKEN}",
+            "X-FITT-Client": "not-a-real-client",
+        },
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "client_mismatch"
+
+
+def test_auth_header_case_insensitive(tmp_path: Path) -> None:
+    """Header values are normalised to lower-case before matching.
+
+    Telegram's own User-Agent style has sometimes encouraged
+    Pascal-Case; we accept ``Telegram`` and ``TELEGRAM`` the same
+    as ``telegram``."""
+    cfg = build_test_config(tmp_path)
+    app = create_app(cfg)
+    _mount_probe(app)
+
+    c = TestClient(app)
+    r = c.get(
+        "/v1/_probe_client",
+        headers={
+            "Authorization": f"Bearer {PERSONAL_TOKEN}",
+            "X-FITT-Client": "Telegram",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json() == {"client": "telegram"}

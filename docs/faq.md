@@ -699,7 +699,58 @@ test upgrade, native-install doc).
 
 ---
 
-## How to add entries
+## Failure modes
+
+### Q: Why did X break silently and how do I know what to fix? Also — why isn't there a default that just works?
+
+Silent failures are the worst kind — a user hits them, sees
+nothing obvious in the logs, has no idea what to change, and
+often can't even describe the problem. The first question,
+"what's broken," is easy when the system tells you. It's hard
+when the system pretends everything is fine.
+
+FITT's rule: **fail loud on detectable misconfigurations**.
+Three layers:
+
+1. **Boot-time warnings.** When a config looks off but still
+   technically valid (e.g. a token with no `client:` tag),
+   log a WARNING with a pointer to the fix. Don't refuse to
+   boot if the config still produces a working-ish system —
+   that breaks upgrades. Do make the warning loud enough to
+   notice in a log tail.
+2. **Request-time errors.** When a runtime signal disagrees
+   with config (e.g. `X-FITT-Client: telegram` header but
+   the token is tagged `ide`), return 400 with **both values
+   visible** in the message so operators can tell what to
+   reconcile.
+3. **Auto-detect when possible.** The Telegram bot sends
+   `X-FITT-Client: telegram` on every request. That means an
+   operator who forgets to tag the bot's token in
+   `secrets.yaml` still gets correct behaviour — the system
+   figured it out without asking. Only fall back to config
+   when the runtime signal isn't present.
+
+**About defaults.** Safe defaults are tempting
+("untagged token → webui least-trust") and often correct,
+but they can hide problems. In the Phase 4 bring-up the
+"untagged → webui" default meant the Telegram bot's chat
+requests got tagged `webui`, its approvals were stored as
+`webui`, its poller was asking for `telegram`, and nothing
+matched. The gateway was fine. The bot was fine. Their
+inability to agree was invisible because the default seemed
+fine.
+
+The fix wasn't to pick a different default — no default
+could've known the bot should be `telegram` without being
+told. The fix was to let the bot *tell* the gateway who it
+was (header), and to warn about the ambiguous config at boot
+so future operators know what they're leaving on the table.
+
+**Related:** `FITT_ROADMAP.md` principle 11; `auth.py` for the
+X-FITT-Client resolution rules; Phase 4 tasks.md commit history
+for the bug that motivated this entry.
+
+---
 
 Questions should be the concern someone arrives at the code with,
 not the answer framed as a leading question. Structure:
