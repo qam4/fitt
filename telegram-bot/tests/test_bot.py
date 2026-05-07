@@ -125,3 +125,137 @@ def test_build_application_bounds_concurrency(
         "a small bounded value. If you meant to raise the bound, "
         "update this guard with the rationale."
     )
+
+
+# --------------------------------------------------------------- callback keyboard cleanup
+
+
+async def test_approval_callback_clears_keyboard_on_success(
+    isolate_fitt_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard: after a successful approve/reject/trust,
+    the prompt's inline keyboard must be removed so re-tapping
+    the same message doesn't fire another decide request.
+
+    Pre-fix, the edit passed only `text=`, leaving the keyboard
+    on the message; users could tap the same button repeatedly
+    and produce cascade 404s (seen live against prompts left
+    over from earlier gateway restarts)."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from telegram import Message
+
+    from fitt_telegram_bot.approval import build_callback_data
+    from fitt_telegram_bot.bot import _on_approval_callback
+    from fitt_telegram_bot.handlers import Services
+
+    # Shape-compatible stand-ins. Using types.SimpleNamespace for
+    # the query / user objects keeps the test dependency-free of
+    # PTB's full Update/CallbackQuery machinery.
+    approval_id = "11111111-2222-3333-4444-555555555555"
+    callback_data = build_callback_data("approve", approval_id)
+
+    query = types.SimpleNamespace(
+        data=callback_data,
+        answer=AsyncMock(return_value=None),
+        message=MagicMock(spec=Message),
+    )
+    query.message.text = "🔐 Tool approval needed\nTool: git_status\nArgs: {}"
+    query.message.chat_id = 42
+    query.message.message_id = 1001
+
+    update = types.SimpleNamespace(
+        callback_query=query,
+        effective_user=types.SimpleNamespace(id=7, username="tester"),
+    )
+
+    gateway = types.SimpleNamespace(
+        decide_approval=AsyncMock(return_value=(True, None)),
+    )
+    services = Services(
+        gateway=gateway,  # type: ignore[arg-type]
+        prefs=MagicMock(),
+        sessions=MagicMock(),
+        allowlist=frozenset({7}),
+    )
+
+    bot = types.SimpleNamespace(edit_message_text=AsyncMock(return_value=None))
+    context = types.SimpleNamespace(
+        bot=bot,
+        bot_data={"services": services},
+    )
+
+    await _on_approval_callback(update, context)  # type: ignore[arg-type]
+
+    # The decide POST ran.
+    gateway.decide_approval.assert_awaited_once_with(approval_id, "approve")
+    # The message got edited, and critically, reply_markup=None
+    # cleared the keyboard. Without this, re-tapping the old
+    # prompt cascades 404s.
+    bot.edit_message_text.assert_awaited_once()
+    kwargs = bot.edit_message_text.await_args.kwargs
+    assert kwargs["chat_id"] == 42
+    assert kwargs["message_id"] == 1001
+    assert "✅" in kwargs["text"]
+    assert kwargs["reply_markup"] is None
+
+
+async def test_approval_callback_clears_keyboard_on_404(
+    isolate_fitt_home: Path,
+) -> None:
+    """Same guard for the failure branch. A 404 from the gateway
+    (stale approval id) leaves the message visible but the
+    keyboard has to go — re-tapping would produce the same 404
+    and dirty the bot's logs without making progress."""
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from telegram import Message
+
+    from fitt_telegram_bot.approval import build_callback_data
+    from fitt_telegram_bot.bot import _on_approval_callback
+    from fitt_telegram_bot.handlers import Services
+
+    approval_id = "stale-id-from-a-prior-gateway-process"
+    callback_data = build_callback_data("approve", approval_id)
+
+    query = types.SimpleNamespace(
+        data=callback_data,
+        answer=AsyncMock(return_value=None),
+        message=MagicMock(spec=Message),
+    )
+    query.message.text = "🔐 Tool approval needed\nTool: old_tool"
+    query.message.chat_id = 42
+    query.message.message_id = 1002
+
+    update = types.SimpleNamespace(
+        callback_query=query,
+        effective_user=types.SimpleNamespace(id=7, username="tester"),
+    )
+
+    gateway = types.SimpleNamespace(
+        decide_approval=AsyncMock(
+            return_value=(False, "HTTP 404: approval not found or already resolved")
+        ),
+    )
+    services = Services(
+        gateway=gateway,  # type: ignore[arg-type]
+        prefs=MagicMock(),
+        sessions=MagicMock(),
+        allowlist=frozenset({7}),
+    )
+
+    bot = types.SimpleNamespace(edit_message_text=AsyncMock(return_value=None))
+    context = types.SimpleNamespace(
+        bot=bot,
+        bot_data={"services": services},
+    )
+
+    await _on_approval_callback(update, context)  # type: ignore[arg-type]
+
+    bot.edit_message_text.assert_awaited_once()
+    kwargs = bot.edit_message_text.await_args.kwargs
+    assert "⚠️" in kwargs["text"]
+    assert "404" in kwargs["text"]
+    assert kwargs["reply_markup"] is None

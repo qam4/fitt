@@ -269,6 +269,13 @@ async def _on_approval_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()  # dismiss the spinner
 
     # Edit the original message so the user sees the outcome.
+    # Drop the inline keyboard so the prompt is in a terminal
+    # state: a successful decide shouldn't invite re-tapping,
+    # and a failed decide (typically 404 on a stale prompt left
+    # over from a previous gateway run) shouldn't invite
+    # re-tapping either — each retry would produce the same
+    # 404 and dirty up the logs. Passing `reply_markup=None`
+    # replaces any existing markup with "no keyboard."
     outcome = f"✅ {decision.replace('_', ' ')}" if ok else f"⚠️ Failed: {detail or 'unknown error'}"
     msg = query.message
     if isinstance(msg, Message):
@@ -278,6 +285,7 @@ async def _on_approval_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 chat_id=msg.chat_id,
                 message_id=msg.message_id,
                 text=f"{original_text}\n\n{outcome}",
+                reply_markup=None,
             )
         except Exception as e:
             # The message may already have been edited (double-tap);
