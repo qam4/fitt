@@ -448,32 +448,28 @@ async def test_fire_framing_has_no_example_user_messages(
         )
 
 
-async def test_default_alias_prefers_fitt_smart(app: Any) -> None:
-    """Regression guard for the 2026-05-07 "qwen-coder narrates
-    tool JSON as text" observation. Cron firings run unattended:
-    when the model decides to call a tool, it has to ACTUALLY
-    emit a tool_calls structure, not narrate JSON in content.
-    Frontier models handle this; local Qwen-Coder 14b flakes on
-    the tool-call channel consistently.
+async def test_default_alias_prefers_fitt_default(app: Any) -> None:
+    """Pin the 'models are configuration, not architecture'
+    principle: cron firings default to whatever the operator
+    configured as fitt-default. We deliberately do NOT silently
+    upgrade to fitt-smart — the operator's choice wins.
 
-    Defaulting cron firings to fitt-smart sidesteps that whole
-    failure class without forcing operators to remember to set
-    agent_alias on every cron_add. Per-cron override via the
-    ``agent_alias`` arg still works for cost-sensitive polling
-    crons.
-
-    The test config (via _fixtures.build_test_config) includes
-    both fitt-smart and fitt-default aliases; fitt-smart must
-    win."""
+    When the local model doesn't handle tool-calling well (a
+    qwen2.5-coder:14b observation), the right fix is to pick
+    a better local model or explicitly set agent_alias=fitt-smart
+    per-cron, not to hide the issue behind a default that
+    routes around the operator's configuration invisibly.
+    """
     runner: CronRunner = app.state.cron_runner
-    assert runner._default_alias() == "fitt-smart"
+    assert runner._default_alias() == "fitt-default"
 
 
-async def test_default_alias_falls_back_when_smart_missing(tmp_path: Path) -> None:
-    """If the operator's config doesn't define fitt-smart (e.g.
-    a local-only setup with no cloud models), the default falls
-    through to fitt-default rather than crashing or returning
-    a nonsense alias."""
+async def test_default_alias_falls_back_to_first_when_no_fitt_default(
+    tmp_path: Path,
+) -> None:
+    """Unusual config without a fitt-default alias: fall back
+    to whatever the first alias in the map is. Covers test
+    configs and operators who've renamed the default alias."""
     from decimal import Decimal
 
     from gateway.config import (
@@ -488,7 +484,7 @@ async def test_default_alias_falls_back_when_smart_missing(tmp_path: Path) -> No
 
     cfg = Config(
         server=ServerConfig(host="127.0.0.1", port=8080),
-        aliases={"fitt-default": "qwen-big"},  # no fitt-smart
+        aliases={"my-custom-alias": "qwen-big"},  # no fitt-default
         models=[
             ModelConfig(
                 id="qwen-big",
@@ -511,4 +507,4 @@ async def test_default_alias_falls_back_when_smart_missing(tmp_path: Path) -> No
     )
     app = create_app(cfg)
     runner: CronRunner = app.state.cron_runner
-    assert runner._default_alias() == "fitt-default"
+    assert runner._default_alias() == "my-custom-alias"

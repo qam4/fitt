@@ -101,11 +101,11 @@ _SCHEMA_CRON_ADD: dict[str, Any] = {
                 "Which model alias to use when the cron fires "
                 "(e.g. 'fitt-smart' for cloud, 'fitt-default' "
                 "for local). Empty string uses the gateway's "
-                "cron default, which prefers fitt-smart because "
-                "frontier models tool-call more reliably than "
-                "local ones during unattended firings. Pin to a "
-                "local alias only when cost matters more than "
-                "reliability (e.g. a 60s monitoring cron)."
+                "cron default (fitt-default — the operator's "
+                "everyday alias). Override to fitt-smart "
+                "per-cron when you want better tool-calling "
+                "reliability for unattended firings, or pin "
+                "to fitt-default explicitly when cost matters."
             ),
             "default": "",
         },

@@ -267,34 +267,34 @@ class CronRunner:
     def _default_alias(self) -> str:
         """Resolve job.agent_alias='' to the gateway's default.
 
-        Preference order:
+        Falls back to ``fitt-default`` — the user's everyday
+        alias — rather than silently upgrading to ``fitt-smart``.
+        The principle (roadmap §7: "models are configuration,
+        not architecture") says the operator's choice wins; our
+        job is to surface when that choice isn't handling a
+        workload well, not to route around it invisibly.
 
-        1. ``fitt-smart`` — the frontier-model alias. Cron
-           firings need reliable tool-calling: the agent session
-           runs without human oversight for the entire loop, so
-           when the model decides to call ``send_message`` or
-           check a state, it has to actually *emit* a tool_calls
-           structure rather than narrating JSON in content.
-           Local Qwen-Coder consistently flakes on this;
-           frontier models don't. Observed live 2026-05-07:
-           four successive qwen-coder cron firings all produced
-           ``I'll call send_message now\\n```json\\n{...}\\n``` ``
-           instead of executing the tool. Defaulting to
-           fitt-smart removes that failure class.
-        2. ``fitt-default`` — the user's chosen everyday alias.
-           Used only if fitt-smart isn't configured (the example
-           config always ships both).
-        3. First alias in the map — last-resort fallback for
-           test configs and unusual deployments.
+        Tool-calling in cron firings is where weak local models
+        (qwen2.5-coder:14b observed 2026-05-07) most visibly
+        fail — they narrate tool JSON in content instead of
+        emitting a tool_calls structure. The right response is
+        (a) test whether the operator's actually-configured
+        local model handles it (llm-checker toolcheck, or the
+        opt-in real-model trajectory suite), and (b) let the
+        operator pick a different local model or explicitly
+        pin ``agent_alias: fitt-smart`` per-cron when they
+        want the cloud route.
 
-        Operators who want a different default can override
-        per-cron via the ``agent_alias`` arg on ``cron_add``
-        (e.g. a monitoring cron that runs every 60s might not
-        be worth the cloud cost — pin it to the local alias
-        and accept the tool-calling risk)."""
+        Resolution order:
+
+        1. ``fitt-default`` — the operator's chosen everyday
+           alias. Used first because the whole alias system
+           exists to let the operator pick.
+        2. First alias in the map — last-resort fallback for
+           test configs and unusual deployments that don't
+           define fitt-default.
+        """
         aliases = list(self._config.aliases.keys())
-        if "fitt-smart" in aliases:
-            return "fitt-smart"
         if "fitt-default" in aliases:
             return "fitt-default"
         return aliases[0] if aliases else "fitt-default"
