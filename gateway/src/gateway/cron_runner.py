@@ -374,10 +374,14 @@ def _build_cron_framing(job: CronJob) -> str:
        what the user wanted to hear or have done at this moment,
        not a request to set up a new reminder.
     2. **Tools are allowed but not required.** A monitoring cron
-       ("check the build and tell me when it's done") does need
-       to call tools; a reminder cron ("take a break") does not.
-       The framing explicitly permits both cases so we're not
-       blanket-discouraging tool use.
+       legitimately needs to call tools; a reminder cron does
+       not. The framing permits both without embedding concrete
+       example phrases — a naked qwen-coder happily copied a
+       bracketed example ("check the build and tell me when
+       it's done") as its actual input on 2026-05-07, so the
+       rule now is: no example sentences in the framing prose.
+       Name the tools (`send_message`, etc.), don't name a
+       situation that parses as a user request.
 
     We include the job's name + schedule kind so the model sees
     context ("this is the 'lunch reminder' every 1d cron") and
@@ -407,23 +411,19 @@ def _build_cron_framing(job: CronJob) -> str:
     return (
         "[Scheduled firing]\n"
         f"You are running as a scheduled agent session for the cron "
-        f"{job.name!r} ({schedule_phrase}). The next message in this "
-        "conversation is the stored prompt the user wanted you to act on "
-        "at this moment — NOT a fresh request to create or re-create a "
-        "cron. Do not call `cron_add`, `cron_update`, or any other cron "
-        "tool to schedule the reminder you are already delivering.\n"
+        f"{job.name!r} ({schedule_phrase}). The next user message in "
+        "this conversation is the stored prompt the user asked you to "
+        "act on at this moment. It is NOT a fresh request to create "
+        "or re-create a cron — do not call `cron_add`, `cron_update`, "
+        "or any other cron tool in response to it.\n"
         "\n"
-        "What to do:\n"
-        "- If the stored message is a reminder ('take a break', 'stand "
-        "up'), deliver it as a short natural reply. No tools needed.\n"
-        "- If the stored message asks you to check something ('is the "
-        "build done?', 'any new PRs?'), use the relevant tools to find "
-        "out, then reply with the answer.\n"
-        "- If the stored message asks you to actively send a message "
-        "that the user wants pushed to their phone even in a silent "
-        "cron, call `send_message`.\n"
+        "Respond to the stored prompt the way you would respond to a "
+        "fresh chat turn carrying the same text. If it asks for "
+        "information, fetch it and answer. If it tells you to push a "
+        "notification out, call `send_message`. If it is something "
+        "the user wanted to hear out loud, deliver it as a short "
+        "natural reply. Do not narrate tool JSON in your reply; "
+        "actually call the tool, or don't.\n"
         "\n"
-        "Reply in a tone that matches the user's usual preferences. "
-        "Keep it brief. Do not narrate tool JSON in your reply; actually "
-        "call the tool, or don't."
+        "Match the user's preferred reply tone. Keep it brief."
     )

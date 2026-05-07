@@ -393,3 +393,56 @@ async def test_fire_framing_does_not_block_send_message_guidance(
     # push case — losing this phrase would starve silent
     # monitoring crons of their only notification channel.
     assert "send_message" in system
+
+
+async def test_fire_framing_has_no_example_user_messages(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for the 2026-05-07 "model copied a
+    framing example as its actual input" bug.
+
+    The earlier framing contained bracketed examples — 'take a
+    break', 'check the build and tell me when it's done', 'any
+    new PRs?' — intended as illustrative categories. A naked
+    qwen-coder picked one of those example phrases as its real
+    prompt and emitted a cron_add call with it, ignoring the
+    actual stored message.
+
+    Fix: drop example sentences from the framing. Name the
+    tools the model can use (send_message by name) but do NOT
+    embed phrases that parse as user requests. This test
+    asserts the specific phrases the model grabbed are no
+    longer in the framing; keeping the set small so adding
+    future framing text is still ergonomic.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _fake_completion(content="ok")
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    runner: CronRunner = app.state.cron_runner
+    await runner.fire(
+        CronJob(
+            id="noex",
+            name="whatever",
+            message="deliver me",
+            schedule=CronSchedule(kind="every", every_secs=60),
+        )
+    )
+    system = next(m["content"] for m in captured["messages"] if m.get("role") == "system")
+
+    # Specific phrases we observed the model grab as its input.
+    for banned in [
+        "check the build",
+        "take a break",
+        "any new PRs",
+        "is the build done",
+    ]:
+        assert banned.lower() not in system.lower(), (
+            f"framing still contains {banned!r}; qwen-coder will grab it "
+            "as its actual user prompt. Name the tools instead of the "
+            "situations."
+        )
