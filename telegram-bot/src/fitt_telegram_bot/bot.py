@@ -64,7 +64,29 @@ def build_application(bot_config: TelegramBotConfig) -> Application[Any, Any, An
         allowlist=bot_config.allowlist_user_ids,
     )
 
-    app = ApplicationBuilder().token(bot_config.bot_token).build()
+    app = (
+        ApplicationBuilder()
+        .token(bot_config.bot_token)
+        # Allow PTB to dispatch multiple updates in parallel on the
+        # same event loop. Without this, updates are processed
+        # strictly serially: a chat text handler that's awaiting a
+        # long gateway reply blocks ALL other updates — including
+        # the inline-keyboard callback that resolves the approval
+        # that's holding the chat reply. That deadlocks until the
+        # gateway's 45-second approval timeout fires, at which
+        # point the chat returns with a tool error, the callback
+        # finally runs, and its decide POST hits a 404 because the
+        # approval was already cleaned up. See 2026-05 debug
+        # session: every ask-bucket tool (git_commit, cron_add)
+        # failed this way; spec_list worked because it was auto.
+        #
+        # A small bound rather than unlimited: single-user bot,
+        # realistic peak is chat + approval-tap + a couple of
+        # queued events. 4 leaves headroom without inviting
+        # unbounded fan-out on a misbehaving gateway.
+        .concurrent_updates(4)
+        .build()
+    )
     app.bot_data["services"] = services
 
     app.add_handler(CommandHandler("start", _wrap_command(_on_start)))
