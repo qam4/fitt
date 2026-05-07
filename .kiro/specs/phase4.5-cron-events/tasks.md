@@ -95,16 +95,16 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 6. `send_message` tool
 
-- [ ] 6a. Inline tool with bucket `auto`.
-- [ ] 6b. Per-session rate limiter. On excess, return a
+- [x] 6a. Inline tool with bucket `auto`.
+- [x] 6b. Per-session rate limiter. On excess, return a
        structured error with `retry_after_secs` in the payload
        so the model can back off. Configurable window /
        ceiling via `send_message.window_secs` + `max_per_window`.
-- [ ] 6c. Emits `agent_message` event on success.
-- [ ] 6d. When no push channel is configured, log a WARNING
+- [x] 6c. Emits `agent_message` event on success.
+- [x] 6d. When no push channel is configured, log a WARNING
        once per gateway process (not per call) and still emit
        the event — `fitt inbox` stays useful.
-- [ ] 6e. Tests: rate limit triggers and reports `retry_after_secs`,
+- [x] 6e. Tests: rate limit triggers and reports `retry_after_secs`,
        event emission on success, no-push-channel warning path.
 
 ## 7. Telegram push

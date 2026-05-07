@@ -178,6 +178,17 @@ memory:
 #   git_commit:
 #     default: ask
 #
+#   # Phase 4.5 Task 6: send_message rate limit. Cap on how
+#   # many proactive agent-to-user messages a single session
+#   # can push per sliding window. Exceeding returns a
+#   # structured error with retry_after_secs so the model can
+#   # back off. Defaults (60s, 10 msg) balance "a chatty
+#   # monitoring cron is fine" with "a runaway loop can't
+#   # spam the user".
+#   send_message:
+#     window_secs: 60
+#     max_per_window: 10
+#
 #   # Per-client overrides: keyed by client tag (ide, telegram,
 #   # webui, cli). Flattens "write_file in the IDE should auto-
 #   # approve but from Telegram should ask":

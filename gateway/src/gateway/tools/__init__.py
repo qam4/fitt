@@ -23,12 +23,14 @@ from .fileops import build_fileops_tools
 from .gitops import build_git_tools
 from .inline import build_inline_tools
 from .registry import ToolPolicy, ToolRegistry
+from .send_message import SendMessageRateLimiter, build_send_message_tool
 from .shelltools import build_shell_tools
 
 __all__ = [
     "ApprovalBucket",
     "ApprovalDecision",
     "ExecutionBackend",
+    "SendMessageRateLimiter",
     "ShellResult",
     "Tool",
     "ToolCallable",
@@ -40,6 +42,7 @@ __all__ = [
     "build_fileops_tools",
     "build_git_tools",
     "build_inline_tools",
+    "build_send_message_tool",
     "build_shell_tools",
     "deny_list",
 ]

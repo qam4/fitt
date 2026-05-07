@@ -88,12 +88,14 @@ def create_app(config: Config) -> FastAPI:
     from .ssh_identity import default_key_path, ensure_key
     from .tools import (
         ExecutionBackend,
+        SendMessageRateLimiter,
         ToolPolicy,
         ToolRegistry,
         build_cron_tools,
         build_fileops_tools,
         build_git_tools,
         build_inline_tools,
+        build_send_message_tool,
         build_shell_tools,
     )
 
@@ -145,6 +147,36 @@ def create_app(config: Config) -> FastAPI:
         tool_registry.register(t)
     for t in build_cron_tools():
         tool_registry.register(t)
+
+    # Phase 4.5 Task 6: send_message. The rate limiter lives for
+    # the gateway's lifetime (in-memory; a restart resets
+    # counts, matching the approval middleware's posture). The
+    # push-channel probe closes over ``config`` so a hot config
+    # reload that adds/removes Telegram secrets propagates on
+    # the next call — no restart needed.
+    send_message_limiter = SendMessageRateLimiter(
+        window_secs=60.0,
+        max_per_window=10,
+    )
+    app.state.send_message_limiter = send_message_limiter
+
+    def _has_push_channel() -> bool:
+        """Heuristic mirror of chat.py's ``_push_channel_available``.
+        Returns True when Telegram secrets are configured —
+        best-effort signal that a subscriber is (or could be)
+        running. Missing secrets means the event is only visible
+        via ``fitt inbox``."""
+        secrets = getattr(config, "secrets", None)
+        if secrets is None:
+            return False
+        return getattr(secrets, "telegram", None) is not None
+
+    tool_registry.register(
+        build_send_message_tool(
+            limiter=send_message_limiter,
+            push_channel_available=_has_push_channel,
+        )
+    )
     app.state.tool_registry = tool_registry
     if tool_policy.approval_timeout_secs is not None:
         app.state.approval = ApprovalMiddleware(
