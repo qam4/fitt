@@ -104,6 +104,15 @@ def test_cron_completed_uses_cron_name() -> None:
     assert out.startswith("✅")
 
 
+def test_silent_cron_completed_returns_empty() -> None:
+    """``silent: true`` crons land with an empty body. Returning
+    a "✅ cron X" pingback every firing would defeat the flag.
+    The push pipeline treats empty formatted output as "skip
+    delivery" — so this is the silent path's off-switch."""
+    out = format_event(_evt("cron_completed", title="cron 'monitor'", body="", meta={}))
+    assert out == ""
+
+
 def test_cron_failed_shows_error() -> None:
     out = format_event(
         _evt(

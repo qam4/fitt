@@ -109,11 +109,11 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 7. Telegram push
 
-- [ ] 7a. `TelegramPusher` in the telegram-bot package (or
+- [x] 7a. `TelegramPusher` in the telegram-bot package (or
        gateway; decide where the Telegram client lives most
        cleanly).
-- [ ] 7b. Subscriber hook: EventLog.append fires the pusher.
-- [ ] 7c. Per-kind Telegram message formatting:
+- [x] 7b. Subscriber hook: EventLog.append fires the pusher.
+- [x] 7c. Per-kind Telegram message formatting:
        - `cron_completed` → "✅ <cron name>: <body preview>".
        - `cron_failed` → "❌ <cron name>: <error>".
        - `agent_message` → "<title>: <body>".
@@ -121,8 +121,8 @@ Status legend: `[x]` done, `[ ]` not yet.
          with inline keyboard (reuses Phase 4 approval UI).
        - Body cap at `events.telegram_body_cap`; overflow replaced
          with "... (truncated)".
-- [ ] 7d. Delivery failures logged, do not block the producer.
-- [ ] 7e. Tests: each event kind formats correctly.
+- [x] 7d. Delivery failures logged, do not block the producer.
+- [x] 7e. Tests: each event kind formats correctly.
 
 ## 8. Cron CLI
 

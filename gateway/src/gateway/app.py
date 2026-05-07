@@ -355,6 +355,7 @@ def create_app(config: Config) -> FastAPI:
 
     # Routers - imported lazily to keep import graph acyclic.
     from .approvals_endpoint import router as approvals_router
+    from .events_endpoint import router as events_router
     from .health import router as health_router
     from .mcp_endpoint import router as mcp_router
     from .models_endpoint import router as models_router
@@ -362,6 +363,7 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(health_router)
     app.include_router(models_router)
     app.include_router(approvals_router)
+    app.include_router(events_router)
     app.include_router(mcp_router)
 
     try:

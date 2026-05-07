@@ -96,6 +96,41 @@ class GatewayClient:
             return []
         return pending
 
+    async def list_events(
+        self,
+        *,
+        since: float | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """GET /v1/events[?since=...][&limit=...].
+
+        Returns the ``events`` array from the response, newest
+        last (file order), or an empty list on any error. The
+        event pusher calls this every second; same
+        transient-failure posture as ``list_pending_approvals``.
+        """
+        params: dict[str, str] = {"limit": str(limit)}
+        if since is not None:
+            params["since"] = str(since)
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            try:
+                r = await http.get(
+                    f"{self._base}/v1/events",
+                    headers=self._headers,
+                    params=params,
+                )
+                r.raise_for_status()
+            except httpx.HTTPError as e:
+                _log.warning(
+                    "gateway.list_events.failed",
+                    extra={"error": str(e)},
+                )
+                return []
+        events = r.json().get("events", [])
+        if not isinstance(events, list):
+            return []
+        return events
+
     async def decide_approval(self, approval_id: str, decision: str) -> tuple[bool, str | None]:
         """POST /v1/approvals/{id}/decide with {decision: ...}.
 

@@ -101,12 +101,21 @@ def _format_late_tool_rejected(entry: dict[str, Any], body: str) -> str:
 
 
 def _format_cron_completed(entry: dict[str, Any], body: str) -> str:
-    """Reserved for Task 7 so the Telegram push has consistent
-    formatting when cron firings land. Silent crons ship with
-    an empty body — we still produce a terse line so the user
-    knows the cron ran; Task 7's push logic can filter silent
-    events before calling into this formatter if that proves
-    noisy."""
+    """A cron firing completed.
+
+    When the cron was silent (``silent: true`` → cron_runner
+    drops the body), we return an empty string. The pusher's
+    contract is that empty formatted output skips delivery —
+    which is the whole point of ``silent``. Returning a "✅
+    cron" pingback on every silent firing would defeat the
+    flag.
+
+    When there's a body, render the normal "✅ <name>\\n\\n<body>"
+    shape. Name resolution: ``meta.cron_name`` (if the runner
+    populated it — not today, but reserved) or the event's
+    ``title`` (currently "cron '<name>'")."""
+    if not body:
+        return ""
     name = entry.get("meta", {}).get("cron_name") or entry.get("title", "cron")
     header = f"✅ {name}"
     return _join_non_empty(header, body)

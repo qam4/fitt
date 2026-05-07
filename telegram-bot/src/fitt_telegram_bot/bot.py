@@ -39,6 +39,7 @@ from .approval import (
     parse_callback_data,
 )
 from .config import TelegramBotConfig
+from .event_pusher import EventPusher
 from .gateway_client import GatewayClient
 from .handlers import IncomingUpdate, Services
 from .prefs import PrefsStore
@@ -118,7 +119,7 @@ def _make_post_init(
     bot_config: TelegramBotConfig, services: Services
 ) -> Callable[[Application[Any, Any, Any, Any, Any, Any]], Awaitable[None]]:
     """Returns a PTB `post_init` coroutine that starts the
-    approval poller as a background task."""
+    approval poller + event pusher as background tasks."""
 
     async def _post_init(app: Application[Any, Any, Any, Any, Any, Any]) -> None:
         poller = ApprovalPoller(
@@ -131,20 +132,69 @@ def _make_post_init(
         app.bot_data["approval_poller_task"] = task
         _log.info("telegram.approval_poller.scheduled")
 
+        # Phase 4.5 Task 7: event push subscriber. Polls the
+        # gateway's event log and delivers new entries
+        # (cron_fired, cron_completed, agent_message, late_tool_*)
+        # to the allowlisted users.
+        #
+        # Cursor sits alongside prefs under $FITT_HOME/telegram/
+        # so "everything the bot keeps on disk" lives in one
+        # place.
+        cursor_path = bot_config.prefs_path.parent / "pusher_cursor.json"
+        pusher = EventPusher(
+            gateway=services.gateway,
+            allowlist=bot_config.allowlist_user_ids,
+            on_event=_make_on_event(app),
+            cursor_path=cursor_path,
+        )
+        pusher_task = asyncio.create_task(pusher.run(), name="event-pusher")
+        app.bot_data["event_pusher"] = pusher
+        app.bot_data["event_pusher_task"] = pusher_task
+        _log.info("telegram.event_pusher.scheduled")
+
     return _post_init
 
 
 async def _on_post_shutdown(app: Application[Any, Any, Any, Any, Any, Any]) -> None:
-    """Stop the poller cleanly on bot shutdown."""
-    poller = app.bot_data.get("approval_poller")
-    if poller is not None:
-        poller.stop()
-    task = app.bot_data.get("approval_poller_task")
-    if task is not None:
+    """Stop both pollers cleanly on bot shutdown."""
+    for key in ("approval_poller", "event_pusher"):
+        obj = app.bot_data.get(key)
+        if obj is not None:
+            obj.stop()
+    for key in ("approval_poller_task", "event_pusher_task"):
+        task = app.bot_data.get(key)
+        if task is not None:
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except (TimeoutError, asyncio.CancelledError):
+                task.cancel()
+
+
+def _make_on_event(
+    app: Application[Any, Any, Any, Any, Any, Any],
+) -> Callable[[int, dict[str, Any], str], Awaitable[None]]:
+    """Return an ``on_event`` callback bound to this PTB app's
+    bot handle. The pusher uses this to deliver a formatted
+    event body as a regular Telegram message.
+
+    No inline keyboard, no callback data — these are
+    notifications, not decisions. The approval flow has its own
+    pipeline via :class:`ApprovalPoller`."""
+
+    async def _on_event(user_id: int, _entry: dict[str, Any], text: str) -> None:
         try:
-            await asyncio.wait_for(task, timeout=2.0)
-        except (TimeoutError, asyncio.CancelledError):
-            task.cancel()
+            await app.bot.send_message(chat_id=user_id, text=text)
+        except Exception as e:
+            # Let the pusher log + move on; re-raise so the
+            # pusher's own try/except captures this for
+            # "telegram.event_pusher.send_failed".
+            _log.debug(
+                "telegram.event_push_send_failed",
+                extra={"user_id": user_id, "error": str(e)},
+            )
+            raise
+
+    return _on_event
 
 
 def _make_on_prompt(
