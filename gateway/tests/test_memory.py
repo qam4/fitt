@@ -14,7 +14,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from gateway.memory import MemoryStore, _parse_turns
-from gateway.memory_templates import DEFAULTS
+from gateway.memory_templates import DEFAULTS, LEGACY_TEMPLATES
 
 
 def _store(tmp_path: Path, **overrides) -> MemoryStore:
@@ -65,6 +65,96 @@ def test_identity_missing_file_tolerated(tmp_path: Path) -> None:
     ctx = store.load_context("main")
     # user and soul still present
     assert "About Me" in ctx.system_prefix or "TODO" in ctx.system_prefix
+
+
+# ---------- legacy-default heal -----------------------------------
+
+
+def test_identity_heals_legacy_verbatim_default(tmp_path: Path) -> None:
+    """A tools.md still carrying the retired "you have no tools"
+    Phase 2 default gets overwritten with the current template
+    on boot. Existing installs auto-repair without the operator
+    having to delete the file."""
+    ident = tmp_path / "identity"
+    ident.mkdir()
+    legacy = LEGACY_TEMPLATES["tools.md"][0]
+    (ident / "tools.md").write_text(legacy, encoding="utf-8")
+    # Seed the other defaults so the store doesn't create them
+    # during init and claim that as the heal.
+    (ident / "user.md").write_text(DEFAULTS["user.md"], encoding="utf-8")
+    (ident / "soul.md").write_text(DEFAULTS["soul.md"], encoding="utf-8")
+
+    _store(tmp_path)
+
+    content = (ident / "tools.md").read_text(encoding="utf-8")
+    assert content == DEFAULTS["tools.md"]
+    # Sanity: the retired text, which actively misled the model
+    # with "you do NOT have tool access", is gone.
+    assert "do NOT have tool access" not in content
+
+
+def test_identity_heal_leaves_operator_edits_alone(tmp_path: Path) -> None:
+    """Any content that isn't a byte-for-byte legacy match is
+    treated as operator edit — the heal path must not touch it.
+    This is the invariant that keeps the heal safe to ship."""
+    ident = tmp_path / "identity"
+    ident.mkdir()
+    custom = "# My tools\n\nPrefer uv over pip on every project.\n"
+    (ident / "tools.md").write_text(custom, encoding="utf-8")
+
+    _store(tmp_path)
+
+    assert (ident / "tools.md").read_text(encoding="utf-8") == custom
+
+
+def test_identity_heal_leaves_slightly_modified_legacy_alone(tmp_path: Path) -> None:
+    """A file that started as a legacy default but has even one
+    character of operator modification is no longer a legacy
+    match — heal must skip it. Otherwise a user who tweaked the
+    Phase 2 template (e.g. added a note) would lose their edit.
+
+    Byte-for-byte equality is the guard. Trust the hash."""
+    ident = tmp_path / "identity"
+    ident.mkdir()
+    legacy = LEGACY_TEMPLATES["tools.md"][0]
+    modified = legacy + "\n\n(my notes here)\n"
+    (ident / "tools.md").write_text(modified, encoding="utf-8")
+
+    _store(tmp_path)
+
+    assert (ident / "tools.md").read_text(encoding="utf-8") == modified
+
+
+def test_identity_heal_runs_only_on_listed_files(tmp_path: Path) -> None:
+    """LEGACY_TEMPLATES is scoped by file name. A legacy-looking
+    tools.md body sitting in user.md must not be healed — the
+    per-file list is the whole point."""
+    ident = tmp_path / "identity"
+    ident.mkdir()
+    legacy = LEGACY_TEMPLATES["tools.md"][0]
+    (ident / "user.md").write_text(legacy, encoding="utf-8")
+
+    _store(tmp_path)
+
+    # user.md still holds the (weird, but not operator-validated)
+    # content — no file-type confusion in the heal logic.
+    assert (ident / "user.md").read_text(encoding="utf-8") == legacy
+
+
+def test_new_tools_template_defers_to_capability_block(tmp_path: Path) -> None:
+    """Pin the intent of the new template: it tells the model to
+    trust the live ``[Capabilities]`` block over the file.
+
+    If someone rewrites tools.md in a way that re-introduces the
+    "I have no tools" misdirection, this test fails loudly."""
+    _store(tmp_path)
+    content = (tmp_path / "identity" / "tools.md").read_text(encoding="utf-8")
+    assert "[Capabilities]" in content
+    # Reject any framing that asserts a universal "no tools"
+    # stance; the whole point of the heal is to stop the model
+    # reading that prose.
+    assert "do NOT have tool access" not in content
+    assert "Phase 4" not in content  # stale roadmap reference from the old template
 
 
 def test_disabled_returns_empty_context(tmp_path: Path) -> None:

@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from .memory_templates import DEFAULTS
+from .memory_templates import DEFAULTS, LEGACY_TEMPLATES
 
 _log = logging.getLogger(__name__)
 
@@ -163,8 +163,24 @@ class MemoryStore:
     # ---------- internals -----------------------------------------
 
     def _ensure_identity_defaults(self) -> None:
-        """Create missing identity files from templates. Never
-        overwrites existing content."""
+        """Create missing identity files from templates, and heal
+        files that still hold a retired default verbatim.
+
+        The heal rule: a file whose bytes match one of the
+        ``LEGACY_TEMPLATES`` entries for that name is considered
+        still-default (operator never touched it) and gets
+        overwritten with the current template. Anything else —
+        edited, hand-written, or empty-except-whitespace — is
+        treated as operator content and left alone.
+
+        This is how the Phase 4 ``tools.md`` correction reaches
+        existing installs without forcing the operator to
+        ``rm -rf ~/.fitt/identity``. A file with "you have no
+        tool access" sitting alongside a live capability block
+        was causing the model to contradict itself; the heal
+        path replaces the stale text with a preamble that
+        defers to the capability block.
+        """
         self._identity_dir.mkdir(parents=True, exist_ok=True)
         for name, content in DEFAULTS.items():
             target = self._identity_dir / name
@@ -172,6 +188,26 @@ class MemoryStore:
                 target.write_text(content, encoding="utf-8")
                 _log.info(
                     "memory.identity.created_default",
+                    extra={"file": str(target)},
+                )
+                continue
+            # File exists — heal if it's verbatim one of the known
+            # legacy defaults for this name.
+            legacy = LEGACY_TEMPLATES.get(name, [])
+            if not legacy:
+                continue
+            try:
+                current = target.read_text(encoding="utf-8")
+            except OSError as e:
+                _log.warning(
+                    "memory.identity.read_for_heal_failed",
+                    extra={"file": str(target), "error": str(e)},
+                )
+                continue
+            if current in legacy:
+                target.write_text(content, encoding="utf-8")
+                _log.info(
+                    "memory.identity.healed_legacy_default",
                     extra={"file": str(target)},
                 )
 
