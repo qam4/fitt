@@ -446,3 +446,69 @@ async def test_fire_framing_has_no_example_user_messages(
             "as its actual user prompt. Name the tools instead of the "
             "situations."
         )
+
+
+async def test_default_alias_prefers_fitt_smart(app: Any) -> None:
+    """Regression guard for the 2026-05-07 "qwen-coder narrates
+    tool JSON as text" observation. Cron firings run unattended:
+    when the model decides to call a tool, it has to ACTUALLY
+    emit a tool_calls structure, not narrate JSON in content.
+    Frontier models handle this; local Qwen-Coder 14b flakes on
+    the tool-call channel consistently.
+
+    Defaulting cron firings to fitt-smart sidesteps that whole
+    failure class without forcing operators to remember to set
+    agent_alias on every cron_add. Per-cron override via the
+    ``agent_alias`` arg still works for cost-sensitive polling
+    crons.
+
+    The test config (via _fixtures.build_test_config) includes
+    both fitt-smart and fitt-default aliases; fitt-smart must
+    win."""
+    runner: CronRunner = app.state.cron_runner
+    assert runner._default_alias() == "fitt-smart"
+
+
+async def test_default_alias_falls_back_when_smart_missing(tmp_path: Path) -> None:
+    """If the operator's config doesn't define fitt-smart (e.g.
+    a local-only setup with no cloud models), the default falls
+    through to fitt-default rather than crashing or returning
+    a nonsense alias."""
+    from decimal import Decimal
+
+    from gateway.config import (
+        AllowedToken,
+        Config,
+        LoggingConfig,
+        MemoryConfig,
+        ModelConfig,
+        Secrets,
+        ServerConfig,
+    )
+
+    cfg = Config(
+        server=ServerConfig(host="127.0.0.1", port=8080),
+        aliases={"fitt-default": "qwen-big"},  # no fitt-smart
+        models=[
+            ModelConfig(
+                id="qwen-big",
+                backend="ollama",
+                endpoint="http://localhost:11434",
+                model="qwen2.5-coder:14b",
+                cost_per_mtok_in=Decimal("0"),
+                cost_per_mtok_out=Decimal("0"),
+            ),
+        ],
+        logging=LoggingConfig(dir=tmp_path / "logs", retention_days=7),
+        memory=MemoryConfig(
+            enabled=False,
+            identity_dir=tmp_path / "identity",
+            sessions_dir=tmp_path / "sessions",
+        ),
+    )
+    cfg.secrets = Secrets(
+        allowed_tokens=[AllowedToken(name="t", token="T" * 44)],
+    )
+    app = create_app(cfg)
+    runner: CronRunner = app.state.cron_runner
+    assert runner._default_alias() == "fitt-default"

@@ -103,7 +103,7 @@ async def test_first_boot_no_cursor_starts_from_now(
     gw = _FakeGateway()
     gw.queued_responses.append(
         [
-            _evt("cron_fired", ts=100.0),  # ancient
+            _evt("cron_completed", ts=100.0),  # ancient
             _evt("cron_completed", ts=200.0),  # still ancient
         ]
     )
@@ -136,7 +136,7 @@ async def test_first_boot_honours_cursor_on_restart(tmp_path: Path) -> None:
     gw = _FakeGateway()
     gw.queued_responses.append(
         [
-            _evt("cron_fired", ts=500.0),  # before cursor; strict-greater filter at gateway
+            _evt("cron_completed", ts=500.0),  # before cursor; strict-greater filter at gateway
             _evt("cron_completed", ts=1500.0),  # after cursor; pushed
         ]
     )
@@ -168,7 +168,7 @@ async def test_events_delivered_in_order(tmp_path: Path) -> None:
     gw = _FakeGateway()
     gw.queued_responses.append(
         [
-            _evt("cron_fired", ts=100.0, body="first"),
+            _evt("cron_completed", ts=100.0, body="first"),
             _evt("cron_completed", ts=200.0, body="second"),
         ]
     )
@@ -193,8 +193,8 @@ async def test_events_delivered_in_order(tmp_path: Path) -> None:
 
 async def test_cursor_advances_monotonically_across_ticks(tmp_path: Path) -> None:
     gw = _FakeGateway()
-    gw.queued_responses.append([_evt("cron_fired", ts=100.0)])
-    gw.queued_responses.append([_evt("cron_fired", ts=200.0)])
+    gw.queued_responses.append([_evt("cron_completed", ts=100.0)])
+    gw.queued_responses.append([_evt("cron_completed", ts=200.0)])
     _CursorStore(tmp_path / "cursor.json").save(50.0)
     sent: list[str] = []
 
@@ -218,7 +218,7 @@ async def test_cursor_advances_monotonically_across_ticks(tmp_path: Path) -> Non
 # --------------------------------------------------------------- skip approvals
 
 
-async def test_approval_requested_is_skipped(tmp_path: Path) -> None:
+async def test_approval_events_are_skipped(tmp_path: Path) -> None:
     """Approvals have a dedicated delivery pipeline (inline
     keyboard via ApprovalPoller). Double-delivering them here
     would spam the user with plain-text copies that can't be
@@ -227,7 +227,8 @@ async def test_approval_requested_is_skipped(tmp_path: Path) -> None:
     gw.queued_responses.append(
         [
             _evt("approval_requested", ts=100.0),
-            _evt("cron_fired", ts=200.0),
+            _evt("approval_resolved", ts=150.0),
+            _evt("cron_completed", ts=200.0, body="real push"),
         ]
     )
     _CursorStore(tmp_path / "cursor.json").save(50.0)
@@ -243,11 +244,50 @@ async def test_approval_requested_is_skipped(tmp_path: Path) -> None:
         cursor_path=tmp_path / "cursor.json",
     )
     await _tick(pusher)
-    # Only the cron_fired made it to delivery.
+    # Only the cron_completed made it to delivery.
     assert len(sent) == 1
-    # Cursor advanced past BOTH, including the skipped one, so
-    # we don't re-scan it next tick.
+    assert "real push" in sent[0]
+    # Cursor advanced past ALL of them, including the skipped
+    # approval events, so we don't re-scan them next tick.
     assert pusher._last_ts == 200.0
+
+
+async def test_cron_fired_is_skipped(tmp_path: Path) -> None:
+    """cron_fired is internal bookkeeping, not a user-facing
+    moment. Pushing it would give the user a '✅ cron X' ping
+    followed by the actual cron_completed message two seconds
+    later — reads as a duplicate and adds no information.
+
+    Observed 2026-05-07: without this skip, the user's phone
+    lit up twice per cron firing (once for cron_fired, once
+    for cron_completed). Keeping cron_completed is what the
+    user actually wants; cron_fired is for events.jsonl and
+    the gateway log, not for Telegram."""
+    gw = _FakeGateway()
+    gw.queued_responses.append(
+        [
+            _evt("cron_fired", ts=100.0, title="cron 'lunch'", body=""),
+            _evt("cron_completed", ts=150.0, title="cron 'lunch'", body="go eat"),
+        ]
+    )
+    _CursorStore(tmp_path / "cursor.json").save(50.0)
+    sent: list[str] = []
+
+    async def _send(user_id: int, _entry: dict[str, Any], text: str) -> None:
+        sent.append(text)
+
+    pusher = EventPusher(
+        gateway=gw,
+        allowlist=frozenset({42}),
+        on_event=_send,
+        cursor_path=tmp_path / "cursor.json",
+    )
+    await _tick(pusher)
+    # Only the cron_completed was delivered.
+    assert len(sent) == 1
+    assert "go eat" in sent[0]
+    # Cursor advanced past both.
+    assert pusher._last_ts == 150.0
 
 
 # --------------------------------------------------------------- empty-body
@@ -272,7 +312,7 @@ async def test_empty_body_event_advances_cursor_without_pushing(tmp_path: Path) 
                 "body": "",
                 "meta": {},
             },
-            _evt("cron_fired", ts=200.0, body="real push"),
+            _evt("cron_completed", ts=200.0, body="real push"),
         ]
     )
     _CursorStore(tmp_path / "cursor.json").save(50.0)
@@ -307,7 +347,7 @@ async def test_per_user_send_failure_does_not_wedge_cursor(
     its actual progress — otherwise the pusher would retry
     forever."""
     gw = _FakeGateway()
-    gw.queued_responses.append([_evt("cron_fired", ts=100.0)])
+    gw.queued_responses.append([_evt("cron_completed", ts=100.0)])
     _CursorStore(tmp_path / "cursor.json").save(50.0)
 
     async def _send(user_id: int, _entry: dict[str, Any], text: str) -> None:
@@ -334,7 +374,7 @@ async def test_per_user_send_failure_does_not_wedge_cursor(
 
 async def test_pushes_to_each_allowlisted_user(tmp_path: Path) -> None:
     gw = _FakeGateway()
-    gw.queued_responses.append([_evt("cron_fired", ts=100.0)])
+    gw.queued_responses.append([_evt("cron_completed", ts=100.0)])
     _CursorStore(tmp_path / "cursor.json").save(50.0)
     recipients: list[int] = []
 

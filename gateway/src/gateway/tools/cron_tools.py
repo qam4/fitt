@@ -98,8 +98,14 @@ _SCHEMA_CRON_ADD: dict[str, Any] = {
         "agent_alias": {
             "type": "string",
             "description": (
-                "Which model alias to use (e.g. 'fitt-smart'). "
-                "Empty string uses the gateway's default alias."
+                "Which model alias to use when the cron fires "
+                "(e.g. 'fitt-smart' for cloud, 'fitt-default' "
+                "for local). Empty string uses the gateway's "
+                "cron default, which prefers fitt-smart because "
+                "frontier models tool-call more reliably than "
+                "local ones during unattended firings. Pin to a "
+                "local alias only when cost matters more than "
+                "reliability (e.g. a 60s monitoring cron)."
             ),
             "default": "",
         },

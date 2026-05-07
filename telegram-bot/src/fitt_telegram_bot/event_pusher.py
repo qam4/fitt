@@ -66,9 +66,17 @@ and keeps the HTTP traffic negligible (one small GET per second)."""
 
 
 # Event kinds that have their own delivery surface and should NOT
-# be double-delivered via this push pipeline. Today: approvals go
-# through the inline-keyboard ApprovalPoller.
-_SKIP_KINDS: frozenset[str] = frozenset({"approval_requested", "approval_resolved"})
+# be double-delivered via this push pipeline. Two categories:
+#
+# - approval_requested / approval_resolved: approvals go through
+#   the inline-keyboard ApprovalPoller, not here. Delivering them
+#   as plain text would be duplicate-spam and the wrong UI.
+# - cron_fired: internal bookkeeping. The user doesn't care that
+#   a cron started; they care that it finished (cron_completed).
+#   Delivering cron_fired gives the user a "✅ cron 'X'" ping
+#   followed two seconds later by the actual reply from the same
+#   cron, which reads as a duplicate. Silently skip it.
+_SKIP_KINDS: frozenset[str] = frozenset({"approval_requested", "approval_resolved", "cron_fired"})
 
 
 class _CursorStore:
