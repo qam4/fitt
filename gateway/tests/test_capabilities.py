@@ -70,6 +70,44 @@ def test_build_block_handles_empty_registry() -> None:
     assert "no tools registered" in block
 
 
+def test_build_block_explains_approval_ux() -> None:
+    """Regression guard for the 2026-05-07 "model invents
+    confirmation rituals" issue.
+
+    Without an approval-UX section in the system prompt, models
+    that hit an ``ask`` tool go silent from their own perspective
+    (the tool doesn't return while awaiting human approval) and
+    fill the gap by narrating a fake procedure — observed live as
+    "type 'Approve: cron_ad...' to confirm". The capability
+    block must tell the model that approvals are surfaced by the
+    client's own UI and discourage typed-confirmation rituals."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("cron_add", "Schedule a cron."))
+    block = build_capability_block(reg)
+    assert "[How tool calls work]" in block
+    # Name the three resolution outcomes so the model knows what
+    # comes back to it.
+    assert "Approve" in block
+    assert "Reject" in block
+    assert "Trust session" in block
+    # And explicitly discourage the hallucinated ritual.
+    assert "typing" in block.lower() or "paste" in block.lower()
+
+
+def test_build_block_keeps_trailer_even_when_truncated() -> None:
+    """When tool count overflows the hard-cap budget, we still
+    need the model to see both the approval-UX note AND the
+    gap-report instruction — losing either one causes the
+    failure modes those sections exist to prevent. The truncation
+    code trims the TOOL LIST, not the trailer."""
+    reg = ToolRegistry()
+    for i in range(10):
+        reg.register(_mk_tool(f"tool_{i}", "A " * 500))
+    block = build_capability_block(reg)
+    assert "[How tool calls work]" in block
+    assert "I'd need a tool to" in block
+
+
 def test_build_block_truncates_many_tools() -> None:
     """A pathological 100-tool registry gets capped at a sensible
     size, with a truncation note that points at list_capabilities."""

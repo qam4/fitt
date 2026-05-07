@@ -90,24 +90,63 @@ def build_capability_block(registry: ToolRegistry) -> str:
                 f"- ... ({len(tools) - _MAX_TOOLS_IN_BLOCK} more; "
                 f"call `list_capabilities` for the full set)"
             )
-    lines.append("")
-    lines.append(
+
+    # Trailer: the preamble + tool list above, plus this block,
+    # are what the model sees every request. Keep the trailer
+    # small but informative. Two parts:
+    #
+    # 1. How tool approvals actually work. Without this the model
+    #    has no mental model for the "I called an ask-bucket
+    #    tool and it's not returning yet" case and invents
+    #    confirmation rituals ("type 'Approve: X' to proceed")
+    #    that don't exist. Observed live 2026-05-07. The approval
+    #    middleware routes each ask-bucket call to whichever UI
+    #    the client supports; the model's job is just to call
+    #    the tool and wait for the result.
+    #
+    # 2. How to report a missing capability. Unchanged from
+    #    Phase 4; the gap log consumes this format.
+    trailer_lines = [
+        "",
+        "[How tool calls work]",
+        "Tools in the list above may be `auto` (runs immediately) "
+        "or `ask` (pauses for human approval). The approval UI is "
+        "surfaced by the client — an inline-keyboard prompt on "
+        "Telegram, an approval dialog in the IDE, a terminal "
+        "prompt on the CLI. The user taps Approve, Reject, or "
+        "Trust session; you never see the UI. After they decide, "
+        "the tool either runs and returns its result, or comes "
+        "back as a rejection error. Just call the tool and use "
+        "the result.",
+        "",
+        "Do NOT ask the user to confirm by typing a phrase, "
+        "reply with a command they should paste, or describe an "
+        "approval procedure. The UI handles it. A brief note "
+        'like "I\'ll create that cron now" before the tool call '
+        "is fine; a full confirmation ritual is not.",
+        "",
         "When a request needs a capability not listed above, "
         "reply in this format: \"I'd need a tool to <action>. "
         'Consider adding <suggestion>." We use that to track '
-        "which tools to build next."
-    )
+        "which tools to build next.",
+    ]
+    lines.extend(trailer_lines)
     block = "\n".join(lines)
     if len(block) <= _MAX_BLOCK_CHARS:
         return block
     # Hard cap. Keep the preamble + as many tool lines as fit,
-    # then a truncation note.
+    # then the full trailer so the model always sees both the
+    # approval-UX note and the gap-report instruction even when
+    # the tool list is what got truncated.
     preamble = lines[0]
-    trailer = "\n".join(lines[-2:])  # blank line + instruction
+    trailer = "\n".join(trailer_lines)
     room = _MAX_BLOCK_CHARS - len(preamble) - len(trailer) - 32  # safety
     kept: list[str] = []
     used = 0
-    for line in lines[1:-2]:
+    tool_lines = lines[1 : 1 + len(tools[:_MAX_TOOLS_IN_BLOCK])]
+    if len(tools) > _MAX_TOOLS_IN_BLOCK:
+        tool_lines.append(lines[1 + len(tools[:_MAX_TOOLS_IN_BLOCK])])
+    for line in tool_lines:
         if used + len(line) + 1 > room:
             break
         kept.append(line)
