@@ -209,6 +209,24 @@ class CronRunner:
         messages.extend(history)
         messages.append({"role": "user", "content": job.message})
 
+        # Observability: log a short fingerprint of the system
+        # prompt so we can tell from logs whether the framing
+        # actually reached the model on a given firing. Full
+        # prompt would be too noisy; the first 200 chars of each
+        # section header is enough to confirm "capabilities +
+        # scheduled firing + identity" all present.
+        _log.info(
+            "cron.runner.prompt_built",
+            extra={
+                "cron_id": job.id,
+                "system_len": len(system_prefix),
+                "system_head": system_prefix[:200],
+                "has_scheduled_firing_section": "[Scheduled firing]" in system_prefix,
+                "has_current_time": "[Current time]" in system_prefix,
+                "history_turns": len(history),
+            },
+        )
+
         # Approval wrapper honours job.approval_mode.
         approval_for_firing: Any = self._approval
         if job.approval_mode == "auto":
