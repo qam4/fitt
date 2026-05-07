@@ -263,3 +263,133 @@ async def test_fire_with_approval_mode_auto_runs_an_ask_tool(
     assert calls == [{}]  # the ask-bucket tool ran
     events = app.state.events.read()
     assert any(e.kind == "cron_completed" for e in events)
+
+
+# --------------------------------------------------------------- firing framing
+
+
+async def test_fire_injects_scheduled_framing_into_system_prompt(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for the 2026-05-07 "model re-schedules
+    itself" bug. A cron firing with the stored message 'take a
+    break' produced a reply that called cron_add again instead
+    of delivering the reminder, because the model saw a
+    schedule-flavoured user message alongside a cron_add tool
+    and pattern-matched toward scheduling.
+
+    Fix: cron_runner injects a ``[Scheduled firing]`` framing
+    between the capability block and identity/memory telling
+    the model it IS the scheduled firing and should not call
+    cron_add to re-schedule itself.
+
+    We pin this by asserting the framing reaches litellm's
+    request body so a refactor that drops the framing fails
+    loudly — the symptom is invisible in unit tests otherwise
+    (the LLM response is stubbed)."""
+    captured: dict[str, Any] = {}
+
+    async def fake(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _fake_completion(content="reminder delivered")
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    runner: CronRunner = app.state.cron_runner
+    job = CronJob(
+        id="framing",
+        name="take a break",
+        message="Stand up and walk around.",
+        schedule=CronSchedule(kind="every", every_secs=3600),
+    )
+    await runner.fire(job)
+
+    # Dig into the system message.
+    messages = captured.get("messages", [])
+    system = next((m for m in messages if m.get("role") == "system"), None)
+    assert system is not None, "cron firing dispatch should have a system message"
+    content = system["content"]
+    # Pin the shape: capability block AND scheduled-firing framing
+    # both present, in that order.
+    assert "[Capabilities]" in content
+    assert "[Scheduled firing]" in content
+    assert content.index("[Capabilities]") < content.index("[Scheduled firing]")
+    # The framing names the cron's own identity so the model has
+    # context for phrasing the reply.
+    assert "take a break" in content
+    # And explicitly prohibits cron_add re-invocation, which is
+    # the specific failure mode the framing exists to prevent.
+    assert "cron_add" in content
+    assert "not a fresh request" in content.lower() or "not a fresh request" in content
+
+
+async def test_fire_framing_names_schedule_shape(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The framing includes a human-readable schedule phrase so
+    the model can tell 'this is the daily briefing cron' from
+    'this is the one-shot reminder in 5 minutes'. Different
+    shapes call for different reply tones."""
+    captured: dict[str, Any] = {}
+
+    async def fake(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _fake_completion(content="ok")
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    runner: CronRunner = app.state.cron_runner
+
+    # interval
+    await runner.fire(
+        CronJob(
+            id="interval",
+            name="heartbeat",
+            message="ping",
+            schedule=CronSchedule(kind="every", every_secs=300),
+        )
+    )
+    system = next(m["content"] for m in captured["messages"] if m.get("role") == "system")
+    assert "every 5m" in system
+
+    # one-shot
+    captured.clear()
+    await runner.fire(
+        CronJob(
+            id="oneshot",
+            name="lunch",
+            message="eat",
+            schedule=CronSchedule(kind="at", at_ts=1.0),
+        )
+    )
+    system = next(m["content"] for m in captured["messages"] if m.get("role") == "system")
+    assert "one-shot" in system
+
+
+async def test_fire_framing_does_not_block_send_message_guidance(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The framing explicitly permits send_message for the case
+    where a silent cron wants to push a notification. Guard
+    that the prose isn't accidentally phrased as 'no tools'."""
+    captured: dict[str, Any] = {}
+
+    async def fake(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _fake_completion(content="ok")
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    runner: CronRunner = app.state.cron_runner
+    await runner.fire(
+        CronJob(
+            id="s",
+            name="silent monitor",
+            message="check the build",
+            schedule=CronSchedule(kind="every", every_secs=60),
+            silent=True,
+        )
+    )
+    system = next(m["content"] for m in captured["messages"] if m.get("role") == "system")
+    # send_message is named as an allowed tool for the silent
+    # push case — losing this phrase would starve silent
+    # monitoring crons of their only notification channel.
+    assert "send_message" in system

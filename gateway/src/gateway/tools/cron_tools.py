@@ -44,7 +44,10 @@ _SCHEDULE_SPEC_ARG = {
         "When the cron should fire. Accepts: 'every N[unit]' "
         "(e.g. 'every 60s', 'every 5m', 'every 2h'); 'in N unit' "
         "(e.g. 'in 30 minutes'); 'at <iso|epoch>' (e.g. "
-        "'at 2026-05-06T09:00:00'); 'cron <5-field>' (e.g. "
+        "'at 2026-05-06T09:00:00-04:00' — PREFER timezone-aware "
+        "ISO strings using the UTC offset from [Current time]; "
+        "naive timestamps are interpreted as UTC which is rarely "
+        "what the user means); 'cron <5-field>' (e.g. "
         "'cron 0 9 * * 1-5')."
     ),
 }

@@ -41,6 +41,7 @@ import logging
 import re
 import threading
 from dataclasses import asdict, dataclass
+from datetime import UTC
 from pathlib import Path
 from time import time
 from typing import TYPE_CHECKING
@@ -76,9 +77,22 @@ def build_capability_block(registry: ToolRegistry) -> str:
     intentionally keep the shape minimal because the model
     already knows its own tool-calling API — it just needs to
     know *which names are live*.
+
+    The block also carries a ``[Current time]`` line with the
+    gateway's best guess at the operator's local wall-clock time
+    plus a UTC offset. Without it, models reason in UTC by
+    default and produce naive ISO strings that land in the past
+    when interpreted. Observed 2026-05-07: a "remind me at 1 PM"
+    request emitted ``at 2026-05-06T13:00:00`` which the cron
+    parser read as 13:00 UTC — 8 AM for the user on EDT — and
+    fired immediately because 8 AM had already passed.
     """
     tools = registry.list_all()
-    lines = ["[Capabilities] You can call these tools:"]
+    lines = [
+        _format_current_time_line(),
+        "",
+        "[Capabilities] You can call these tools:",
+    ]
     if not tools:
         lines.append("- (no tools registered)")
     else:
@@ -138,21 +152,65 @@ def build_capability_block(registry: ToolRegistry) -> str:
     # then the full trailer so the model always sees both the
     # approval-UX note and the gap-report instruction even when
     # the tool list is what got truncated.
-    preamble = lines[0]
+    #
+    # Preamble = current-time line + blank + "[Capabilities]..."
+    # (first three entries). Keep them together so the context
+    # ordering stays predictable.
+    preamble = "\n".join(lines[:3])
     trailer = "\n".join(trailer_lines)
     room = _MAX_BLOCK_CHARS - len(preamble) - len(trailer) - 32  # safety
     kept: list[str] = []
     used = 0
-    tool_lines = lines[1 : 1 + len(tools[:_MAX_TOOLS_IN_BLOCK])]
+    # Tool lines sit between the preamble and the trailer. We
+    # computed their count from ``tools`` at the top.
+    tool_line_start = 3
+    tool_line_stop = tool_line_start + len(tools[:_MAX_TOOLS_IN_BLOCK])
     if len(tools) > _MAX_TOOLS_IN_BLOCK:
-        tool_lines.append(lines[1 + len(tools[:_MAX_TOOLS_IN_BLOCK])])
-    for line in tool_lines:
+        tool_line_stop += 1  # the "... (N more)" note
+    for line in lines[tool_line_start:tool_line_stop]:
         if used + len(line) + 1 > room:
             break
         kept.append(line)
         used += len(line) + 1
     kept.append("- ... (capability block truncated; call `list_capabilities` for the full set)")
     return "\n".join([preamble, *kept, trailer])
+
+
+# --------------------------------------------------------------- current time
+
+
+def _format_current_time_line() -> str:
+    """Render the ``[Current time]`` preamble line.
+
+    The gateway calls ``datetime.now().astimezone()`` to pick up
+    whatever tzinfo the container/host provides. In Docker the
+    effective zone is the ``TZ`` env var passed in via compose,
+    or UTC if unset. That's the same clock the cron scheduler
+    reasons in, so the line is truthful.
+
+    Format:
+        ``[Current time] Fri 2026-05-08 13:24 EDT (UTC-04:00; 2026-05-08T17:24:00+00:00)``
+
+    Three pieces of information packed in one line: the human-
+    readable local wall clock, the local offset, and an explicit
+    UTC timestamp. The model uses whichever shape fits its reply
+    best; the offset in particular is what lets it emit
+    timezone-aware ISO strings to cron_add.
+    """
+    from datetime import datetime as _dt
+
+    local = _dt.now().astimezone()
+    utc = local.astimezone(UTC)
+    tz_name = local.tzname() or "local"
+    # isoformat without microseconds is more reader-friendly.
+    local_wall = local.strftime("%a %Y-%m-%d %H:%M")
+    offset = local.strftime("%z")
+    # Insert the colon in the offset (e.g. -0400 -> -04:00) to
+    # match the ISO-8601 form the model likely emits.
+    if offset and len(offset) == 5:
+        offset = f"{offset[:3]}:{offset[3:]}"
+    utc_iso = utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    return f"[Current time] {local_wall} {tz_name} (UTC{offset}; {utc_iso})"
 
 
 # --------------------------------------------------------------- gap report

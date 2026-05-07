@@ -190,13 +190,15 @@ class CronRunner:
         almost exactly, minus the request-body extras and stream
         wrapping. The agent loop module owns the real behaviour.
         """
-        # System prompt: capability block + identity/memory.
+        # System prompt: capability block + identity/memory + the
+        # cron-runner framing.
         capability_block = build_capability_block(self._tool_registry)
-        system_prefix = capability_block
+        framing = _build_cron_framing(job)
+        system_prefix = f"{capability_block}\n\n{framing}"
         if self._memory is not None:
             ctx = self._memory.load_context(session_key)
             if ctx.system_prefix:
-                system_prefix = f"{capability_block}\n\n{ctx.system_prefix}"
+                system_prefix = f"{system_prefix}\n\n{ctx.system_prefix}"
             history = ctx.history_messages
         else:
             history = []
@@ -333,3 +335,77 @@ def _tb_tail(exc: BaseException | None, limit: int = 800) -> str:
         return ""
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     return tb[-limit:]
+
+
+def _build_cron_framing(job: CronJob) -> str:
+    """Render the cron-firing's system-prompt framing.
+
+    Sits between the capability block and identity/memory. Its
+    whole job is to stop the model from treating the stored
+    ``job.message`` as a fresh instruction to *create* a cron.
+    Observed live 2026-05-07: a firing of "It's time to go have
+    lunch" produced a reply with JSON-in-text for a fresh
+    ``cron_add`` call instead of the plain reminder. The model
+    pattern-matches on "schedule-flavoured language + cron_add
+    is in the tool list" and tries to re-schedule itself.
+
+    The framing is deliberately short and concrete. Two things
+    it pins:
+
+    1. **You are the scheduled firing.** The stored message is
+       what the user wanted to hear or have done at this moment,
+       not a request to set up a new reminder.
+    2. **Tools are allowed but not required.** A monitoring cron
+       ("check the build and tell me when it's done") does need
+       to call tools; a reminder cron ("take a break") does not.
+       The framing explicitly permits both cases so we're not
+       blanket-discouraging tool use.
+
+    We include the job's name + schedule kind so the model sees
+    context ("this is the 'lunch reminder' every 1d cron") and
+    can phrase its reply appropriately. No stored JSON of the
+    cron's internals — just the human-meaningful shape.
+    """
+    kind = job.schedule.kind
+    # Short human-readable shape for the schedule. Mirrors the
+    # cron_tools ``_format_schedule`` output but inlined here to
+    # avoid an import cycle (cron_runner -> tools.cron_tools ->
+    # cron_runner).
+    if kind == "every" and job.schedule.every_secs is not None:
+        n = job.schedule.every_secs
+        if n % 3600 == 0:
+            schedule_phrase = f"every {n // 3600}h"
+        elif n % 60 == 0:
+            schedule_phrase = f"every {n // 60}m"
+        else:
+            schedule_phrase = f"every {n}s"
+    elif kind == "at":
+        schedule_phrase = "one-shot"
+    elif kind == "cron":
+        schedule_phrase = f"cron {job.schedule.cron_expr}"
+    else:
+        schedule_phrase = kind
+
+    return (
+        "[Scheduled firing]\n"
+        f"You are running as a scheduled agent session for the cron "
+        f"{job.name!r} ({schedule_phrase}). The next message in this "
+        "conversation is the stored prompt the user wanted you to act on "
+        "at this moment — NOT a fresh request to create or re-create a "
+        "cron. Do not call `cron_add`, `cron_update`, or any other cron "
+        "tool to schedule the reminder you are already delivering.\n"
+        "\n"
+        "What to do:\n"
+        "- If the stored message is a reminder ('take a break', 'stand "
+        "up'), deliver it as a short natural reply. No tools needed.\n"
+        "- If the stored message asks you to check something ('is the "
+        "build done?', 'any new PRs?'), use the relevant tools to find "
+        "out, then reply with the answer.\n"
+        "- If the stored message asks you to actively send a message "
+        "that the user wants pushed to their phone even in a silent "
+        "cron, call `send_message`.\n"
+        "\n"
+        "Reply in a tone that matches the user's usual preferences. "
+        "Keep it brief. Do not narrate tool JSON in your reply; actually "
+        "call the tool, or don't."
+    )

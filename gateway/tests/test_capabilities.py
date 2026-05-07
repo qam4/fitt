@@ -70,6 +70,31 @@ def test_build_block_handles_empty_registry() -> None:
     assert "no tools registered" in block
 
 
+def test_build_block_includes_current_time_preamble() -> None:
+    """Regression guard for the 2026-05-07 "model picked 13:00 UTC
+    for a 1 PM EDT reminder" issue. Without a current-time
+    preamble the model reasons in UTC by default and emits naive
+    ISO timestamps that land in the past (or the wrong time of
+    day) when interpreted.
+
+    The preamble gives the model three usable shapes: the local
+    wall clock for human phrasing, a UTC offset for emitting
+    timezone-aware ISO strings, and an explicit UTC ISO for math.
+    We don't pin the exact format because Windows vs Linux tzname
+    varies ("Eastern Daylight Time" vs "EDT") — just assert the
+    anchor and at least one concrete piece."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("read_file", "Read a file."))
+    block = build_capability_block(reg)
+    assert "[Current time]" in block
+    # Comes before the capabilities list so the model sees the
+    # clock before any tools.
+    assert block.index("[Current time]") < block.index("[Capabilities]")
+    # At least one of the three shapes landed. UTC offset is the
+    # most portable to assert on (YYYY-MM-DDTHH:MM:SS+00:00).
+    assert "+00:00" in block
+
+
 def test_build_block_explains_approval_ux() -> None:
     """Regression guard for the 2026-05-07 "model invents
     confirmation rituals" issue.
