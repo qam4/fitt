@@ -725,7 +725,7 @@ The critical rule: the natural-language paraphrase is never loaded without the t
 
 Until this ships, the workaround is to start a fresh session when poisoning happens: `fitt session new <name>` (or manually delete today's history file for the session).
 
-*Full spec: `.kiro/specs/phase5-lessons/` (to be written when this phase starts).*
+*Full spec: `.kiro/specs/phase5-lessons/`. Spec promoted 2026-05-08; implementation shipped 2026-05-08 (lessons + `learn_*` tools + `fitt learn` CLI + tool-turn structured persistence + decaying history injection + background history pruner). The strict-xfail session-poisoning e2e test flipped green unassisted — the Phase 5 binary gate. Live validation pending.*
 
 ---
 

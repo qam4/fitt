@@ -115,15 +115,23 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 - [x] 11a. `MemoryConfig` grows `max_lessons` (default
        50) and `history_max_days` (default 90).
-- [ ] 11b. Update `configs/config.example.yaml`.
-- [ ] 11c. Brief notes in `docs/`.
+- [x] 11b. Updated `configs/config.example.yaml` with the
+       new fields + inline docs explaining the decay
+       layers and pruner.
+- [ ] 11c. Brief notes in `docs/`. Deferred — the roadmap
+       inline description plus the spec's design.md
+       cover the shape for now; a dedicated docs page
+       earns its place when someone hits the "what does
+       the decay layer look like in practice" question
+       more than once.
 
 ## 12. Roadmap pointer update
 
-- [ ] 12a. Flip the Phase 5 inline draft's "to be
-       written" footnote to "Spec promoted
-       YYYY-MM-DD; implementation in
-       `.kiro/specs/phase5-lessons/`."
+- [x] 12a. Flipped the Phase 5 inline draft's "to be
+       written" footnote to "Spec promoted 2026-05-08;
+       implementation shipped 2026-05-08 ..." with the
+       binary-gate (session-poisoning xfail flip) called
+       out.
 - [ ] 12b. Mark Phase 5 DONE in the roadmap once live
        validation lands.
 

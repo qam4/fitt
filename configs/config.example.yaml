@@ -119,23 +119,36 @@ logging:
   retention_days: 30
 
 # ------------------------------------------------------------------
-# Memory (Phase 2)
+# Memory (Phase 2 + Phase 5)
 # ------------------------------------------------------------------
 # Persistent memory: identity files always injected + today's
-# conversation history per session. All on-disk, plain markdown.
+# conversation history per session + learned corrections (lessons)
+# and decayed past-days context. All on-disk, plain markdown.
 # Set enabled: false to revert to stateless Phase 1 behaviour.
 memory:
   enabled: true
   # Approximate character budget for history injected into each
   # request. ~4 chars per token, so 24000 chars is ~6000 tokens.
-  # If today's log exceeds this, the oldest turns are dropped from
-  # the prompt (the file itself is not truncated).
+  # If today's log (+ yesterday's first turn + N-day summary
+  # layer) exceeds this, oldest layers drop first from the
+  # prompt — files on disk are not touched.
   max_history_chars: 24000
   # identity_dir and sessions_dir default to $FITT_HOME/identity
   # and $FITT_HOME/sessions. Uncomment with an absolute path only
   # if you need a different location.
   # identity_dir: /absolute/override/only/if/you/care
   # sessions_dir: /absolute/override/only/if/you/care
+
+  # Phase 5 — lessons ceiling. `learn_add` past this drops the
+  # oldest entry. 50 is generous; raise only if your system
+  # prompt starts feeling thin on what the agent "remembers."
+  max_lessons: 50
+
+  # Phase 5 — history retention for the background pruner.
+  # Files in sessions/*/history/YYYY-MM-DD.md past this age get
+  # deleted once a day. Turns inside files past this age also
+  # drop from the decay injection. Default 90 days.
+  history_max_days: 90
 
 # ------------------------------------------------------------------
 # Tools (Phase 4+)
