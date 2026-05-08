@@ -142,6 +142,14 @@ class Config(BaseModel):
     # all defaults from the registry's client table.
     tools: dict[str, Any] | None = None
 
+    # ``events:`` block is Phase 4.5 Task 10 event-log pruning.
+    # Shape:
+    #   events:
+    #     max_age_days: 90
+    # Loose dict to match the ``tools:`` pattern — parsed
+    # downstream by the EventPruner wiring.
+    events: dict[str, Any] | None = None
+
     # ``mcp_servers:`` block is Phase 4+: zero or more MCP
     # subprocess servers the gateway spawns and proxies. Parsed
     # strictly by MCPServerConfig at startup in app.py; we keep

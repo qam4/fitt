@@ -126,29 +126,41 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 8. Cron CLI
 
-- [ ] 8a. `fitt cron list [--all]`.
-- [ ] 8b. `fitt cron add --name ... --every N --message "..."`,
-       variants for `--cron` and `--at`.
-- [ ] 8c. `fitt cron remove <id>`, `fitt cron pause <id>`,
-       `fitt cron resume <id>`, `fitt cron run <id>` (fire once
-       now).
-- [ ] 8d. Tests: CLI dispatches to `CronService`.
+- [x] 8a. `fitt cron list [--all]`.
+- [x] 8b. `fitt cron add --name ... --schedule "..." --message "..."`
+       with flags for `--silent` / `--auto-approve` / `--alias` /
+       `--timezone`. (Accepts the same spec parser as `cron_add`:
+       `every N[unit]`, `in N unit`, `at <iso|epoch>`,
+       `cron <5-field>`.)
+- [x] 8c. `fitt cron remove <id>`, `fitt cron pause <id>`,
+       `fitt cron resume <id>`. `fitt cron run <id>` deferred —
+       needs a `POST /v1/cron/<id>/run` endpoint that doesn't
+       exist yet; workaround is `--schedule "in 5 seconds"`.
+- [x] 8d. Tests: CLI dispatches to `CronService`
+       (`tests/test_cli_cron.py`).
 
 ## 9. Inbox CLI
 
-- [ ] 9a. `fitt inbox [--since 24h|7d] [--kind <k>] [--session <s>]
+- [x] 9a. `fitt inbox [--since 24h|7d] [--kind <k>] [--session <s>]
        [--limit N] [--json]`.
-- [ ] 9b. `--since` accepts `Nh|Nd` or ISO timestamp.
-- [ ] 9c. Human-readable default output; `--json` for programmatic.
-- [ ] 9d. Tests.
+- [x] 9b. `--since` accepts `Nh|Nd` or ISO timestamp (reuses
+       `_parse_since` from the audit CLI).
+- [x] 9c. Human-readable default output; `--json` for programmatic.
+- [x] 9d. Tests (`tests/test_cli_inbox.py`).
 
 ## 10. Event pruning cron
 
-- [ ] 10a. Add a built-in cron (not user-visible in
-       `cron.json`) that fires daily at 04:00 local and calls
-       `EventLog.prune(max_age_days)`.
-- [ ] 10b. The pruner emits a `system_pruned` event saying how
-       many entries were removed.
+- [x] 10a. `EventPruner` in `gateway/event_pruner.py` — an
+       async background loop the gateway starts at boot. Not
+       a user-visible entry in `cron.json` (mirrors the spec's
+       "built-in cron, not user-visible"). Runs once per day
+       (`prune_interval_secs = 24h`), polls every 6h. Anchor
+       file at `$FITT_HOME/events.pruner.anchor` persists
+       last-pruned timestamp across restarts so a gateway
+       that bounces hourly still prunes on the right cadence.
+- [x] 10b. The pruner emits a `system_pruned` event saying how
+       many entries were removed, visible in `fitt inbox`.
+       Tests: `tests/test_event_pruner.py`.
 
 ## 11. Docs
 

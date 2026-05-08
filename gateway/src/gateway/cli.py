@@ -1023,5 +1023,351 @@ def capability_gaps_cmd(
         _console.print(f"[bold]{count}x[/bold] [dim]({ts_str})[/dim] {action}{suggestion}")
 
 
+# --------------------------------------------------------------- fitt cron
+
+
+def _open_cron_service() -> Any:
+    """Open the CronService against the operator's ``$FITT_HOME``.
+
+    CLI and gateway share the same file; mtime-based reload
+    picks up the CLI's mutations on the gateway's next tick.
+    """
+    from .config import fitt_home
+    from .cron import CronService, default_cron_path
+
+    return CronService(default_cron_path(fitt_home()))
+
+
+def _format_schedule_cli(schedule: Any) -> str:
+    """Mirror of ``tools.cron_tools._format_schedule`` — the
+    CLI output matches what the agent sees so operators can
+    compare the two without mental re-mapping."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    if schedule.kind == "every":
+        n = schedule.every_secs or 0
+        if n % 3600 == 0:
+            return f"every {n // 3600}h"
+        if n % 60 == 0:
+            return f"every {n // 60}m"
+        return f"every {n}s"
+    if schedule.kind == "at":
+        if schedule.at_ts is None:
+            return "at <unset>"
+        return f"at {_dt.fromtimestamp(schedule.at_ts, tz=_UTC).isoformat()}"
+    if schedule.kind == "cron":
+        tz_suffix = (
+            f" [{schedule.timezone}]" if schedule.timezone and schedule.timezone != "UTC" else ""
+        )
+        return f"cron {schedule.cron_expr}{tz_suffix}"
+    return f"<unknown kind: {schedule.kind}>"
+
+
+@main.group("cron")
+def cron_group() -> None:
+    """List, add, and remove scheduled crons.
+
+    Crons live in ``$FITT_HOME/cron.json``. The running gateway
+    picks up changes on its next poll (see ``cron.poll_interval_secs``
+    in config.yaml) via mtime-based reload — no restart needed.
+    """
+
+
+@cron_group.command("list")
+@click.option("--all", "all_", is_flag=True, help="Include disabled crons.")
+def cron_list(all_: bool) -> None:
+    """Show every cron, with id / state / schedule / name."""
+    svc = _open_cron_service()
+    jobs = svc.list(include_disabled=all_)
+    if not jobs:
+        _console.print(
+            "[dim]No crons. Use `fitt cron add` or have the agent "
+            "create one via the `cron_add` tool.[/dim]"
+        )
+        return
+
+    table = Table(title="FITT crons")
+    table.add_column("Id", style="cyan")
+    table.add_column("State")
+    table.add_column("Schedule")
+    table.add_column("Name")
+    table.add_column("Alias")
+    table.add_column("Last run", justify="right")
+    for j in jobs:
+        state = "active" if j.enabled else "[yellow]paused[/yellow]"
+        if j.silent:
+            state += " (silent)"
+        if j.approval_mode == "auto":
+            state += " (auto-approve)"
+        last = (
+            f"{j.last_status or '?'}"
+            if j.last_run_ts is None
+            else _format_last_run(j.last_run_ts, j.last_status)
+        )
+        table.add_row(
+            j.id,
+            state,
+            _format_schedule_cli(j.schedule),
+            j.name,
+            j.agent_alias or "(default)",
+            last,
+        )
+    _console.print(table)
+
+
+def _format_last_run(ts: float, status: str) -> str:
+    """Relative-time summary for the last-run column."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+    from time import time as _now
+
+    delta = _now() - ts
+    if delta < 60:
+        ago = f"{int(delta)}s ago"
+    elif delta < 3600:
+        ago = f"{int(delta // 60)}m ago"
+    elif delta < 86400:
+        ago = f"{int(delta // 3600)}h ago"
+    else:
+        ago = _dt.fromtimestamp(ts, _UTC).strftime("%Y-%m-%d")
+    colour = "green" if status == "ok" else "red" if status == "error" else "dim"
+    return f"[{colour}]{status or 'n/a'}[/{colour}] {ago}"
+
+
+@cron_group.command("add")
+@click.option("--name", required=True, help="Human label for the cron.")
+@click.option(
+    "--schedule",
+    "schedule_spec",
+    required=True,
+    help=(
+        "Schedule spec: 'every 60s', 'every 5m', 'in 30 minutes', "
+        "'at <iso|epoch>', 'cron <5-field>'."
+    ),
+)
+@click.option(
+    "--message",
+    required=True,
+    help="Prompt handed to the agent when the cron fires.",
+)
+@click.option("--silent", is_flag=True, help="Suppress auto-delivery of the reply.")
+@click.option(
+    "--auto-approve",
+    is_flag=True,
+    help="Auto-approve ask-bucket tools inside this cron's firings.",
+)
+@click.option(
+    "--alias",
+    "agent_alias",
+    default="",
+    help="Model alias (e.g. fitt-smart). Empty = fitt-default.",
+)
+@click.option("--timezone", "tz", default="UTC", help="IANA tz for cron exprs (default UTC).")
+def cron_add(
+    name: str,
+    schedule_spec: str,
+    message: str,
+    silent: bool,
+    auto_approve: bool,
+    agent_alias: str,
+    tz: str,
+) -> None:
+    """Register a new cron.
+
+    Goes straight to disk — CLI mutations skip the approval
+    middleware because the operator IS the human. The gateway
+    picks up the change on its next poll.
+    """
+    from .cron import CronError, CronJob, parse_schedule_spec
+
+    try:
+        schedule = parse_schedule_spec(schedule_spec, tz=tz)
+    except CronError as e:
+        _console.print(f"[red]invalid schedule:[/red] {e}")
+        sys.exit(1)
+
+    svc = _open_cron_service()
+    approval_mode = "auto" if auto_approve else ""
+    job = svc.add(
+        CronJob(
+            id="",
+            name=name,
+            message=message,
+            schedule=schedule,
+            silent=silent,
+            approval_mode=approval_mode,  # type: ignore[arg-type]
+            agent_alias=agent_alias,
+            created_by_client="cli",
+        )
+    )
+    _console.print(
+        f"[green]Created[/green] {job.id} [{_format_schedule_cli(job.schedule)}] {job.name!r}"
+    )
+
+
+@cron_group.command("remove")
+@click.argument("cron_id")
+def cron_remove(cron_id: str) -> None:
+    """Delete a cron by id."""
+    svc = _open_cron_service()
+    if not svc.remove(cron_id):
+        _console.print(f"[red]no cron with id {cron_id!r}[/red]")
+        sys.exit(1)
+    _console.print(f"[yellow]Removed[/yellow] {cron_id}")
+
+
+@cron_group.command("pause")
+@click.argument("cron_id")
+def cron_pause(cron_id: str) -> None:
+    """Pause a cron — stays in cron.json, scheduler skips it."""
+    from .cron import UnknownCron
+
+    svc = _open_cron_service()
+    try:
+        svc.set_enabled(cron_id, False)
+    except UnknownCron as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    _console.print(f"[yellow]Paused[/yellow] {cron_id}")
+
+
+@cron_group.command("resume")
+@click.argument("cron_id")
+def cron_resume(cron_id: str) -> None:
+    """Resume a paused cron."""
+    from .cron import UnknownCron
+
+    svc = _open_cron_service()
+    try:
+        svc.set_enabled(cron_id, True)
+    except UnknownCron as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    _console.print(f"[green]Resumed[/green] {cron_id}")
+
+
+# `fitt cron run <id>` (fire once immediately) is deferred. It
+# requires a ``POST /v1/cron/<id>/run`` endpoint that doesn't
+# exist yet; shipping the CLI command without the server-side
+# half would just be a broken button. The workaround today is
+# ``fitt cron add --schedule "in 5 seconds" --message "..."``
+# which fires once and self-cleans (one-shot at schedules are
+# removed by the scheduler after firing).
+
+
+# --------------------------------------------------------------- fitt inbox
+
+
+@main.command("inbox")
+@click.option(
+    "--since",
+    default="24h",
+    help=(
+        "Only show events newer than this. Accepts unix epoch, "
+        "ISO date (YYYY-MM-DD), or relative duration (30m, 24h, 7d). "
+        "Default: 24h."
+    ),
+)
+@click.option(
+    "--kind",
+    default=None,
+    help="Filter by event kind (cron_fired, cron_completed, agent_message, ...).",
+)
+@click.option(
+    "--session",
+    default=None,
+    help="Filter by session_key (e.g. 'main' or 'cron:<id>:<ts>').",
+)
+@click.option(
+    "-n",
+    "--limit",
+    type=int,
+    default=50,
+    help="Max entries to show (default: 50, most recent).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON lines for scripts.")
+def inbox_cmd(
+    since: str,
+    kind: str | None,
+    session: str | None,
+    limit: int,
+    as_json: bool,
+) -> None:
+    """Scroll through the event log.
+
+    Same data the Telegram bot pushes — cron firings, detached
+    tool results, agent messages. Source of truth lives at
+    ``$FITT_HOME/events.jsonl``; this is the operator-side
+    reader.
+    """
+    import json as _json
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from .config import fitt_home
+    from .events import EventLog, default_events_path
+
+    since_ts = _parse_since(since) if since else None
+    log = EventLog(default_events_path(fitt_home()))
+    entries = log.read(
+        since=since_ts,
+        kind=kind,
+        session=session,
+        limit=limit,
+    )
+
+    if as_json:
+        for e in entries:
+            click.echo(
+                _json.dumps(
+                    {
+                        "ts": e.ts,
+                        "kind": e.kind,
+                        "session_key": e.session_key,
+                        "title": e.title,
+                        "body": e.body,
+                        "meta": e.meta,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return
+
+    if not entries:
+        _console.print(
+            f"[dim](no events since {since}"
+            + (f", kind={kind!r}" if kind else "")
+            + (f", session={session!r}" if session else "")
+            + ")[/dim]"
+        )
+        return
+
+    for e in entries:
+        ts_str = _dt.fromtimestamp(e.ts, _UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        colour = _kind_colour(e.kind)
+        title = e.title or e.kind
+        _console.print(
+            f"[dim]{ts_str}[/dim] [{colour}]{e.kind:<20}[/{colour}] "
+            f"[bold]{title}[/bold] "
+            f"[dim]session={e.session_key}[/dim]"
+        )
+        if e.body:
+            body = e.body.replace("\n", "\n  ")
+            if len(body) > 400:
+                body = body[:397] + "..."
+            _console.print(f"  {body}")
+
+
+def _kind_colour(kind: str) -> str:
+    if kind in ("cron_failed", "late_tool_rejected"):
+        return "red"
+    if kind in ("cron_completed", "late_tool_result", "agent_message"):
+        return "green"
+    if kind in ("cron_fired", "approval_requested", "tool_call_narrated"):
+        return "yellow"
+    return "cyan"
+
+
 if __name__ == "__main__":
     main()

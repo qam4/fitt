@@ -287,6 +287,20 @@ def create_app(config: Config) -> FastAPI:
     app.state.cron_runner = cron_runner
     app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=cron_runner.fire)
 
+    # Event pruner (Phase 4.5 Task 10): keeps events.jsonl
+    # bounded without user-visible clutter in ``cron.json``.
+    # See ``gateway/src/gateway/event_pruner.py`` for the "why
+    # not a regular cron" discussion.
+    from .event_pruner import EventPruner, default_anchor_path
+
+    events_cfg = config.events or {}
+    events_max_age_days = int(events_cfg.get("max_age_days", 90))
+    app.state.event_pruner = EventPruner(
+        events=app.state.events,
+        max_age_days=events_max_age_days,
+        anchor_path=default_anchor_path(fitt_home()),
+    )
+
     @app.on_event("startup")
     async def _start_cron_scheduler() -> None:  # pragma: no cover - lifespan hook
         await app.state.cron_scheduler.start()
@@ -294,6 +308,14 @@ def create_app(config: Config) -> FastAPI:
     @app.on_event("shutdown")
     async def _stop_cron_scheduler() -> None:  # pragma: no cover - lifespan hook
         await app.state.cron_scheduler.stop()
+
+    @app.on_event("startup")
+    async def _start_event_pruner() -> None:  # pragma: no cover - lifespan hook
+        await app.state.event_pruner.start()
+
+    @app.on_event("shutdown")
+    async def _stop_event_pruner() -> None:  # pragma: no cover - lifespan hook
+        await app.state.event_pruner.stop()
 
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)
