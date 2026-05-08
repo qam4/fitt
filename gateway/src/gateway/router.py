@@ -26,9 +26,12 @@ from typing import Any
 
 import httpx
 import litellm
+import structlog
 
 from .config import Backend, Config, ModelConfig
 from .errors import NoBackendAvailable, UnknownAlias
+
+_log = structlog.get_logger("fitt.gateway.router")
 
 
 @dataclass
@@ -145,6 +148,26 @@ class AliasRouter:
             key = secrets.api_key_for(candidate.backend, model_id=candidate.id)
             kwargs = _litellm_kwargs(candidate, key)
             call_kwargs = {**body, **kwargs}
+
+            # Debug-only: log the exact kwargs going to LiteLLM.
+            # Gated on ``server.log_bodies`` alongside the
+            # request-body log in chat.py. This is what the
+            # model actually sees, so diffs here are the ground
+            # truth when the request-body log looks identical
+            # but the model behaves differently (2026-05-08 —
+            # Telegram vs curl tool-call divergence
+            # investigation).
+            if getattr(self._config.server, "log_bodies", False):
+                # Deep copy so the api_key is redacted without
+                # mutating the real call_kwargs.
+                safe = {k: v for k, v in call_kwargs.items() if k != "api_key"}
+                if "api_key" in call_kwargs:
+                    safe["api_key"] = "<redacted>"
+                _log.info(
+                    "router.dispatch_body",
+                    model=candidate.id,
+                    body=safe,
+                )
 
             try:
                 result = await litellm.acompletion(**call_kwargs)
