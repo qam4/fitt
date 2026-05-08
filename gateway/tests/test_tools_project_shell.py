@@ -230,23 +230,34 @@ async def test_local_dispatch_fails_without_local_shell_on_ctx(tmp_path: Path) -
 # --------------------------------------------------------------- SSH dispatch
 
 
-async def test_ssh_dispatch_passes_command_through(tmp_path: Path) -> None:
-    """SSH projects pass the command as a single argv entry —
-    the backend's SSH path wraps via the remote login shell,
-    so we don't need local ``bash -lc``."""
+async def test_ssh_dispatch_wraps_command_in_sh_c(tmp_path: Path) -> None:
+    """SSH projects wrap the command in ``sh -c`` before handing
+    it to :class:`ExecutionBackend`.
+
+    Why not pass the command as a one-element argv and let
+    ``shlex.join`` do the work? Because ``shlex.join([command])``
+    on a string with spaces produces a quoted one-word
+    expression (``'git pull'``) and the remote login shell
+    tries to exec a program named ``"git pull"`` (observed
+    2026-05-08 against a Git Bash satellite). ``["sh", "-c",
+    command]`` ensures the remote side sees ``sh -c 'the
+    whole thing'`` — the familiar and correct shape, matching
+    how the ``fitt ssh test`` CLI already handles arbitrary
+    shell strings.
+    """
     tool = build_project_shell_tool()
     backend = FakeBackend()
     backend.queue(ShellResult(exit=0, stdout="ok\n", stderr="", timed_out=False))
     # No local_shell on purpose — SSH path doesn't need it.
     ctx = _build_ctx(tmp_path=tmp_path, backend=backend, local_shell=None)
 
-    result = await tool.callable({"project": "satellite", "command": "uname -a && pwd"}, ctx)
+    result = await tool.callable({"project": "satellite", "command": "git pull && uname -a"}, ctx)
     assert not result.is_error
     assert backend.calls == [
         {
             "project": "satellite",
             "ssh_host": "laptop.tailnet",
-            "cmd": ["uname -a && pwd"],
+            "cmd": ["sh", "-c", "git pull && uname -a"],
             "timeout_secs": 120,
         }
     ]

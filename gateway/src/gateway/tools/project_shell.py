@@ -172,13 +172,21 @@ async def _impl(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             "the tool context. This is a gateway bug."
         )
 
-    # Local projects need a POSIX-shell wrapper. SSH projects
-    # pass the raw command string in as a single argv entry —
-    # ExecutionBackend's SSH path already wraps via the remote
-    # login shell, which gives us the same bash -lc semantics
-    # on the other end.
+    # Local projects need a POSIX-shell wrapper because
+    # ``asyncio.create_subprocess_exec`` doesn't go through a
+    # shell (no pipes / redirection / globs without one). SSH
+    # projects wrap in ``sh -c`` before handing to
+    # ``ExecutionBackend`` — without that wrapper, ``shlex.join``
+    # over a one-element list containing a shell string like
+    # ``"git pull"`` renders the remote command as the quoted
+    # one-word ``'git pull'``, which the remote login shell
+    # tries to exec as a program literally named ``git pull``
+    # and fails with ``command not found`` (observed 2026-05-08
+    # against a Git-Bash-on-Windows satellite). Matches the
+    # shape ``fitt ssh test`` uses in the CLI for the same
+    # reason.
     if project.ssh_host:
-        argv = [command]
+        argv = ["sh", "-c", command]
     else:
         if ctx.local_shell is None or not getattr(ctx.local_shell, "available", False):
             return ToolResult.error(
