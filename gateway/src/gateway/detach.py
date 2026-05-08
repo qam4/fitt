@@ -264,7 +264,12 @@ async def finish_detached(
     # invariant as the synchronous path.
     if memory is not None and user_message and assistant_text and result.status == "ok":
         try:
-            memory.append_turn(session_key, user_message, assistant_text)
+            memory.append_turn(
+                session_key,
+                user_message,
+                assistant_text,
+                tool_calls=(result.tool_calls_for_memory or None),
+            )
         except Exception as exc:
             _log.warning(
                 "chat.detached.memory_append_failed",

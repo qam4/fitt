@@ -158,7 +158,12 @@ class CronRunner:
             # history manually).
             if self._memory is not None and job.message and result.assistant_text:
                 try:
-                    self._memory.append_turn(session_key, job.message, result.assistant_text)
+                    self._memory.append_turn(
+                        session_key,
+                        job.message,
+                        result.assistant_text,
+                        tool_calls=(result.tool_calls_for_memory or None),
+                    )
                 except Exception as exc:
                     _log.warning(
                         "cron.memory_append_failed",

@@ -47,6 +47,7 @@ from typing import Any
 from .audit import new_entry as new_audit_entry
 from .capabilities import detect_narrated_tool_call, parse_gap
 from .errors import NoBackendAvailable, UnknownAlias, UnknownTool
+from .memory import PersistedToolCall
 from .router import AliasRouter
 from .tools import ApprovalDecision, Tool, ToolContext, ToolRegistry, ToolResult
 
@@ -89,6 +90,14 @@ class AgentLoopResult:
     iterations: int = 0
     error: Exception | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
+    tool_calls_for_memory: list[PersistedToolCall] = field(default_factory=list)
+    """Phase 5 — structured record of every tool call this turn
+    executed. Populated by :func:`run_agent_loop` regardless of
+    ``status`` (a failed turn still ran tools that the caller
+    might want to persist). Consumers pass this list to
+    :meth:`MemoryStore.append_turn(tool_calls=...)` so future
+    context sees the OUTCOME of past tool calls, not just the
+    paraphrased reply."""
 
 
 # --------------------------------------------------------------- response shape helpers
@@ -416,6 +425,11 @@ async def run_agent_loop(
     in_tok_total = 0
     out_tok_total = 0
     response_obj: Any = None
+    # Phase 5 — accumulator for tool calls this turn ran. Passed
+    # to memory.append_turn so structured call records persist
+    # alongside the user + assistant message pair. One entry per
+    # executed call; order matches the model's tool_calls list.
+    tool_calls_for_memory: list[PersistedToolCall] = []
 
     iterations = 0
     for iteration in range(max_iterations):
@@ -497,6 +511,14 @@ async def run_agent_loop(
                     "content": result.payload,
                 }
             )
+            # Phase 5 — record the call for persistence.
+            tool_calls_for_memory.append(
+                _persisted_tool_call_from_result(
+                    call=call,
+                    tool=tool,
+                    result=result,
+                )
+            )
     else:
         return AgentLoopResult(
             status="tool_loop_exhausted",
@@ -507,6 +529,7 @@ async def run_agent_loop(
             out_tokens=out_tok_total,
             iterations=iterations,
             messages=working_messages,
+            tool_calls_for_memory=tool_calls_for_memory,
         )
 
     return AgentLoopResult(
@@ -519,4 +542,98 @@ async def run_agent_loop(
         out_tokens=out_tok_total,
         iterations=iterations,
         messages=working_messages,
+        tool_calls_for_memory=tool_calls_for_memory,
     )
+
+
+def _persisted_tool_call_from_result(
+    *,
+    call: dict[str, Any],
+    tool: Tool | None,
+    result: ToolResult,
+) -> PersistedToolCall:
+    """Build a :class:`PersistedToolCall` from a live tool
+    invocation's inputs + result.
+
+    * ``tool_name``: from the tool's registry entry (or the
+      raw call's name if the tool wasn't found in the registry).
+    * ``args_summary``: a short rendering of the call's
+      arguments. Reuses the small logic we already use for the
+      approval prompt but with a tight 80-char cap — tomorrow's
+      context shouldn't carry long ``content=...`` blobs.
+    * ``result_status`` / ``result_summary``: derived from the
+      tool's :class:`ToolResult`. Success = ``ok``; error =
+      ``error`` plus the first ~300 chars of the payload; the
+      shell tools' exit-code convention is detected and
+      surfaced as ``exit=N`` (``project_shell`` writes
+      ``exit=N\\n\\n...`` in its payload — parse that shape
+      out so the persisted record is cleaner).
+    """
+    tool_name = tool.name if tool is not None else call.get("function", {}).get("name", "(unknown)")
+    args_summary = _short_args_summary(call)
+    status, summary = _status_and_summary_from_result(result)
+    return PersistedToolCall(
+        tool_name=tool_name,
+        args_summary=args_summary,
+        result_status=status,
+        result_summary=summary,
+    )
+
+
+def _short_args_summary(call: dict[str, Any]) -> str:
+    """Compact ``key=value, ...`` rendering of a tool call's
+    arguments. Caps at 80 chars with a truncation marker.
+
+    This is distinct from ``approval._summarise_args`` (which
+    widens for ``project_shell`` to fit a command string) —
+    the persisted record is what tomorrow's context reads,
+    and a 1KB command string there is costlier than an
+    ellipsis."""
+    try:
+        raw = call.get("function", {}).get("arguments", "{}")
+        args = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        args = {}
+    if not isinstance(args, dict):
+        return repr(args)[:80]
+    parts: list[str] = []
+    for k, v in args.items():
+        rendered = repr(v)
+        if len(rendered) > 40:
+            rendered = rendered[:37] + "..."
+        parts.append(f"{k}={rendered}")
+    summary = ", ".join(parts)
+    if len(summary) > 80:
+        summary = summary[:77] + "..."
+    return summary
+
+
+def _status_and_summary_from_result(result: ToolResult) -> tuple[str, str]:
+    """Extract a short ``(status, summary)`` from a tool
+    result.
+
+    Success → ``("ok", "")``. Error → ``(status, summary)``
+    where status parses out the common shell convention
+    (``exit=N\\n\\n...`` from ``project_shell``) when
+    present, otherwise falls back to ``"error"``. Summary
+    caps at 300 chars so tomorrow's context stays compact
+    even for verbose failures."""
+    if not result.is_error:
+        return "ok", ""
+    payload = result.payload or "error"
+    # Shell-ish payloads start with "exit=N\n\n..." — lift the
+    # status out so the persisted record carries both the
+    # exit code and a short tail of stderr, not just "error".
+    status = "error"
+    summary = payload
+    if payload.startswith("exit="):
+        first_newline = payload.find("\n")
+        if first_newline != -1:
+            status = payload[:first_newline].strip()
+            summary = payload[first_newline:].strip()
+        else:
+            status = payload.strip()
+            summary = ""
+    if len(summary) > 300:
+        summary = summary[:297] + "..."
+    return status, summary

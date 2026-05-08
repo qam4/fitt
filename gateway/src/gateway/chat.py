@@ -634,7 +634,12 @@ async def _run_tool_loop(
 
     if user_message_for_memory and assistant_text:
         try:
-            memory.append_turn(session_id, user_message_for_memory, assistant_text)
+            memory.append_turn(
+                session_id,
+                user_message_for_memory,
+                assistant_text,
+                tool_calls=(result.tool_calls_for_memory or None),
+            )
         except Exception as exc:
             _log.warning(
                 "memory.append_failed",

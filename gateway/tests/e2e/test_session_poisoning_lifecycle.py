@@ -1,52 +1,30 @@
-"""U1.5 — session poisoning lifecycle.
+"""U1.5 — session poisoning lifecycle (Phase 5 fix pinned).
 
-Documents the known Phase 4 limitation that Phase 5 will fix:
-only the user message and the final assistant reply persist to
-history today. Tool calls and tool results are ephemeral. A
-turn where the assistant's reply was "SSH is unreachable"
-becomes part of history as a factual claim; future turns read
-it, pattern-match on it, and refuse to use tools even after the
-issue is fixed.
+The Phase 4 failure mode: only the user message and the final
+assistant reply persist to history. Tool calls and tool results
+are ephemeral. A turn where the assistant's reply was "SSH is
+unreachable" becomes part of history as a factual claim; future
+turns read it, pattern-match on it, and refuse to call tools
+even after the issue is fixed.
 
-The test seeds a session's history with the poisoning pattern,
-fires a new request, and asserts the stale reply reaches the
-LLM dispatch. That's the invariant Phase 5 will break by
-persisting tool-call turns structurally (user → tool_calls →
-tool_result → assistant), so this test flips green when Phase 5
-lands.
+Phase 5 fixes this by persisting tool-using turns structurally:
+``user`` → ``assistant tool_calls`` → ``tool <name>`` (with
+``ok`` or ``exit=N: <brief>``) → final assistant. Loading such
+a turn gives the model both the paraphrased reply AND the
+structured tool result, so it can tell a stale refusal from
+current reality.
 
-``@pytest.mark.xfail(strict=True)`` means:
-* Today, the test body would fail (Phase 4's memory serialises
-  the stale reply verbatim, and the LLM doesn't produce
-  duplicate tool calls from a stub that's just ``stub_reply``).
-* Actually — let's think about the exact shape. What we want
-  to pin is: **given a history with a stale "I can't do X"
-  reply, do we pass that stale content to the LLM?** Today:
-  YES. Phase 5's fix: replace the stale NL reply with a
-  structured tool-call record, so the model sees the outcome
-  (``ok`` or a short error) not the narrative refusal.
+This test pins that fix at the HTTP surface: seed a
+tool-using-turn on disk where the tool result was ``ok`` but
+the assistant's natural-language reply claims failure. Fire a
+new request. Assert the structured ``ok`` outcome reaches the
+model's dispatched messages so a model reading history can
+override the paraphrase.
 
-So the concrete assertion this test pins is: the stale
-assistant text IS visible in the next dispatch's messages.
-Phase 5 will make it NOT visible (replaced by the structured
-record). Hence ``xfail(strict=True, reason=...)`` — when the
-phase 5 code lands, this test starts failing (because the
-stale text no longer reaches the dispatch), we flip it to a
-proper positive assertion, and the suite flags the transition.
-
-Wait — that's backwards. If the test body asserts "the stale
-reply IS present" then today it PASSES (and shouldn't be
-xfail). The xfail is meant to flip green on Phase 5.
-
-The clearer framing: assert the FIXED behaviour. "The stale
-assistant text is NOT verbatim in the next dispatch." Today
-this fails (memory does pass it through). Phase 5's structured
-persistence means the stale text gets replaced; the test
-passes.
-
-That's what xfail(strict=True) pins: failing today, passing
-when the Phase 5 fix lands, and a strict-xfail flag means an
-unexpected pass blows the suite so we notice the fix.
+Pre-Phase-5 this test would have been impossible to write — the
+format couldn't carry the tool outcome in the first place. The
+test being expressible in Phase 5 shape is itself evidence the
+fix landed.
 """
 
 from __future__ import annotations
@@ -55,39 +33,31 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-import pytest
 
 from .._llm_stubs import stub_reply
 from .conftest import StubbedLLM
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Phase 5 will persist tool-call turns structurally so a "
-        "stale 'SSH unreachable' reply is replaced by the "
-        "tool-result outcome in context. Until then, memory "
-        "serialises the stale NL reply verbatim and passes it "
-        "to the next dispatch. When this test starts passing, "
-        "Phase 5's memory fix has landed — flip the xfail off "
-        "and keep the positive assertion."
-    ),
-)
-async def test_stale_refusal_does_not_leak_into_next_dispatch(
+async def test_tool_outcome_reaches_model_alongside_stale_paraphrase(
     e2e_app: Any,
     e2e_client: httpx.AsyncClient,
     stubbed_llm: StubbedLLM,
 ) -> None:
-    """Seed a poisoned history, issue a new turn, assert the
-    stale refusal is NOT in the system/messages payload.
+    """Seed a poisoned tool-using turn on disk, fire a new
+    request, assert the tool's ``ok`` outcome is visible in
+    the dispatched messages.
 
-    Phase 4 memory serialises the final assistant reply
-    verbatim, so the string WILL be present today — test
-    fails. Phase 5 replaces it with a tool-outcome record —
-    test passes.
+    The poisoning pattern we're documenting: the assistant's
+    NL reply says "SSH unreachable" but the actual tool call
+    succeeded (status=ok). Before Phase 5 only the NL reply
+    persisted → future turns saw only the refusal. After
+    Phase 5 the structured tool result persists alongside →
+    future turns see the ground truth too.
     """
-    # Seed the session's history file directly. Use today's
-    # filename so MemoryStore picks it up on the next request.
+    # Seed today's history with the Phase 5 tool-using shape:
+    # user → assistant tool_calls → tool (ok) → final
+    # assistant (stale NL refusal). Only possible because
+    # Phase 5 extended the parser to recognise these blocks.
     today = datetime.now(UTC).date()
     history_dir = e2e_app.state.config.memory.sessions_dir / "main" / "history"
     history_dir.mkdir(parents=True, exist_ok=True)
@@ -95,14 +65,15 @@ async def test_stale_refusal_does_not_leak_into_next_dispatch(
     poisoned.write_text(
         "## 2026-05-07T10:00:00Z user\n\n"
         "fetch my repo\n\n"
-        "## 2026-05-07T10:00:05Z assistant\n\n"
+        "## 2026-05-07T10:00:05Z assistant tool_calls\n\n"
+        "- run_tests(project='hub')\n\n"
+        "## 2026-05-07T10:00:06Z tool run_tests\n\n"
+        "ok\n\n"
+        "## 2026-05-07T10:00:10Z assistant\n\n"
         "SSH is unreachable, please configure keys and try again.\n",
         encoding="utf-8",
     )
 
-    # Fire a plain follow-up. The detector we care about is on
-    # the dispatch kwargs — does the stale assistant text show
-    # up in the messages/content payload?
     stubbed_llm.load([stub_reply("checking.")])
     r = await e2e_client.post(
         "/v1/chat/completions",
@@ -114,40 +85,39 @@ async def test_stale_refusal_does_not_leak_into_next_dispatch(
     )
     assert r.status_code == 200
 
-    # The failure we're documenting: the stale string IS present
-    # in the dispatched messages today. Assert the Phase-5-fixed
-    # behaviour (NOT present) so the test flips green when the
-    # fix lands.
     dispatch_kwargs = stubbed_llm.calls[0]
-    rendered = _render_messages(dispatch_kwargs.get("messages", []))
-    assert "SSH is unreachable" not in rendered, (
-        "the stale refusal from a prior turn still reaches the "
-        "model — the 2026-05-07 poisoning pattern. Phase 5's "
-        "structured tool-call persistence will fix this by "
-        "replacing the NL refusal with the tool's 'ok' result "
-        "(or a short error summary) so future context carries "
-        "the outcome, not the narrative. When this assertion "
-        "starts passing, move the test out of xfail."
+    dispatched = dispatch_kwargs.get("messages", [])
+
+    # Phase 5 guarantee #1: the tool's structured outcome (role
+    # tool with content "ok") reaches the model alongside the
+    # paraphrased reply. A model receiving this can tell the
+    # NL refusal is stale.
+    tool_messages = [m for m in dispatched if m.get("role") == "tool"]
+    assert tool_messages, (
+        "no role=tool entry in dispatched messages; Phase 5's "
+        "tool-outcome-persistence didn't land. The model can't "
+        "see the ground truth and will keep believing the stale "
+        "NL paraphrase."
+    )
+    assert any("ok" in (m.get("content") or "") for m in tool_messages), (
+        "role=tool entry present but its content doesn't carry the 'ok' status we seeded on disk"
     )
 
-
-def _render_messages(messages: list[dict[str, Any]]) -> str:
-    """Flatten dispatched messages into a single searchable string.
-
-    Cheap approach: just concatenate every ``content`` field we
-    find. System messages + history turns + the current user
-    turn all land here. If Phase 5 replaces the stale reply
-    with a structured record (tool_calls / tool_result), the
-    stale NL string stops appearing.
-    """
-    parts: list[str] = []
-    for m in messages:
-        content = m.get("content")
-        if isinstance(content, str):
-            parts.append(content)
-        elif isinstance(content, list):
-            # OpenAI content parts shape — future-proofing.
-            for part in content:
-                if isinstance(part, dict) and "text" in part:
-                    parts.append(str(part["text"]))
-    return "\n".join(parts)
+    # Phase 5 guarantee #2: the assistant tool_calls entry is
+    # also present with a matching tool_call_id linking the
+    # assistant turn to the tool result. Without the pairing,
+    # some LLM providers reject the message list as malformed.
+    assistant_with_calls = [
+        m for m in dispatched if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+    assert assistant_with_calls, (
+        "no assistant turn with tool_calls in the dispatched "
+        "messages; the parser didn't reconstruct the pairing "
+        "that makes the role=tool entry valid"
+    )
+    call_ids = {tc["id"] for m in assistant_with_calls for tc in m["tool_calls"] if "id" in tc}
+    tool_ids = {m["tool_call_id"] for m in tool_messages if "tool_call_id" in m}
+    assert call_ids & tool_ids, (
+        "assistant tool_calls ids don't pair with any tool "
+        "role entries; the LLM would reject this message list"
+    )

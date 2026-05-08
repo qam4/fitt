@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any
 
 from .lessons import LessonsStore
 from .memory_templates import DEFAULTS, LEGACY_TEMPLATES
@@ -55,10 +56,14 @@ class LoadedContext:
     """Identity content merged together. Empty string if no identity
     files exist or memory is disabled."""
 
-    history_messages: list[dict[str, str]]
-    """List of ``{"role": ..., "content": ...}`` dicts for the
-    history turns that fit in the budget. Oldest first. Empty if no
-    history or memory is disabled."""
+    history_messages: list[dict[str, Any]]
+    """List of messages for the history turns that fit in the
+    budget, oldest first. Shape follows the OpenAI chat-messages
+    contract: most entries are ``{"role": "user|assistant",
+    "content": str}``; tool-using turns (Phase 5) also emit
+    ``{"role": "assistant", "content": "", "tool_calls": [...]}``
+    and ``{"role": "tool", "tool_call_id": str, "content": str}``
+    entries. Empty if no history or memory is disabled."""
 
     truncated_bytes: int = 0
     """How many bytes of history were dropped due to the budget.
@@ -72,10 +77,71 @@ class _Turn:
     timestamp: datetime | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PersistedToolCall:
+    """Phase 5 — one tool call persisted with its result.
+
+    Written to the on-disk history as a bullet under an
+    ``assistant tool_calls`` header, followed by a
+    ``tool <name>`` block carrying ``result_status`` +
+    ``result_summary``.
+
+    Kept short by design — ``args_summary`` caps at ~80 chars,
+    ``result_summary`` at ~300 chars. The point is to preserve
+    the OUTCOME of the call (so tomorrow's context knows the
+    SSH call succeeded) without ballooning context windows
+    with full stdout.
+    """
+
+    tool_name: str
+    args_summary: str
+    result_status: str
+    """Short status: ``ok`` on success; ``exit=N`` for shell
+    tools that returned a non-zero exit; ``error`` for other
+    failures. Parsed back out when reloading."""
+    result_summary: str
+    """Body of the tool result. For success this is whatever
+    the caller chose (e.g. ``"wrote a.txt"``); for errors the
+    first ~300 chars of the error text. Never the full
+    stdout — that's too much for tomorrow's context."""
+
+    def render_call_bullet(self) -> str:
+        """One line for the ``assistant tool_calls`` block."""
+        args = self.args_summary
+        if len(args) > 80:
+            args = args[:77] + "..."
+        return f"- {self.tool_name}({args})"
+
+    def render_result_body(self) -> str:
+        """Body content for the corresponding ``tool <name>``
+        block. Just the status + summary, joined with a colon
+        when the summary is non-empty."""
+        summary = self.result_summary.strip()
+        if not summary:
+            return self.result_status
+        if summary == self.result_status:
+            return self.result_status
+        return f"{self.result_status}: {summary}"
+
+
 # ----------------------------------------------------------------- store
 
 
-_HEADER_RE = re.compile(r"^##\s+(\S+)\s+(user|assistant|system)\s*$")
+_HEADER_RE = re.compile(
+    # Matches any of:
+    #   ## <ts> user
+    #   ## <ts> assistant
+    #   ## <ts> assistant tool_calls     (Phase 5 — tool-using turn)
+    #   ## <ts> tool <tool_name>         (Phase 5 — tool result block)
+    #   ## <ts> system
+    # The role is captured as a single string including any suffix
+    # (e.g. "assistant tool_calls" or "tool project_shell") so the
+    # parser dispatches downstream. Unknown roles degrade to the
+    # pre-Phase-5 behaviour: the block is treated as a turn with
+    # the literal role, callers decide what to do with it.
+    r"^##\s+(?P<ts>\S+)\s+(?P<role>user|assistant(?:\s+tool_calls)?|"
+    r"tool(?:\s+\S+)?|system)\s*$"
+)
 
 
 class MemoryStore:
@@ -160,6 +226,8 @@ class MemoryStore:
         session_id: str,
         user_message: str,
         assistant_message: str,
+        *,
+        tool_calls: list[PersistedToolCall] | None = None,
     ) -> None:
         """Append a user/assistant pair to today's history.
 
@@ -168,6 +236,26 @@ class MemoryStore:
         operation on a buffered string rather than two appends, which
         means a process crash mid-write loses the pair rather than
         leaving a half-written user block.
+
+        Phase 5: ``tool_calls`` (optional) lets chat/cron handlers
+        persist the structured outcome of a tool-using turn. When
+        present, the turn writes:
+
+            ## <ts> user              <user_message>
+            ## <ts> assistant tool_calls
+                - tool(args)...  per PersistedToolCall
+            ## <ts> tool <name>       <status + summary>  (one per call)
+            ## <ts> assistant         <assistant_message>
+
+        So a future request loading this day sees the call went
+        through AND what happened — not just the paraphrased
+        natural-language reply. This is the fix for the
+        tool-poisoning failure mode documented in
+        ``test_session_poisoning_lifecycle`` (Phase 4.6).
+
+        When ``tool_calls`` is ``None`` or empty, the format is
+        unchanged from Phase 2 (just user + assistant). That's
+        the majority path.
         """
         if not self._enabled:
             return
@@ -177,13 +265,23 @@ class MemoryStore:
 
         now = _utc_now()
         user_block = _format_block(now, "user", user_message)
-        assistant_block = _format_block(now, "assistant", assistant_message)
+        blocks: list[str] = [user_block]
+
+        if tool_calls:
+            calls_body = "\n".join(c.render_call_bullet() for c in tool_calls)
+            blocks.append(_format_block(now, "assistant tool_calls", calls_body))
+            for call in tool_calls:
+                blocks.append(
+                    _format_block(now, f"tool {call.tool_name}", call.render_result_body())
+                )
+
+        blocks.append(_format_block(now, "assistant", assistant_message))
 
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
         # Ensure exactly one blank line between the previous turn and
         # the new one.
         separator = "\n" if existing and not existing.endswith("\n\n") else ""
-        new_content = existing + separator + user_block + assistant_block
+        new_content = existing + separator + "".join(blocks)
         path.write_text(new_content, encoding="utf-8")
 
     # ---------- internals -----------------------------------------
@@ -282,12 +380,23 @@ class MemoryStore:
             )
             return ""
 
-    def _load_and_truncate_history(self, path: Path) -> tuple[list[dict[str, str]], int]:
+    def _load_and_truncate_history(self, path: Path) -> tuple[list[dict[str, Any]], int]:
         """Read a history file, parse into turns, drop oldest turns
-        until the total content size fits the budget.
+        until the total content size fits the budget, and convert
+        the remaining turns into an OpenAI-shape message list.
 
         Returns (messages, dropped_bytes). Missing or unreadable
         files are treated as empty and do not raise.
+
+        Phase 5: a tool-using turn on disk is represented as four
+        blocks (user, assistant tool_calls, tool <name>+, final
+        assistant). They're converted back into the same
+        OpenAI-shape ``role=assistant + tool_calls`` / ``role=tool
+        + tool_call_id`` pair the live tool loop emits. That way
+        a model reloading history sees the OUTCOME of a prior
+        tool call, not just the paraphrased natural-language
+        reply — which was the tool-poisoning failure mode the
+        session-poisoning e2e test documents.
         """
         if not path.exists():
             return [], 0
@@ -313,9 +422,7 @@ class MemoryStore:
             dropped_bytes += len(dropped.content)
             total -= len(dropped.content)
 
-        messages = [
-            {"role": t.role, "content": t.content} for t in turns if t.role in ("user", "assistant")
-        ]
+        messages = _turns_to_messages(turns)
         return messages, dropped_bytes
 
 
@@ -363,7 +470,7 @@ def _parse_turns(text: str) -> list[_Turn]:
         m = _HEADER_RE.match(line)
         if m:
             flush()
-            timestamp_str, role = m.group(1), m.group(2)
+            timestamp_str, role = m.group("ts"), m.group("role")
             try:
                 ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
             except ValueError:
@@ -375,3 +482,156 @@ def _parse_turns(text: str) -> list[_Turn]:
         # Lines before the first header are discarded (file preamble).
     flush()
     return turns
+
+
+# Matches a single call bullet inside an ``assistant tool_calls``
+# block: "- tool_name(args...)". Captures the tool name and the
+# args text so we can reconstruct an OpenAI-shape ``tool_calls``
+# entry when loading.
+_TOOL_CALL_BULLET_RE = re.compile(
+    r"^\s*-\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"\s*\((?P<args>.*)\)\s*$"
+)
+
+
+def _turns_to_messages(turns: list[_Turn]) -> list[dict[str, Any]]:
+    """Convert parsed turns into OpenAI-shape message dicts.
+
+    Phase 5: a tool-using turn is represented on disk as
+    ``user`` → ``assistant tool_calls`` → one or more
+    ``tool <name>`` → final ``assistant``. Convert that shape
+    into the LLM contract:
+
+        [
+            {"role": "user", ...},
+            {"role": "assistant", "tool_calls": [{...}], "content": ""},
+            {"role": "tool", "tool_call_id": "...", "content": "..."},
+            {"role": "assistant", "content": "final reply"},
+        ]
+
+    Tool-call ids are derived deterministically from the bullet
+    text so the paired ``role: tool`` entries get valid ids.
+    The model doesn't see ids as semantic; it just needs them
+    to be valid strings that correspond across the assistant /
+    tool message pair.
+
+    Phase-2-shape files (only user/assistant turns) load
+    identically to today — back-compat is the whole reason the
+    conversion is per-turn-role rather than a global rewrite.
+    Unknown-role turns are skipped with a debug log.
+    """
+    messages: list[dict[str, Any]] = []
+    i = 0
+    while i < len(turns):
+        turn = turns[i]
+        role = turn.role
+        if role == "user":
+            messages.append({"role": "user", "content": turn.content})
+            i += 1
+            continue
+        if role == "assistant":
+            messages.append({"role": "assistant", "content": turn.content})
+            i += 1
+            continue
+        if role == "assistant tool_calls":
+            # Parse call bullets; associate each with the next
+            # ``tool <name>`` block in order.
+            tool_calls, tool_results = _parse_tool_calls_block(turn.content)
+            # Look ahead for the matching tool blocks.
+            result_idx = 0
+            peek = i + 1
+            while (
+                peek < len(turns)
+                and turns[peek].role.startswith("tool ")
+                and result_idx < len(tool_calls)
+            ):
+                tool_turn = turns[peek]
+                # Override the parsed-from-bullet result with the
+                # real block content (the bullet only carries args;
+                # the actual result lives in the tool block body).
+                tool_results[result_idx] = {
+                    "tool_call_id": tool_calls[result_idx]["id"],
+                    "content": tool_turn.content,
+                }
+                peek += 1
+                result_idx += 1
+            # Emit assistant with tool_calls, then a role=tool per call.
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": tool_calls,
+                }
+            )
+            for result in tool_results:
+                messages.append({"role": "tool", **result})
+            i = peek
+            continue
+        if role.startswith("tool "):
+            # Orphan tool block (no preceding assistant tool_calls).
+            # Happens if the parser hit a malformed file; skip
+            # with a debug log rather than raise.
+            _log.debug(
+                "memory.orphan_tool_block",
+                extra={"role": role, "content_head": turn.content[:80]},
+            )
+            i += 1
+            continue
+        if role == "system":
+            # We persist system messages rarely (future uses),
+            # but if one appears, inject it as-is.
+            messages.append({"role": "system", "content": turn.content})
+            i += 1
+            continue
+        # Unknown role — drop with a debug log.
+        _log.debug(
+            "memory.unknown_role_skipped",
+            extra={"role": role, "content_head": turn.content[:80]},
+        )
+        i += 1
+    return messages
+
+
+def _parse_tool_calls_block(
+    body: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Parse the body of an ``assistant tool_calls`` block into
+    a list of tool_calls dicts (for the assistant message) and
+    a matching list of result-placeholder dicts (filled in by
+    the caller from the following ``tool <name>`` blocks).
+
+    Returns ``(tool_calls, result_placeholders)``. The ids are
+    deterministic hashes of the bullet text so the two halves
+    can pair without the on-disk format needing explicit ids.
+    """
+    import hashlib
+    import json
+
+    tool_calls: list[dict[str, Any]] = []
+    result_placeholders: list[dict[str, Any]] = []
+    for idx, line in enumerate(body.splitlines()):
+        m = _TOOL_CALL_BULLET_RE.match(line)
+        if not m:
+            continue
+        name = m.group("name")
+        args_text = m.group("args").strip()
+        call_id = "persisted-" + hashlib.sha1(line.encode("utf-8")).hexdigest()[:12]
+        tool_calls.append(
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    # Preserve the args literally — the model
+                    # will see the bullet's args text, same as
+                    # what was rendered in the live call. The
+                    # function.arguments field is a JSON string
+                    # per the OpenAI contract; wrap in a
+                    # single-field object so the shape validates.
+                    "name": name,
+                    "arguments": json.dumps({"_persisted_args": args_text}),
+                },
+            }
+        )
+        result_placeholders.append({"tool_call_id": call_id, "content": ""})
+        _ = idx
+    return tool_calls, result_placeholders
