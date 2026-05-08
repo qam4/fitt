@@ -72,6 +72,8 @@ def format_event(entry: dict[str, Any]) -> str:
         return _format_cron_failed(entry, body)
     if kind == "agent_message":
         return _format_agent_message(entry, body)
+    if kind == "tool_executed":
+        return _format_tool_executed(entry, body)
 
     # Fallback for unknown kinds.
     return _join_non_empty(title or kind, body)
@@ -135,6 +137,38 @@ def _format_agent_message(entry: dict[str, Any], body: str) -> str:
     if title and title != "Agent Message":
         return _join_non_empty(title, body)
     return body or title or "(empty agent message)"
+
+
+def _format_tool_executed(entry: dict[str, Any], body: str) -> str:
+    """Phase 4.7: a ``project_shell`` (or future shell-like
+    tool) invocation finished. The user wants to see the
+    sequence of commands running — especially for
+    ``trust_session`` flows where the approval prompt only
+    fired once.
+
+    Glyph depends on outcome:
+    - ``▶`` for a successful run (exit 0).
+    - ``❌`` for a non-zero exit.
+    - ``⏱️`` for a timeout.
+
+    Title is the gateway-formatted ``ran project_shell on
+    <project>: <truncated cmd>`` (or ``FAILED``/``TIMED OUT``
+    variants); we prefix the glyph and preserve the body which
+    carries stdout + stderr. Empty body → ``(no output)``
+    marker so the message isn't just a header."""
+    meta = entry.get("meta") or {}
+    timed_out = bool(meta.get("timed_out"))
+    exit_code = meta.get("exit_code")
+    title = entry.get("title", "")
+    if timed_out:
+        glyph = "⏱️"
+    elif isinstance(exit_code, int) and exit_code != 0:
+        glyph = "❌"
+    else:
+        glyph = "▶"
+    header = f"{glyph} {title}" if title else f"{glyph} tool_executed"
+    body_or_marker = body if body else "(no output)"
+    return _join_non_empty(header, body_or_marker)
 
 
 # ---------------------------------------------------- helpers

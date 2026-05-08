@@ -102,24 +102,29 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 8. Telegram push formatter
 
-- [ ] 8a. `telegram-bot/src/fitt_telegram_bot/events_push.py`
-       gets a branch for `tool_executed`. Title:
-       `▶ ran project_shell: <command-truncated-30>`. Body:
-       stdout+stderr per the cap; "(no output)" marker
-       when empty.
-- [ ] 8b. Extend `telegram-bot/tests/test_events_push.py`
-       with `tool_executed` cases (success, timeout, empty
-       output).
+- [x] 8a. `telegram-bot/src/fitt_telegram_bot/events_push.py`
+       gets a branch for `tool_executed`. Glyphs: `▶` for
+       success, `❌` for non-zero exit, `⏱️` for timeout.
+       Body preserves stdout + stderr; "(no output)" marker
+       when both are empty.
+- [x] 8b. Extend `telegram-bot/tests/test_events_push.py`
+       with `tool_executed` cases (success, failure, timeout,
+       empty output, missing title).
 
 ## 9. E2E lifecycle test
 
-- [ ] 9a. `gateway/tests/e2e/test_project_shell_lifecycle.py`
+- [x] 9a. `gateway/tests/e2e/test_project_shell_lifecycle.py`
        — stubbed LLM emits `project_shell` call; approver
        approves; assert `tool_executed` event lands with
-       expected metadata.
-- [ ] 9b. Rejected-path variant: approver rejects; assert
-       NO `tool_executed` event; assert the chat turn
-       completes with the rejection visible to the model.
+       expected metadata. Uses a `telegram_approver` fixture
+       tagged for telegram client so the bucket resolution
+       reaches `ask` (Open WebUI default is `block`).
+- [x] 9b. Rejected-path variant: approver rejects; assert
+       NO `tool_executed` event; chat turn completes with
+       the rejection visible to the model.
+- [x] 9c. Deny-list variant: `rm -rf $FITT_HOME` is blocked
+       by the middleware before the approver sees anything.
+       No backend invocation, no `tool_executed` event.
 
 ## 10. `fitt audit tail -f`
 
@@ -141,10 +146,10 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 11. Roadmap pointer update
 
-- [ ] 11a. Flip the `*Full spec: ... (to be written when
+- [x] 11a. Flip the `*Full spec: ... (to be written when
        this phase starts).*` line at the bottom of the
        Phase 4.7 section in `FITT_ROADMAP.md` to say
-       "Spec promoted YYYY-MM-DD; implementation in
+       "Spec promoted 2026-05-08; implementation in
        `.kiro/specs/phase4.7-project-shell/`."
 - [ ] 11b. Mark Phase 4.7 as IN PROGRESS / DONE as slices
        land (matches the Phase 1/4.5 convention).

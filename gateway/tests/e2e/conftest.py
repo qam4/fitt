@@ -142,10 +142,20 @@ class E2EApprover:
 
     # ------------------------------- low-level
 
+    def _headers(self) -> dict[str, str]:
+        """Ensure approver HTTP calls are tagged with its
+        ``client_tag`` so the decide endpoint's client-match
+        check accepts them. Without this an approver polling
+        ``?client=telegram`` would still POST decisions
+        tagged ``webui`` (untagged token default), and the
+        gateway's 403 check on mismatched clients would fire."""
+        return {"X-FITT-Client": self._client_tag}
+
     async def list_pending(self) -> list[dict[str, Any]]:
         r = await self._client.get(
             "/v1/approvals/pending",
             params={"client": self._client_tag},
+            headers=self._headers(),
         )
         r.raise_for_status()
         data = r.json()
@@ -155,6 +165,7 @@ class E2EApprover:
         r = await self._client.post(
             f"/v1/approvals/{approval_id}/decide",
             json={"decision": decision},
+            headers=self._headers(),
         )
         r.raise_for_status()
 

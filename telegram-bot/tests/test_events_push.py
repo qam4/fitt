@@ -154,3 +154,117 @@ def test_empty_body_and_empty_title_produce_empty_string_for_unknown_kind() -> N
     # kind name itself so the operator sees *something*.
     out = format_event(_evt("late_unknown"))
     assert out == "late_unknown"
+
+
+
+# --------------------------------------------------------------- tool_executed (Phase 4.7)
+
+
+def test_tool_executed_success_uses_play_glyph() -> None:
+    """A successful ``project_shell`` run renders with the
+    ``▶`` glyph so an operator scanning Telegram sees the
+    outcome immediately."""
+    out = format_event(
+        _evt(
+            "tool_executed",
+            title="ran project_shell on hub: git status",
+            body="exit=0\n\nOn branch main\nnothing to commit",
+            meta={
+                "tool": "project_shell",
+                "project": "hub",
+                "command": "git status",
+                "exit_code": 0,
+                "duration_ms": 42,
+                "timed_out": False,
+            },
+        )
+    )
+    assert out.startswith("▶ ran project_shell on hub: git status")
+    assert "On branch main" in out
+    assert "nothing to commit" in out
+
+
+def test_tool_executed_failure_uses_cross_glyph() -> None:
+    """Non-zero exit → ❌ glyph. Title already carries the
+    ``FAILED`` prefix from the gateway formatter; we add the
+    emoji so the message stands out in the Telegram feed."""
+    out = format_event(
+        _evt(
+            "tool_executed",
+            title="FAILED (exit=1): project_shell on hub: npm test",
+            body="exit=1\n\nnpm ERR! test failed",
+            meta={
+                "tool": "project_shell",
+                "project": "hub",
+                "command": "npm test",
+                "exit_code": 1,
+                "duration_ms": 2500,
+                "timed_out": False,
+            },
+        )
+    )
+    assert out.startswith("❌ FAILED")
+    assert "npm ERR" in out
+
+
+def test_tool_executed_timeout_uses_stopwatch_glyph() -> None:
+    """Timeout renders with the ``⏱️`` glyph so the user knows
+    the command was killed by us rather than crashing on its
+    own."""
+    out = format_event(
+        _evt(
+            "tool_executed",
+            title="TIMED OUT: project_shell on hub: sleep 999",
+            body="(no output)",
+            meta={
+                "tool": "project_shell",
+                "project": "hub",
+                "command": "sleep 999",
+                "exit_code": -1,
+                "duration_ms": 10_000,
+                "timed_out": True,
+            },
+        )
+    )
+    assert out.startswith("⏱️ TIMED OUT")
+
+
+def test_tool_executed_empty_output_renders_no_output_marker() -> None:
+    """A successful command with no stdout/stderr renders
+    ``(no output)`` rather than a header-only message — helps
+    the operator tell "the tool ran and said nothing" from
+    "we broke the formatter."""
+    out = format_event(
+        _evt(
+            "tool_executed",
+            title="ran project_shell on hub: true",
+            body="",
+            meta={
+                "tool": "project_shell",
+                "project": "hub",
+                "command": "true",
+                "exit_code": 0,
+                "duration_ms": 12,
+                "timed_out": False,
+            },
+        )
+    )
+    assert "▶" in out
+    assert "(no output)" in out
+
+
+def test_tool_executed_no_title_still_renders_something() -> None:
+    """Belt-and-braces: a malformed event with a missing title
+    still produces a formatter-stable message rather than an
+    empty string. The ``kind`` appears as fallback so the
+    operator has a thread to pull on."""
+    out = format_event(
+        _evt(
+            "tool_executed",
+            title="",
+            body="some output",
+            meta={"tool": "project_shell", "exit_code": 0},
+        )
+    )
+    assert out.startswith("▶ tool_executed")
+    assert "some output" in out

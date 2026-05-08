@@ -678,7 +678,7 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects
 - No sandbox integration. See non-goals.
 - Deny list lives in code (`tools/deny_list.py`), not config. Operators who need a pattern added open a PR; that's the friction we want for the list to stay trustworthy.
 
-*Full spec: `.kiro/specs/phase4.7-project-shell/` (to be written when this phase starts).*
+*Full spec: `.kiro/specs/phase4.7-project-shell/`. Spec promoted 2026-05-08; implementation in progress — tool, deny-list extensions, probe, per-client defaults, events, Telegram formatter, and e2e lifecycle test all landed; `fitt audit tail -f` (Task 10) and live validation (Task 12) still open.*
 
 ---
 
