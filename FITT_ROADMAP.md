@@ -762,6 +762,39 @@ The deferred list is deliberate: each of these earns its place later if we feel 
 
 ---
 
+## UX backlog (small issues, no urgency)
+
+Observations from live use that don't block a phase but shouldn't get
+forgotten either. Order is reverse-chronological (newest first). When
+one of these starts to actually hurt, promote it into the relevant
+phase's spec or handle it as a side-commit.
+
+- **Telegram: approval prompt floats between messages after decision.**
+  2026-05-08, Phase 4.7 validation. The inline-keyboard approval
+  message stays at its original chat position after the user decides
+  — the natural-language reply and the `tool_executed` push both land
+  below it, and the (now-decided) approval message sits between them.
+  Not broken (buttons correctly clear; the V-Approved text replaces
+  them), just a cosmetic "ordering reads weird on a phone" moment.
+  Fix would be to delete the approval message after decision rather
+  than edit it in place. Revisit if it becomes annoying in practice.
+- **Telegram: double-message for interactive project_shell calls.**
+  2026-05-08. Every approved `project_shell` invocation produces two
+  new Telegram messages: the model's natural-language reply AND the
+  `tool_executed` event. Redundant for the interactive case; useful
+  for `trust_session` / cron firings where there's no model reply.
+  Fix would be a config knob (`tool_executed.suppress_on_interactive`
+  or similar) that collapses the pair when the chat turn is the one
+  that triggered the tool call. Phase 4.7+ hardening, not blocking.
+- **Telegram: markdown renders literally on the phone.** Tracked in
+  Phase 7+ below as "Telegram message formatting." Unchanged.
+
+Keeping this in the roadmap rather than scattered issue trackers so
+a future scan ("what small things have we been living with?") finds
+them in one place.
+
+---
+
 ## Phase 7+ — Opportunistic upgrades
 
 Features we know we'll want eventually but shouldn't pre-build. Each one lands when daily friction justifies it.
