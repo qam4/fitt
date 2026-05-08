@@ -632,7 +632,7 @@ Writing this down as a phase — not a side-commit — so the rationale is prese
 
 **Prerequisites:** Phase 4.5 (the shared `_llm_stubs.py` library it already added).
 
-*Full spec: `.kiro/specs/phase4.6-e2e-harness/` (to be written when this phase starts).*
+*Full spec: `.kiro/specs/phase4.6-e2e-harness/`. Harness implementation landed 2026-05-08 — `tests/e2e/` holds the five lifecycle tests (U1.1–U1.5); retrospective scheduled for Phase 4.7 kickoff.*
 
 ---
 
