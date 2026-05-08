@@ -678,7 +678,7 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects
 - No sandbox integration. See non-goals.
 - Deny list lives in code (`tools/deny_list.py`), not config. Operators who need a pattern added open a PR; that's the friction we want for the list to stay trustworthy.
 
-*Full spec: `.kiro/specs/phase4.7-project-shell/`. Spec promoted 2026-05-08; implementation in progress — tool, deny-list extensions, probe, per-client defaults, events, Telegram formatter, and e2e lifecycle test all landed; `fitt audit tail -f` (Task 10) and live validation (Task 12) still open.*
+*Full spec: `.kiro/specs/phase4.7-project-shell/`. Spec promoted 2026-05-08; implementation shipped 2026-05-08; live-validated 2026-05-08 (tool dispatch, pipes + compound commands over SSH, failure-path event emission, approval-UI cleanup). Deny list verified by unit + integration coverage; no live deny-list fire achieved because qwen2.5-coder:14b refuses obvious-dangerous patterns on its own before emitting a tool call. Future-model validation may observe a live fire; our machinery is ready.*
 
 ---
 

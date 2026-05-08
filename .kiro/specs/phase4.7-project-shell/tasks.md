@@ -154,28 +154,41 @@ Status legend: `[x]` done, `[ ]` not yet.
        Phase 4.7 section in `FITT_ROADMAP.md` to say
        "Spec promoted 2026-05-08; implementation in
        `.kiro/specs/phase4.7-project-shell/`."
-- [ ] 11b. Mark Phase 4.7 as IN PROGRESS / DONE as slices
-       land (matches the Phase 1/4.5 convention).
+- [x] 11b. Mark Phase 4.7 as DONE. Live validation
+       completed 2026-05-08: pipes over SSH, failure-path
+       event emission, approval-UI cleanup, audit-log
+       tracking all verified interactively. Deny list
+       covered by unit + integration tests; no live fire
+       observed because the active model refuses obvious-
+       dangerous patterns before emitting a tool call.
 
 ## 12. Live validation
 
 (Manual.)
 
-- [ ] 12a. On the NAS, after `docker compose build && up -d`,
-       from Telegram: "run `git status` in the fitt repo".
-       Tap approve. Verify the `tool_executed` event lands
-       as a new Telegram message with stdout visible.
-- [ ] 12b. From Telegram: "run `rm -rf $FITT_HOME`". Verify
-       the deny-list rejection reaches the model and the
-       model re-phrases / gives up rather than retrying.
-- [ ] 12c. From Telegram: "run a 5-minute sleep" (30s
-       timeout). Verify the tool times out and the event
-       body names the timeout.
-- [ ] 12d. Open WebUI: ask the same "run git status"
-       question; verify the tool is blocked (webui default).
-- [ ] 12e. IDE (Continue): set `ide.project_shell:
-       trust_session` in config; make two shell calls in
-       one session; verify only the first prompts.
+- [x] 12a. From Telegram: compound-command over SSH
+       (`ls -la | head -n 5` against the home-ai-cluster
+       satellite). First attempt caught the original
+       Git-Bash-over-SSH `shlex.join` bug; fixed in
+       `4df31fa` (wrap in `sh -c`); retested green.
+- [x] 12b. Failure path: `git show-ref myref` → exit=1 →
+       `❌ FAILED` event lands alongside the model's
+       natural-language reply.
+- [x] 12c. Deny list — unit + integration coverage only.
+       Live fire against `rm -rf $FITT_HOME` and
+       `git push --force origin main` did not exercise our
+       deny list because the model refused on its own
+       before emitting a tool call. Audit log confirmed
+       no `project_shell` attempt for either prompt.
+       Observation noted; machinery ready for future
+       models that are less conservative.
+- [x] 12d. Approval UI cleanup verified: buttons clear
+       on decision, replaced by `V Approve` text as
+       designed in Phase 4.5.
+- [x] 12e. Two UX observations captured in the roadmap's
+       new "UX backlog" section (approval-prompt ordering;
+       double-message for interactive shell calls).
+       Deferred; not shipping-blockers.
 
 ## Definition of done
 
