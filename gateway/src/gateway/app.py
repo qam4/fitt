@@ -89,6 +89,7 @@ def create_app(config: Config) -> FastAPI:
     from .projects import ProjectRegistry, default_projects_path
     from .ssh_identity import default_key_path, ensure_key
     from .tools import (
+        ApprovalBucket,
         ExecutionBackend,
         SendMessageRateLimiter,
         ToolPolicy,
@@ -97,6 +98,7 @@ def create_app(config: Config) -> FastAPI:
         build_fileops_tools,
         build_git_tools,
         build_inline_tools,
+        build_project_shell_tool,
         build_send_message_tool,
         build_shell_tools,
     )
@@ -185,6 +187,23 @@ def create_app(config: Config) -> FastAPI:
         tool_registry.register(t)
     for t in build_cron_tools():
         tool_registry.register(t)
+
+    # Phase 4.7: project_shell. Registered with baked-in per-
+    # client defaults so Open WebUI (least-trust) gets ``block``
+    # by default without operator config. Other clients ``ask``;
+    # operators can tighten (to ``block``) or loosen (to
+    # ``trust_session`` for the IDE flow) via ``tools.per_client``
+    # in config.yaml — baked defaults sit BELOW operator config
+    # in the resolve chain.
+    tool_registry.register(
+        build_project_shell_tool(),
+        per_client_defaults={
+            "cli": ApprovalBucket.ASK,
+            "telegram": ApprovalBucket.ASK,
+            "ide": ApprovalBucket.ASK,
+            "webui": ApprovalBucket.BLOCK,
+        },
+    )
 
     # Phase 4.5 Task 6: send_message. The rate limiter lives for
     # the gateway's lifetime (in-memory; a restart resets
@@ -321,6 +340,7 @@ def create_app(config: Config) -> FastAPI:
         execution_backend=app.state.execution_backend,
         capability_gaps=app.state.capability_gaps,
         cron_service=app.state.cron,
+        local_shell=app.state.local_shell,
     )
     app.state.cron_runner = cron_runner
     app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=cron_runner.fire)

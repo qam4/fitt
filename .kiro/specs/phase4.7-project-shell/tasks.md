@@ -42,58 +42,63 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 4. `project_shell` tool
 
-- [ ] 4a. `gateway/src/gateway/tools/project_shell.py` with
-       `build_project_shell_tool(backend, events,
-       local_shell_probe)`. Returns a `Tool` with
+- [x] 4a. `gateway/src/gateway/tools/project_shell.py` with
+       `build_project_shell_tool()`. Returns a `Tool` with
        `shell_command_for` wired to the `command` arg so the
        existing deny-list hook in `approval.py` fires before
        dispatch.
-- [ ] 4b. Schema validation, project lookup, argv build
-       (`bash -lc` locally / SSH unchanged), timeout wiring.
-- [ ] 4c. Tool emits the `tool_executed` event after
+- [x] 4b. Schema validation, project lookup, argv build
+       (`bash -lc` locally / SSH unchanged), timeout wiring
+       (default 120s, max 1800s).
+- [x] 4c. Tool emits the `tool_executed` event after
        dispatch; fail paths emit the same kind with
        `timed_out` / exit-code metadata.
-- [ ] 4d. Unit tests (`tests/test_project_shell.py`):
+- [x] 4d. Unit tests (`tests/test_tools_project_shell.py`):
        schema, local argv, SSH argv, event on success,
        event on timeout, no-shell-available error path.
 
 ## 5. Approval prompt: widen cap for `project_shell`
 
-- [ ] 5a. `approval._summarise_args` special-cases
-       `tool.name == "project_shell"`: show `command` up to
-       1000 chars, truncate with `(truncated; <n> chars)` if
-       longer, flag the truncation so the user sees it.
-- [ ] 5b. Other tools continue to use the existing 200-char
+- [x] 5a. `approval._summarise_args` special-cases
+       `tool_name == "project_shell"`: show `command` up to
+       1000 chars, truncate with `(truncated; N extra chars)`
+       if longer, flag the truncation so the user sees it.
+- [x] 5b. Other tools continue to use the existing 200-char
        cap.
-- [ ] 5c. Tests in `tests/test_approval.py`: short command
+- [x] 5c. Tests in `tests/test_approval.py`: short command
        (verbatim), medium command (~500 chars, verbatim),
        long command (1500 chars, truncated + flagged),
-       other tools unaffected.
+       other tools unaffected, `timeout_secs` visible
+       alongside project+command.
 
 ## 6. `tool_executed` event kind
 
-- [ ] 6a. Extend `gateway.events.EventEntry.kind` taxonomy
-       docstring to mention `tool_executed`.
-- [ ] 6b. Gateway emits the event from
+- [x] 6a. `EventEntry.kind` taxonomy docstring updated to
+       include `tool_executed`.
+- [x] 6b. Gateway emits the event from
        `project_shell._impl` with meta.tool / project /
-       command / exit_code / duration_ms / timed_out.
-- [ ] 6c. Body = stdout + stderr, capped via
-       `events.telegram_body_cap`.
+       command / exit_code / duration_ms / timed_out. Title
+       carries `ran`/`FAILED`/`TIMED OUT` prefix so
+       operators scanning `fitt inbox` see the outcome at a
+       glance.
+- [x] 6c. Body = stdout + stderr separated by `--- stderr ---`;
+       "(no output)" marker when both are empty.
 
 ## 7. Per-client policy defaults
 
-- [ ] 7a. `ToolRegistry.register` grows an optional
-       `per_client_defaults: dict[str, ApprovalBucket]` kwarg.
-- [ ] 7b. `resolve_bucket` consults the per-tool default
-       table as layer 3 of the existing chain
-       (per-call → per-tool-policy → per-tool-default →
-       tool.default_bucket). No change to operator-config
-       precedence.
-- [ ] 7c. `project_shell` registers with
+- [x] 7a. `ToolRegistry.register` grows an optional
+       `per_client_defaults: dict[str, ApprovalBucket]` kwarg
+       and stores it in `_per_tool_baked_in`.
+- [x] 7b. `resolve_bucket` consults the per-tool baked-in
+       defaults as layer 4 of the existing chain (per-call
+       → per-tool-policy → per-tool-wildcard →
+       **per-tool-baked-in** → tool.default → client default
+       → global). Operator config still wins.
+- [x] 7c. `project_shell` registers with
        `{cli: ask, telegram: ask, ide: ask, webui: block}`.
-- [ ] 7d. Tests: operator config overrides, per-client
-       defaults apply when no config, `block` for webui is
-       the default.
+- [x] 7d. Tests: operator config overrides, baked defaults
+       apply when no config, missing-client falls through,
+       `unregister` clears stale defaults.
 
 ## 8. Telegram push formatter
 

@@ -66,6 +66,12 @@ class EventEntry:
     - ``system_pruned`` — the pruner itself emits one of these
       after each run so ``fitt inbox`` shows there wasn't a
       gap.
+    - ``tool_executed`` — Phase 4.7; emitted by
+      ``project_shell`` after dispatch (regardless of exit
+      code). Meta carries tool / project / command /
+      exit_code / duration_ms / timed_out so operators can
+      see the sequence of commands running in a
+      trust_session flow.
 
     Reserved for Phase 6: ``task_started`` / ``task_completed``
     / ``task_failed``.

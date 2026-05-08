@@ -289,7 +289,7 @@ class ApprovalMiddleware:
         pending = PendingApproval(
             approval_id=approval_id,
             tool_name=tool.name,
-            args_summary=_summarise_args(args),
+            args_summary=_summarise_args(args, tool_name=tool.name),
             client=context.client,
             session_key=context.session_key,
             created_at=monotonic(),
@@ -377,7 +377,7 @@ class ApprovalMiddleware:
         _log.debug("approval.clear_session.noop", extra={"session": session_key})
 
 
-def _summarise_args(args: dict[str, Any]) -> str:
+def _summarise_args(args: dict[str, Any], *, tool_name: str | None = None) -> str:
     """Render a tool-call's args for display on a phone screen.
 
     Truncates long values, avoids embedding secrets by deferring
@@ -385,9 +385,18 @@ def _summarise_args(args: dict[str, Any]) -> str:
     without us trying to guess what's sensitive). Cap total
     length at ~200 chars — enough for 3-4 small fields, short
     enough for a Telegram message.
+
+    Phase 4.7: ``project_shell`` is special-cased. Its whole
+    value is the command string and the user needs the full
+    thing to decide; we widen the cap to 1000 chars for this
+    tool and truncate with an explicit flag past that so a
+    ~10KB shell command (a prompt-injection smell) doesn't
+    pass quietly. Other tools keep the 200-char cap.
     """
     if not args:
         return "(no args)"
+    if tool_name == "project_shell":
+        return _summarise_project_shell_args(args)
     parts: list[str] = []
     for k, v in args.items():
         rendered = repr(v)
@@ -398,3 +407,39 @@ def _summarise_args(args: dict[str, Any]) -> str:
     if len(summary) > 200:
         summary = summary[:197] + "..."
     return summary
+
+
+_PROJECT_SHELL_CMD_CAP = 1000
+"""Phase 4.7: hard cap on command-string display in the approval
+prompt. Widened from the generic 200-char args cap because the
+command IS what the user is approving. A command longer than
+this is flagged as truncated — a ~10KB shell command is
+prompt-injection-smelly and shouldn't pass silently."""
+
+
+def _summarise_project_shell_args(args: dict[str, Any]) -> str:
+    """Custom summariser for ``project_shell``.
+
+    Shape: ``project=<name>, command=<up to 1000 chars>``. When
+    the command exceeds the cap we append a flag so the user
+    sees ``(truncated; N extra chars)`` rather than a silent
+    cut-off — catching a suspicious payload at review time."""
+    parts: list[str] = []
+    project = args.get("project")
+    if project is not None:
+        parts.append(f"project={project!r}")
+    timeout = args.get("timeout_secs")
+    if timeout is not None:
+        parts.append(f"timeout_secs={timeout!r}")
+    command = args.get("command", "")
+    if not isinstance(command, str):
+        parts.append(f"command={command!r}")
+        return ", ".join(parts)
+    if len(command) <= _PROJECT_SHELL_CMD_CAP:
+        parts.append(f"command={command!r}")
+    else:
+        overflow = len(command) - _PROJECT_SHELL_CMD_CAP
+        parts.append(
+            f"command={command[:_PROJECT_SHELL_CMD_CAP]!r} (truncated; {overflow} extra chars)"
+        )
+    return ", ".join(parts)

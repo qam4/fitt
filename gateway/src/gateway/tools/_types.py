@@ -231,6 +231,14 @@ class ToolContext:
     ``None`` when there's no event log wired (tests); tools that
     need it fail gracefully."""
 
+    local_shell: Any = None
+    """The :class:`~gateway.tools.local_shell.ShellInterpreter`
+    resolved at gateway boot. ``project_shell`` uses it to build
+    the ``bash -lc <command>`` argv for local (non-SSH)
+    projects. ``None`` in tests that don't exercise
+    ``project_shell`` — the tool fails with a readable error
+    when it's missing."""
+
     # Future additions (Task 13+):
     #   audit:   AuditLog           -- write one entry per call
     #   gaps:    CapabilityGapLog   -- record "I need a tool to X"

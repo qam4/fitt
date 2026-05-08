@@ -66,6 +66,7 @@ class CronRunner:
         execution_backend: Any = None,
         capability_gaps: Any = None,
         cron_service: Any = None,
+        local_shell: Any = None,
     ) -> None:
         self._config = config
         self._tool_registry = tool_registry
@@ -77,6 +78,7 @@ class CronRunner:
         self._execution_backend = execution_backend
         self._capability_gaps = capability_gaps
         self._cron_service = cron_service
+        self._local_shell = local_shell
 
     # -------------------------------------------------- public API
 
@@ -257,6 +259,7 @@ class CronRunner:
             audit=self._audit,
             cron=self._cron_service,
             events=self._events,
+            local_shell=self._local_shell,
         )
 
         alias_router = AliasRouter(self._config)

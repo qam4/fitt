@@ -277,6 +277,68 @@ def test_summarise_args_truncates_overall() -> None:
     assert len(s) <= 200
 
 
+# --------------------------------------------------------------- project_shell widening
+
+
+def test_summarise_args_project_shell_short_command_verbatim() -> None:
+    """Phase 4.7: project_shell's command reaches the user
+    verbatim up to the widened cap."""
+    s = _summarise_args(
+        {"project": "hub", "command": "git status"},
+        tool_name="project_shell",
+    )
+    assert "project='hub'" in s
+    assert "command='git status'" in s
+    assert "truncated" not in s.lower()
+
+
+def test_summarise_args_project_shell_medium_command_verbatim() -> None:
+    """A ~500-char command still fits under the 1000-char cap."""
+    medium = "echo " + "x" * 500
+    s = _summarise_args(
+        {"project": "hub", "command": medium},
+        tool_name="project_shell",
+    )
+    # The repr-quoted command appears without truncation flag.
+    assert medium in s
+    assert "truncated" not in s.lower()
+
+
+def test_summarise_args_project_shell_long_command_flagged() -> None:
+    """A 1500-char command → truncated at 1000 with an explicit
+    flag. A user seeing this should pause (a ~10KB shell
+    command is a prompt-injection smell)."""
+    long_cmd = "x" * 1500
+    s = _summarise_args(
+        {"project": "hub", "command": long_cmd},
+        tool_name="project_shell",
+    )
+    assert "truncated; 500 extra chars" in s
+    # The first 1000 chars are still present (repr-quoted) so
+    # the user sees *what* was cut, not just that something was.
+    assert "x" * 100 in s  # conservative smoke check
+
+
+def test_summarise_args_other_tools_unaffected_by_project_shell_cap() -> None:
+    """A non-project_shell tool with a long value still uses
+    the generic 200-char cap — widening is opt-in per-tool."""
+    s = _summarise_args(
+        {"content": "x" * 5000},
+        tool_name="write_file",
+    )
+    assert len(s) <= 200
+
+
+def test_summarise_args_project_shell_includes_timeout() -> None:
+    """Optional fields like ``timeout_secs`` show up alongside
+    project + command so the user sees the full calling shape."""
+    s = _summarise_args(
+        {"project": "hub", "command": "ls", "timeout_secs": 30},
+        tool_name="project_shell",
+    )
+    assert "timeout_secs=30" in s
+
+
 # --------------------------------------------------------------- client per-token
 
 

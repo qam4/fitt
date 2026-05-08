@@ -349,3 +349,79 @@ def test_resolve_client_default_when_tool_has_none() -> None:
         # that when tool default is present, it's consulted.
         ApprovalBucket.ASK
     )
+
+
+# --------------------------------------------------------------- per-tool per-client baked-in defaults
+
+
+def test_register_per_client_defaults_applied() -> None:
+    """Phase 4.7: tool author bakes in per-client defaults via
+    ``register(per_client_defaults=...)``. The map is consulted
+    between the wildcard layer and the tool's own default."""
+    reg = ToolRegistry()
+    reg.register(
+        _mk("project_shell", ApprovalBucket.ASK),
+        per_client_defaults={
+            "cli": ApprovalBucket.ASK,
+            "telegram": ApprovalBucket.ASK,
+            "ide": ApprovalBucket.ASK,
+            "webui": ApprovalBucket.BLOCK,
+        },
+    )
+    tool = reg.lookup("project_shell")
+    # Open WebUI gets block — the whole point of baked-in
+    # defaults is to ship safe-by-default for least-trust.
+    assert reg.resolve_bucket(tool, "webui", "main") == ApprovalBucket.BLOCK
+    # Other clients get ask (matches the tool's own default, but
+    # the path is layer 4 → layer 5; either way, ask).
+    assert reg.resolve_bucket(tool, "telegram", "main") == ApprovalBucket.ASK
+    assert reg.resolve_bucket(tool, "ide", "main") == ApprovalBucket.ASK
+
+
+def test_operator_config_overrides_per_client_defaults() -> None:
+    """Baked-in defaults sit BELOW operator config in the
+    resolve chain. IDE operator who wants ``trust_session``
+    for project_shell still gets their way."""
+    policy = ToolPolicy.from_config({"per_client": {"ide": {"project_shell": "trust_session"}}})
+    reg = ToolRegistry(policy)
+    reg.register(
+        _mk("project_shell", ApprovalBucket.ASK),
+        per_client_defaults={
+            "ide": ApprovalBucket.ASK,
+            "webui": ApprovalBucket.BLOCK,
+        },
+    )
+    tool = reg.lookup("project_shell")
+    # Operator config wins over baked-in.
+    assert reg.resolve_bucket(tool, "ide", "main") == ApprovalBucket.TRUST_SESSION
+    # Where no operator config is set, baked-in default kicks in.
+    assert reg.resolve_bucket(tool, "webui", "main") == ApprovalBucket.BLOCK
+
+
+def test_per_client_defaults_cleared_on_unregister() -> None:
+    """Unregistering a tool drops its baked-in defaults so a
+    same-named replacement (MCP reload case) doesn't inherit
+    stale settings."""
+    reg = ToolRegistry()
+    reg.register(
+        _mk("flakey", ApprovalBucket.ASK),
+        per_client_defaults={"webui": ApprovalBucket.BLOCK},
+    )
+    reg.unregister("flakey")
+    # Re-register without per_client_defaults; webui now follows
+    # the tool's own default (ASK) rather than the stale BLOCK.
+    reg.register(_mk("flakey", ApprovalBucket.ASK))
+    assert reg.resolve_bucket(reg.lookup("flakey"), "webui", "main") == (ApprovalBucket.ASK)
+
+
+def test_per_client_defaults_missing_client_falls_through() -> None:
+    """A tool with baked defaults for some clients but not all
+    still falls through to layer 5 (tool default) for unlisted
+    clients."""
+    reg = ToolRegistry()
+    reg.register(
+        _mk("project_shell", ApprovalBucket.ASK),
+        per_client_defaults={"webui": ApprovalBucket.BLOCK},
+    )
+    # Client 'telegram' isn't in the baked map → tool default wins.
+    assert reg.resolve_bucket(reg.lookup("project_shell"), "telegram", "main") == ApprovalBucket.ASK

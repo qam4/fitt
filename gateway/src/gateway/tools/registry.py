@@ -270,6 +270,15 @@ class ToolRegistry:
         self._policy = policy or ToolPolicy()
         # session_key -> set of tool names the user has trust-session-approved
         self._session_trust: dict[str, set[str]] = {}
+        # tool_name -> {client -> ApprovalBucket} baked in at
+        # registration time by the tool author. Applied after
+        # operator config (``tools.per_client``) and before the
+        # generic per-client fallback so operators can still
+        # override but the default reflects each tool's
+        # risk posture. Phase 4.7 introduces this for
+        # ``project_shell``: ask on CLI/Telegram/IDE,
+        # block on Open WebUI.
+        self._per_tool_baked_in: dict[str, dict[str, ApprovalBucket]] = {}
 
     @property
     def policy(self) -> ToolPolicy:
@@ -284,16 +293,32 @@ class ToolRegistry:
 
     # ---------------------------------------------- register / lookup
 
-    def register(self, tool: Tool) -> None:
+    def register(
+        self,
+        tool: Tool,
+        *,
+        per_client_defaults: dict[str, ApprovalBucket] | None = None,
+    ) -> None:
         """Add a tool to the registry.
 
         Raises ``DuplicateTool`` if the name is already taken. The
         caller is expected to ``unregister`` first when replacing
         (MCP reload flow).
+
+        ``per_client_defaults`` is an optional baked-in per-tool
+        per-client override map. It applies BEFORE the generic
+        ``_CLIENT_DEFAULTS`` fallback but AFTER operator config
+        (``tools.per_client`` in config.yaml) — so a tool author
+        can set sensible defaults without blocking the operator
+        from tightening or loosening them. Used by Phase 4.7's
+        ``project_shell`` to default Open WebUI to ``block``.
         """
         if tool.name in self._tools:
             raise DuplicateTool(tool.name)
         self._tools[tool.name] = tool
+        if per_client_defaults:
+            # Copy so the caller can't mutate what we've stored.
+            self._per_tool_baked_in[tool.name] = dict(per_client_defaults)
         _log.info("tool.registered", extra={"tool": tool.name, "kind": tool.kind})
 
     def unregister(self, name: str) -> None:
@@ -305,6 +330,7 @@ class ToolRegistry:
         """
         existed = self._tools.pop(name, None)
         if existed is not None:
+            self._per_tool_baked_in.pop(name, None)
             _log.info("tool.unregistered", extra={"tool": name})
             # Clear any trust_session grants for the removed tool so
             # a replacement can't inherit stale approval.
@@ -385,10 +411,12 @@ class ToolRegistry:
         2. Per-tool exact-name default (``per_tool[tool.name]``).
         3. Wildcard match against the tool name (first match
            wins; MCP tools key off this).
-        4. The tool's own ``default_bucket`` attribute (baked in
+        4. Baked-in per-tool per-client default registered by
+           the tool author (``register(per_client_defaults=...)``).
+        5. The tool's own ``default_bucket`` attribute (baked in
            at registration).
-        5. Client default from the hard-coded table.
-        6. Global fallback (``ASK``).
+        6. Client default from the hard-coded table.
+        7. Global fallback (``ASK``).
 
         ``session_key`` is accepted here for a stable signature
         because the approval middleware will later consult
@@ -411,13 +439,22 @@ class ToolRegistry:
             if fnmatch.fnmatchcase(tool.name, pattern):
                 return bucket
 
-        # 4. tool's own default
+        # 4. baked-in per-tool per-client defaults (registered
+        # by the tool author via ``register(per_client_defaults=...)``).
+        # Lets ``project_shell`` default to ``block`` on webui
+        # without operator config, while still letting the
+        # operator override via ``tools.per_client.webui.project_shell``.
+        baked = self._per_tool_baked_in.get(tool.name)
+        if baked and client in baked:
+            return baked[client]
+
+        # 5. tool's own default
         if tool.default_bucket is not None:
             return tool.default_bucket
 
-        # 5. client default
+        # 6. client default
         if client in _CLIENT_DEFAULTS:
             return _CLIENT_DEFAULTS[client]
 
-        # 6. global fallback
+        # 7. global fallback
         return _GLOBAL_FALLBACK
