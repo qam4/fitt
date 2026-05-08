@@ -1,286 +1,241 @@
 # Phase 5 — Lessons + Decaying History: Requirements
 
-## Background
+## Context
 
-Through Phase 4.5, FITT can hold tools, schedule work, and push
-notifications. It also has Phase 2 memory: identity files always
-injected, today's session history always injected.
+Phase 2 memory stores today's conversation as flat
+markdown. That works fine for short sessions but surfaces
+three problems as use widens:
 
-What's still missing:
+1. **No long-term memory.** A correction from last week is
+   gone. Every conversation re-teaches the model
+   preferences the user already voiced ("always use uv, not
+   pip", "the fitt project uses qwen-coder by default").
+2. **Tool-turn poisoning.** Phase 4 persists only the user
+   message and the assistant's natural-language reply. The
+   tool calls and their results are ephemeral. Observed
+   failure mode: SSH was briefly unreachable; the assistant
+   wrote "I can't reach SSH" as its final reply; that
+   sentence persisted as if it were a factual claim; later
+   turns read the stale prose and refused to call tools
+   even after SSH was fixed. The strict-xfail e2e test
+   `test_session_poisoning_lifecycle` documents this.
+3. **History grows without bound.** Yesterday's 50-turn
+   session is injected in full today, tomorrow, forever
+   (until the flat budget truncates). Older-but-relevant
+   turns displace newer-but-boring ones arbitrarily.
 
-- **Learned patterns don't stick.** When you correct the agent —
-  "use rg not grep," "this project's tests run with `just test`" —
-  the correction applies to the current turn and then evaporates.
-  Tomorrow, you'll correct the same thing again.
-- **History after today is invisible.** Yesterday's session log
-  is on disk but never loaded. "Did I mention this last week?"
-  can't be answered.
+Phase 5 addresses all three: a lessons store for learned
+corrections; structural tool-turn persistence so paraphrased
+refusals can't poison future context; decaying history
+injection so days-ago context shrinks over time; a nightly
+pruner that drops `YYYY-MM-DD.md` files past the retention
+window.
 
-Phase 5 addresses both with plain markdown primitives:
+## Scope
 
-- **Lessons** — an explicit corrections store with `learn_add` /
-  `learn_list` / `learn_remove` tools. Written by the agent when
-  you say "remember," edited by hand at any time, injected into
-  every system prompt.
-- **Decaying history** — when building context, older days get
-  compressed to markers. Today full, yesterday truncated, 3-30
-  days as one-line markers, 30+ days dropped from prompt (files
-  stay on disk).
-
-Both are deliberately non-embedding. No vectors, no SQLite, no
-embedding model. Just markdown files read at request time.
-
-## Why now
-
-Two use cases from earlier discussions depend on lessons working:
-
-1. **Monitoring a recurring thing.** "Monitor the RL training"
-   the first time requires you to explain the setup. With a
-   lesson extracted ("RL training status lives at path X, format
-   is Y, create a silent 60s cron"), the second time you can
-   just say "monitor training pid 456" and it works.
-2. **Repeat corrections.** "Use tabs not spaces in this project."
-   Without lessons, you say it every session. With lessons, you
-   say it once; `learn_add` captures it; every future session
-   sees it in the system prompt.
-
-The decaying history piece is related but smaller. Without it,
-every day's history grows into an unbounded prompt cost. With it,
-"did I talk about this last week?" becomes answerable without
-killing the context budget.
-
-## Goals
-
-1. **Lessons store** at `$FITT_HOME/lessons.md`. Plain markdown,
-   bullets or short paragraphs. Hand-editable.
-2. **`learn_add`, `learn_list`, `learn_remove` tools** for the
-   agent to use.
-3. **Injection** of lessons into every session's system prompt as
-   a `[Learned corrections]` block.
-4. **Cap at ~50 entries**; oldest-pruned when full. Documented,
-   not surprising.
-5. **Decaying history injection** replacing the Phase 2 "today
-   only" logic. Today full; yesterday truncated; older days as
-   markers; 30+ days dropped.
-6. **History pruning** deletes on-disk files older than
-   `memory.history_max_days` (default 90).
-7. **`fitt learn` CLI** for direct add / list / remove from the
-   terminal.
-
-## Non-goals
-
-- **Vector memory / embeddings.** Deferred. Markdown recall is
-  enough until it isn't.
-- **Preferences / projects consolidation** (LLM rewrites
-  identity files from recent sessions). Deferred. You edit
-  identity by hand.
-- **Episodic memory.** Deferred.
-- **Lesson categories as a hard schema.** Optional free-text
-  category field; no enum. Keep it simple.
-- **Confidence scores.** Deferred. Every lesson is user-explicit.
-- **Dedup by semantic similarity.** Simple substring dedup only.
-- **Automatic lesson extraction from conversation patterns.**
-  Deferred. Only the agent's explicit `learn_add` call writes
-  lessons.
+Everything lands under the existing `MemoryStore` — no
+parallel subsystem, no database, no embeddings. On-disk
+format stays plain markdown. The phase is primarily a
+format evolution + injection-policy change + one new
+identity file (`lessons.md`).
 
 ## User stories
 
-### U1 — Explicit learning
+### U1. Lessons persist across sessions
 
-> As a user, I want to say "always use `rg` instead of `grep` in
-> commands" and have FITT remember that across sessions forever.
+As a FITT user, I want to say "always use uv, never pip"
+and have the assistant remember that across restarts and
+across sessions, so I don't re-teach it daily.
 
-Acceptance:
-- Agent recognises the pattern ("always", "remember", "never")
-  and calls `learn_add(text="use rg instead of grep", category="tool")`.
-- `learn_add` is in the `auto` bucket (low-risk, user-explicit).
-- The entry appears in `$FITT_HOME/lessons.md`.
-- The next session sees it in the system prompt as a
-  `[Learned corrections]` bullet.
-- Works across the Telegram / IDE / CLI clients equally.
+**Acceptance:**
 
-### U2 — Recall across sessions
+- **1.1** `$FITT_HOME/lessons.md` exists on first run,
+  seeded from a template that explains what lessons are
+  and how they differ from `preferences.md`.
+- **1.2** Every system prompt includes a `[Learned
+  corrections]` block rendered from `lessons.md`. The
+  block is present even when the file is empty (so the
+  model knows the mechanism exists; nothing in the block
+  when there are no lessons).
+- **1.3** Three inline tools exist: `learn_add(text,
+  category?)`, `learn_list()`, `learn_remove(substring)`.
+  Default buckets: `learn_add` / `learn_remove` = `ask`;
+  `learn_list` = `auto`.
+- **1.4** `fitt learn add "..."`, `fitt learn list`,
+  `fitt learn remove <substring>` on the CLI.
+- **1.5** The file is hand-editable — operators can open
+  it in a text editor at any time; the next request picks
+  up the change (mtime-based reload, same pattern as
+  identity files today).
+- **1.6** Ceiling on the `[Learned corrections]` block:
+  50 entries by default (configurable via
+  `memory.max_lessons`). `learn_add` past the ceiling
+  drops the oldest. "Oldest" is the first bullet in the
+  file; the tool's append order is the effective age.
 
-> As a user, I teach FITT how to monitor RL training once. Next
-> week, I just say "monitor training pid 456" and it remembers
-> the pattern.
+### U2. Tool-turn poisoning stops
 
-Acceptance:
-- After turn 1 (walkthrough + `learn_add`), the lesson is in
-  the prompt: "to monitor an RL training, create a silent 60s
-  cron that reads status at path ... and send_message on
-  state-change."
-- In a new session, user says "monitor training pid 456." The
-  agent has the lesson available; it substitutes 456 into the
-  path and calls `cron_add` directly.
+As a FITT operator, I want a tool-using turn to persist in
+a way that later turns read the tool's outcome alongside
+the assistant's paraphrase, so a stale refusal can't
+misinform future context.
 
-### U3 — Edit by hand
+**Acceptance:**
 
-> As a user, I want to open `lessons.md` in a text editor and
-> rewrite a lesson because the agent recorded it awkwardly.
+- **2.1** Turns that touched tools persist with at least
+  four structured pieces on disk: user message, tool
+  calls (name + args summary), tool results (`ok` or a
+  short error), final assistant reply.
+- **2.2** The on-disk format stays markdown-first; a
+  tool-using turn introduces new header types the parser
+  understands (e.g. `## <ts> assistant tool_calls` and
+  `## <ts> tool <tool_name>`). Unknown headers still
+  degrade gracefully per the existing permissive parser.
+- **2.3** Loading a tool-using turn produces LLM-shaped
+  messages with `role: assistant` carrying `tool_calls`
+  and `role: tool` carrying the outcome, matching the
+  OpenAI / Anthropic tool-messaging contracts so the
+  model's own format isn't surprising.
+- **2.4** The strict-xfail e2e test
+  `test_session_poisoning_lifecycle` flips green. (That
+  test's whole purpose is to fail until this ships.)
+- **2.5** Tool results persisted on disk are SHORT. "ok"
+  for success; for errors, the first ~300 characters of
+  the error text. The full output is NOT persisted — it
+  may be large, may be stale tomorrow, and injecting it
+  into tomorrow's context would balloon the budget.
+- **2.6** Tool *args* persisted on disk are similarly
+  short — a few-field summary, not the full JSON. Same
+  reasoning as 2.5. A 10KB `content` arg on `write_file`
+  doesn't belong in tomorrow's prompt.
 
-Acceptance:
-- The file is plain markdown with a simple format (one lesson
-  per bullet; optional category tag).
-- Changes take effect on the next request (or within N seconds
-  via the watcher).
-- File corruption (e.g. missing bullets) is handled gracefully;
-  invalid lines logged and skipped.
+### U3. History decays
 
-### U4 — CLI management
+As a FITT user running daily, I want today's conversation
+injected in full but older days to shrink, so the model
+has continuity without stuffing the context window.
 
-> As a user, I want `fitt learn list` in a terminal to see
-> everything FITT has learned, and `fitt learn remove "grep"`
-> to forget by substring match.
+**Acceptance:**
 
-Acceptance:
-- `fitt learn list` prints lessons with index numbers.
-- `fitt learn add "..."` appends a new lesson.
-- `fitt learn remove <substring>` removes matching lessons
-  (with a prompt if more than one matches).
+- **3.1** Memory injection layers by age:
+  - Today: full turns, same as Phase 2.
+  - Yesterday: first turn + a count marker ("(N more turns
+    on 2026-05-07)").
+  - 3–30 days ago: one-line marker per day ("2026-04-15:
+    4 turns, tools used").
+  - 30+ days ago: dropped from context. Files stay on
+    disk.
+- **3.2** Total history budget capped at 6000 chars
+  (configurable via `memory.max_history_chars`). When the
+  per-age layers plus the current day exceed the budget,
+  oldest layers drop first.
+- **3.3** A turn summary line for a tool-using day
+  mentions "tools used" so the model knows that day
+  wasn't pure chat. Summary text is generated deterministically
+  from the turn structure — NOT via a secondary LLM call
+  (that would add latency and cost per request).
 
-### U5 — Natural history decay
+### U4. Old history files are pruned
 
-> As a user, when I ask "did I talk about X last week," the agent
-> has enough context to answer (from the decaying injection or
-> by reading the file directly).
+As a FITT operator, I want a nightly job that deletes
+history files older than the retention window so
+`$FITT_HOME/sessions/*/history/` doesn't grow forever.
 
-Acceptance:
-- System prompt includes today's history in full (as before).
-- Yesterday's history gets injected as "Yesterday: <first entry>
-  ... (N total entries)."
-- Days 3-30: injected as "YYYY-MM-DD: <entry count> entries."
-- Days 30+: not injected. But agent can call `read_file` on a
-  specific dated history file if asked.
-- Total history section capped at ~6000 chars (configurable).
+**Acceptance:**
 
-### U6 — History pruning
-
-> As a user, I don't want my session history directory to grow
-> forever.
-
-Acceptance:
-- A built-in cron (not user-visible) runs nightly and deletes
+- **4.1** A background task in the gateway runs daily
+  (same pattern as Phase 4.5's event pruner) and deletes
   `history/YYYY-MM-DD.md` files older than
-  `memory.history_max_days` (default 90).
-- Pruning emits a system event ("pruned N history files").
+  `memory.history_max_days` (default 90, configurable).
+- **4.2** The pruner emits a `system_pruned` event (same
+  kind as the event pruner; meta distinguishes via
+  `target: "history"`) so `fitt inbox` shows the prune
+  happened.
+- **4.3** Unit tests cover: files within window kept,
+  outside window removed, configurable retention.
 
-### U7 — Lessons cap
+### U5. Hand-editing stays honoured
 
-> As a user, I expect the `[Learned corrections]` block to stay
-> at a reasonable size even after months of use.
+As an operator, I want to edit `lessons.md` or today's
+history file directly and have the next request reflect
+my changes, so the "shareable by construction" principle
+holds.
 
-Acceptance:
-- `lessons.md` is capped at `memory.lessons_max_entries`
-  (default 50). When the agent calls `learn_add` and the file
-  is at the cap, the oldest entry is removed.
-- `fitt learn list` shows the total count and a warning when
-  approaching the cap.
-- User can raise the cap in `config.yaml` if they want more.
+**Acceptance:**
 
-## Scope boundaries
+- **5.1** No in-process cache for lessons. Each request
+  re-reads `lessons.md` from disk.
+- **5.2** Same for history (already true in Phase 2).
+- **5.3** If a history file is hand-edited into an
+  unparseable state, memory loading degrades to "what
+  could be parsed" and logs a warning, never raises.
 
-**In scope:**
+### U6. The lessons file is distinguishable from preferences
 
-- `$FITT_HOME/lessons.md` format, reader, writer.
-- `learn_add`, `learn_list`, `learn_remove` inline tools.
-- Injection of lessons into the system prompt.
-- Decaying history reader.
-- History pruning cron.
-- `fitt learn` CLI.
-- Config additions to `memory:` section.
+As a maintainer, I want `lessons.md` (auto-mutated by the
+`learn_*` tools) to be conceptually and UX-distinguishable
+from `user.md` / `soul.md` (operator-authored identity),
+so a model can reason about which source to trust and an
+operator knows what's safe to hand-edit.
 
-**Out of scope:**
+**Acceptance:**
 
-- Vector / semantic memory.
-- Preferences / projects consolidation.
-- Cross-session episodic memory.
-- Automatic lesson extraction from non-explicit corrections.
-- Lessons per project (all lessons are global for v0).
+- **6.1** `lessons.md` lives alongside identity files
+  (`$FITT_HOME/identity/lessons.md`), not in a separate
+  tree. Same directory, different purpose.
+- **6.2** The template for `lessons.md` explains in
+  prose that this file is auto-mutated by
+  `learn_add`/`learn_remove` and that manual edits are
+  OK but may be overwritten by the agent on later
+  corrections.
+- **6.3** The system-prompt block name is `[Learned
+  corrections]`, distinct from `[Capabilities]` and the
+  other identity sections, so the model reads it as a
+  separate category.
 
-## Risks and open questions
+## Definition of done
 
-### R1 — Agent writes noisy lessons
+- All six user stories' acceptance criteria green.
+- `uv run pytest -q` passes.
+- The strict-xfail session-poisoning test flips green
+  and gets un-marked (U2.4).
+- No regression in the `fitt session show` CLI output
+  for pre-Phase-5 history files (back-compat).
+- E2E harness grows one new lifecycle test
+  (`test_lessons_lifecycle.py`) covering the `learn_add`
+  → next-request-sees-the-lesson loop.
+- Roadmap pointer for Phase 5 flipped to DONE with
+  validation date.
 
-**Risk:** Agent interprets every request as a "remember this"
-and fills lessons.md with junk.
+## Non-goals (deferred to Phase 7+)
 
-**Decision:** system prompt explicitly guides the agent to only
-call `learn_add` when the user uses words like "remember," "always,"
-"never," "prefer," or after a direct correction ("no, use X
-instead"). Reviewed via eval harness on sample prompts. If noise
-becomes a problem, tighten the prompt.
+- **Vector embeddings / semantic retrieval.** Markdown
+  + decay is enough until it demonstrably isn't.
+- **Automatic lesson extraction.** The agent calls
+  `learn_add` when the user says "remember X." No
+  background LLM-driven "infer what lessons I should
+  record from recent messages" — too much surprise for
+  too little benefit in a single-user setup.
+- **Cross-session memory bleed.** Each session's history
+  stays its own. Identity + lessons are shared; session
+  history is not. A future phase could add
+  `fitt session merge` or similar; not now.
+- **Full-text search across history.** `grep -r
+  $FITT_HOME/sessions/` is the operator answer for v0.
+- **Rewriting `user.md` / `preferences.md` from recent
+  conversation.** Same reasoning as automatic lesson
+  extraction.
+- **Importing lessons between users.** Single-user
+  tooling.
 
-### R2 — Lessons conflict
+## Risk / size note
 
-**Risk:** "Always use rg" today; "Always use ripgrep" next week.
-Two similar entries in the file.
-
-**Decision:** substring dedup on write. If the new entry contains
-or is contained in an existing entry (case-insensitive), replace
-the older one with the newer. Not perfect but avoids obvious
-duplicates. The user can always hand-edit.
-
-### R3 — Large lessons eat context
-
-**Risk:** Agent writes a 2000-word "lesson" that's actually a
-transcript.
-
-**Decision:** per-entry length cap (default 500 chars). Truncate
-on write with an ellipsis. User can override via direct edit.
-
-### R4 — Decaying history still blows the budget
-
-**Risk:** Even with decay, long sessions produce enough "today"
-content to push total prompt past the model's context window.
-
-**Decision:** today's history also has a cap (default 6000 chars).
-When exceeded, oldest turns get dropped from the injection (file
-stays full on disk). The user sees a "(N older turns truncated)"
-marker.
-
-### R5 — File watch performance
-
-**Risk:** Watching `lessons.md` for hand-edits adds complexity;
-watchfiles or inotify may be flaky inside the Docker container.
-
-**Decision:** don't watch. Read lessons.md on every request. It's
-small (<10KB typically). Cheap. One less moving part.
-
-### R6 — Loss on corruption
-
-**Risk:** A malformed write (partial, interrupted) truncates
-lessons.md.
-
-**Decision:** atomic writes only (tmp + rename). Every write goes
-through a helper that writes to a tmp file and renames. Matches
-Phase 4's approach for `projects.yaml`.
-
-### R7 — What about lessons for a specific project?
-
-**Risk:** "Use tabs in retro-ai but spaces in home-ai-cluster."
-Global lessons can't express this.
-
-**Decision:** v0 accepts only global lessons. If a lesson needs
-to scope to a project, the user says so in the lesson text
-itself ("in retro-ai, use tabs"). Project-scoped lessons are a
-later addition if needed.
-
-## Success criteria
-
-Phase 5 is done when:
-
-1. The RL-monitoring scenario works with recall: first time
-   requires explanation; next time, "monitor training pid 456"
-   with no other context triggers the right cron.
-2. A correction ("use rg not grep") given once is respected in a
-   completely new session.
-3. `fitt learn list / add / remove` CLIs work.
-4. `lessons.md` stays under the cap over a week of use.
-5. `read_recent_history` injection fits in the documented
-   character budget across days.
-6. History pruning removes files older than 90 days on the
-   nightly cron.
-7. All existing tests pass.
-8. Author has lived with Phase 5 for 1 week without wanting to
-   revert.
+The roadmap's inline draft scoped Phase 5 as "~1
+weekend." Writing it up, the honest answer is closer to
+"1–2 weekends" — tool-turn persistence (U2) alone is a
+disk-format evolution that touches the parser, the
+injection path, and every test that seeds history.
+Better to name this in the spec than to surprise
+ourselves with schedule slip. The four thematic groups
+(lessons, tool-turn persistence, decay, pruning) are
+individually small but bundle to a meaningful chunk.

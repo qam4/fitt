@@ -2,141 +2,236 @@
 
 Status legend: `[x]` done, `[ ]` not yet.
 
-## 1. Lesson store
+## 1. Spec promotion
 
-- [ ] 1a. `gateway/lessons.py`: `Lesson` dataclass (id, text,
-       category, added_ts) and `LessonStore` class.
-- [ ] 1b. File format reader: parse markdown bullets,
-       continuation lines, `[category: xxx]` tags. Skip blank
-       lines and comments. Malformed bullets logged and skipped.
-- [ ] 1c. File format writer: round-trip preserves structure.
-       Atomic writes (tmp + rename).
-- [ ] 1d. `add(text, category)`:
-       - Truncate `text` at `MAX_LESSON_CHARS`.
-       - Substring dedup: new is substring of existing, or vice
-         versa, replace older with newer.
-       - Cap at `memory.lessons_max_entries`; drop oldest when
-         full.
-- [ ] 1e. `remove_matching(substring)` → count of removed.
-- [ ] 1f. `get_context(cap_chars)` → formatted `[Learned
-       corrections]` block, oldest-first truncated to cap.
-- [ ] 1g. Tests: `test_lessons.py`. Cover parsing, writing,
-       dedup, cap enforcement, cap truncation.
+- [ ] 1a. Promote Phase 5 from `FITT_ROADMAP.md` inline
+       draft to the three-file spec here:
+       `requirements.md`, `design.md`, `tasks.md`.
+- [ ] 1b. Commit the spec as its own change before any
+       code lands, matching the Phase 4.5 / 4.6 / 4.7
+       convention.
 
-## 2. Lessons inline tools
+## 2. LessonsStore (plumbing only, no wiring yet)
 
-- [ ] 2a. `gateway/tools/lessons.py`: `learn_add`, `learn_list`,
-       `learn_remove`.
-- [ ] 2b. Register with the Phase 4 tool registry.
-       - `learn_add`: bucket `auto`.
-       - `learn_list`: bucket `auto`.
-       - `learn_remove`: bucket `ask`.
-- [ ] 2c. Tests: `test_tools_lessons.py`.
+- [ ] 2a. `gateway/src/gateway/lessons.py`: `Lesson`
+       dataclass (`text`, `category: str | None`,
+       `added_ts: float`), `LessonsStore` with `read()`,
+       `add()`, `remove(substring)`, `render_block()`.
+- [ ] 2b. Persistence at `$FITT_HOME/identity/lessons.md`
+       with the template scaffolding + an "Active lessons"
+       section the store parses and mutates.
+       Write-through mutations (read → parse → mutate →
+       write) under a thread lock, matching CronService.
+- [ ] 2c. `max_entries` (default 50) with oldest-dropped
+       behaviour on overflow.
+- [ ] 2d. Unit tests: round-trip add/list/remove, max
+       rollover, mtime-based freshness, malformed file
+       degrades to empty + warning.
 
-## 3. Lessons injection in the system prompt
+## 3. Lessons injection into the system prompt
 
-- [ ] 3a. Update the context builder (wherever it lives — likely
-       in `gateway/chat.py` or a dedicated context module) to
-       read lessons and include the `[Learned corrections]`
-       block between `[Capabilities]` and `[Session history]`.
-- [ ] 3b. Respect `memory.lessons_block_cap`.
-- [ ] 3c. Tests: system prompt assembly with and without lessons.
+- [ ] 3a. `MemoryStore._load_lessons()` reads the
+       lessons file and returns the rendered block (or
+       empty string when no store / disabled).
+- [ ] 3b. `load_context()` composes
+       `identity + [Learned corrections] block +
+       [Past activity] summary` into `system_prefix`. Order
+       documented inline so a reader can see the three
+       layers stack.
+- [ ] 3c. Unit tests: empty lessons → empty block;
+       lessons present → block rendered in the right
+       spot; identity unchanged when lessons file is
+       missing.
 
-## 4. Decaying history reader
+## 4. `learn_*` inline tools
 
-- [ ] 4a. `gateway/memory_decay.py`: `HistoryContext` dataclass
-       + `build_history_context` function per design.
-- [ ] 4b. Implementations:
-       - Today full, truncated from oldest if > `today_cap_chars`.
-       - Yesterday: first entry + count.
-       - Markers: days 3 .. `markers_days` ago, one line each.
-- [ ] 4c. Respect all caps.
-- [ ] 4d. Tests: `test_memory_decay.py` with synthesised
-       fixtures spanning 35 days.
+- [ ] 4a. `gateway/src/gateway/tools/lessons.py`:
+       `learn_add`, `learn_list`, `learn_remove`.
+       Default buckets: `learn_list` = `auto`;
+       `learn_add` / `learn_remove` = `ask`.
+- [ ] 4b. Register in the tool registry via
+       `build_lessons_tools()` mirroring
+       `build_cron_tools`.
+- [ ] 4c. `ToolContext` grows a `lessons: Any = None`
+       field. Wire in `chat.py` and `cron_runner.py`
+       alongside the existing `cron` / `events`
+       wiring.
+- [ ] 4d. Unit tests per tool.
 
-## 5. Replace Phase 2 history injection
+## 5. `fitt learn` CLI
 
-- [ ] 5a. Find the current call site in the chat handler where
-       Phase 2 loaded "today only" and replace with the new
-       `build_history_context`.
-- [ ] 5b. Update the system prompt template to use the three
-       sections (today / yesterday / older markers).
-- [ ] 5c. Update tests that assert on system-prompt shape.
+- [ ] 5a. Group `@main.group("learn")` mirroring
+       `fitt cron`.
+- [ ] 5b. `fitt learn list`, `fitt learn add "text"
+       [--category X]`, `fitt learn remove <substring>`,
+       `fitt learn path`.
+- [ ] 5c. Tests (CLI round-trips to LessonsStore).
 
-## 6. History pruning
+## 6. Tool-turn persistence format
 
-- [ ] 6a. `gateway/memory_decay.py::prune_history(sessions_dir,
-       max_age_days)` function. Returns count of files deleted.
-- [ ] 6b. Register an internal cron at gateway startup:
-       - `id = "system_history_prune"`
-       - `schedule = "0 4 * * *"` (04:00 daily)
-       - `silent = true`
-       - `system = true` (hidden from `cron_list`)
-       - Callback: `prune_history` + emit a `system_pruned` event.
-- [ ] 6c. Tests: `test_history_prune.py`.
+- [ ] 6a. Extend `_HEADER_RE` in `memory.py` to match
+       `user` / `assistant` / `assistant tool_calls` /
+       `tool <name>` / `system`.
+- [ ] 6b. `PersistedToolCall` dataclass in `memory.py`
+       (`tool_name`, `args_summary`, `result_status`,
+       `result_summary`).
+- [ ] 6c. `append_turn` grows `tool_calls: list[
+       PersistedToolCall] | None = None` kwarg. When
+       present, write the three extra sub-blocks
+       (`assistant tool_calls`, `tool <name>` per call,
+       final `assistant`).
+- [ ] 6d. `_parse_turns` handles the new headers.
+       Unknown-header turns drop with a debug log, not
+       a raise (back-compat with future schemas).
+- [ ] 6e. Loading a tool-using turn produces an
+       OpenAI-shape message sequence:
+       `[user, assistant+tool_calls, tool, assistant]`.
+       Generate deterministic `tool_call_id` from args
+       hash so the tool-role entry pairs correctly.
+- [ ] 6f. Unit tests: round-trip a tool-using turn,
+       load pre-Phase-5 chat-only file identically
+       (back-compat), unknown-header degradation.
 
-## 7. `fitt learn` CLI
+## 7. Wire `PersistedToolCall` collection in call sites
 
-- [ ] 7a. `fitt learn list` — numbered print with count vs cap.
-- [ ] 7b. `fitt learn add <text> [--category <cat>]` — direct
-       write via `LessonStore.add`.
-- [ ] 7c. `fitt learn remove <substring>` — multi-match prompt
-       for selection.
-- [ ] 7d. Tests.
+- [ ] 7a. `agent_loop.py`: `AgentLoopResult` grows a
+       `tool_calls_for_memory: list[PersistedToolCall]`
+       field. The loop accumulates one per call.
+- [ ] 7b. `chat.py`: after `run_agent_loop`, pass
+       `result.tool_calls_for_memory` to
+       `memory.append_turn`.
+- [ ] 7c. `cron_runner.py`: same pattern.
+- [ ] 7d. `detach.py`: detached worker collects the
+       calls too; passes to `append_turn` at the end.
+- [ ] 7e. E2E lifecycle check: existing lifecycle tests
+       still pass (pinning that the change didn't
+       regress the HTTP/approval flow).
 
-## 8. Agent guidance in system prompt
+## 8. Decaying history injection
 
-- [ ] 8a. Add a short paragraph to the `[Capabilities]` block
-       explaining when to call `learn_add`. Keep under 200 chars
-       of new content.
-- [ ] 8b. Update eval harness: add sample prompts that should
-       produce a `learn_add` call and sample prompts that should
-       not. Measure.
+- [ ] 8a. `_load_decaying_history` replaces
+       `_load_and_truncate_history`. Assembles today's
+       full turns + yesterday's first + count + 3–30
+       day one-line summaries.
+- [ ] 8b. Summary text is deterministic:
+       `"YYYY-MM-DD: N user turns (with tools|chat
+       only)"`.
+- [ ] 8c. Layered budget: oldest layer drops first when
+       total exceeds `max_history_chars`.
+- [ ] 8d. Summaries render as a single `system`
+       message with `[Past activity]` header, prepended
+       to the turn list.
+- [ ] 8e. Unit tests per layer + budget-truncation
+       ordering.
 
-## 9. Config additions
+## 9. History pruner
 
-- [ ] 9a. Extend the `memory:` section of `config.example.yaml`
-       with the new fields (`lessons_max_entries`,
-       `lessons_block_cap`, `today_cap_chars`, `yesterday_cap_chars`,
-       `markers_cap_chars`, `markers_days`, `history_max_days`).
-- [ ] 9b. Pydantic model updates with sensible defaults.
+- [ ] 9a. `gateway/src/gateway/history_pruner.py`:
+       `HistoryPruner` mirroring the shape of
+       `EventPruner`.
+- [ ] 9b. `tick()` walks
+       `$FITT_HOME/sessions/*/history/*.md`, parses
+       each filename's date, drops files past
+       `memory.history_max_days`.
+- [ ] 9c. Emits `system_pruned` with
+       `meta.target="history"` and `meta.removed=<n>`.
+- [ ] 9d. Anchor file for restart-safe cadence (same
+       pattern as the event pruner).
+- [ ] 9e. Wire start/stop in `create_app`.
+- [ ] 9f. Unit tests.
 
-## 10. Docs
+## 10. E2E + regression
 
-- [ ] 10a. Gateway README: new section on lessons and decaying
-       history.
-- [ ] 10b. Quickstart: mention `fitt learn` and how to teach
-       patterns.
+- [ ] 10a. `tests/e2e/test_lessons_lifecycle.py`:
+       stubbed LLM emits `learn_add("always use
+       uv")`; approver approves; next request dispatches
+       with `[Learned corrections]` block containing the
+       lesson. Assert via `stubbed_llm.calls[-1]`.
+- [ ] 10b. Flip
+       `tests/e2e/test_session_poisoning_lifecycle.py`
+       off xfail. Its existing assertion ("stale 'SSH
+       unreachable' refusal NOT in next dispatch") must
+       now pass unassisted. If it fails, the tool-turn
+       persistence didn't land completely — fix
+       before declaring done.
 
-## 11. Live validation
+## 11. Config + docs
+
+- [ ] 11a. Add `memory.max_lessons`,
+       `memory.history_max_days`, and the optional
+       `memory.history_decay` block to `Config`.
+- [ ] 11b. Update `configs/config.example.yaml` with
+       the new fields commented.
+- [ ] 11c. Brief notes in `docs/` (or a new
+       `docs/memory.md`) explaining the four layers
+       and the decay shape.
+
+## 12. Roadmap pointer update
+
+- [ ] 12a. Flip the Phase 5 inline draft's "to be
+       written" footnote to "Spec promoted
+       YYYY-MM-DD; implementation in
+       `.kiro/specs/phase5-lessons/`."
+- [ ] 12b. Mark Phase 5 DONE in the roadmap once live
+       validation lands.
+
+## 13. Live validation
 
 (Manual.)
 
-- [ ] 11a. Tell FITT via Telegram "always use `rg` instead of
-       `grep` in shell commands." Verify `learn_add` was called,
-       `lessons.md` updated.
-- [ ] 11b. Start a new session. Ask the agent to "search the repo
-       for TODO." Verify it uses `rg`.
-- [ ] 11c. Walk FITT through the RL-monitoring pattern once.
-       Verify a lesson is captured.
-- [ ] 11d. Next day, say "monitor training pid 456." Verify it
-       creates a cron without re-explaining.
-- [ ] 11e. Edit `lessons.md` by hand. Verify changes show up in
-       the next request.
-- [ ] 11f. `fitt learn list` / `add` / `remove` work from the
-       CLI.
-- [ ] 11g. After 30+ days of use: verify history markers show up
-       for old days; today is full; 30+ day files still on disk
-       but not in prompt.
-- [ ] 11h. Pruning: leave a stale history file dated 100 days
-       ago (fake it with `touch -d`), wait for 04:00 cron (or
-       fire manually with `fitt cron run system_history_prune`),
-       verify the file is gone and a `system_pruned` event was
-       emitted.
+- [ ] 13a. From Telegram: "remember: always use uv."
+       Approve `learn_add`. Next turn: ask something
+       unrelated. Inspect: does the `[Learned
+       corrections]` block in the dispatched system
+       prompt actually contain the lesson?
+       (`docker compose logs gateway --tail 50 | grep
+       Learned` as an approximation — the full
+       dispatched prompt isn't logged, but the
+       request-builder logs the block length.)
+- [ ] 13b. `docker compose exec gateway fitt learn
+       list` shows the lesson.
+- [ ] 13c. From Telegram: "forget about uv." Approve
+       `learn_remove`. `fitt learn list` shows 0
+       entries.
+- [ ] 13d. From Telegram: run `project_shell` with a
+       failing command. Next turn: ask a follow-up.
+       Confirm the tool's exit-code outcome made it
+       into memory (inspect
+       `docker compose exec gateway cat
+       /root/.fitt/sessions/main/history/<today>.md`).
+       The `## <ts> tool project_shell` block should
+       show `exit=N: <brief>`, NOT the assistant's
+       natural-language paraphrase.
+- [ ] 13e. Wait 24 hours. Check that yesterday's turn
+       now renders as "first turn + count" in today's
+       dispatch. Hard to verify without logging the
+       full system prompt — this is where live
+       validation is mostly "it feels right or it
+       doesn't."
+- [ ] 13f. `fitt inbox --since 1d --kind system_pruned
+       --json` shows history prune ran overnight.
 
 ## Definition of done
 
-- All required `[ ]` above complete.
-- `uv run pytest -q` passes.
-- Live validation (11a-11h) all green.
-- Author has used Phase 5 for 1 week without wanting to revert.
+- All required tasks complete.
+- `uv run pytest -q` green across gateway + telegram-bot.
+- `tests/e2e/test_session_poisoning_lifecycle.py` passes
+  WITHOUT `@pytest.mark.xfail` — flipping strict-xfail
+  green means the Phase 5 fix actually landed.
+- Roadmap pointer flipped DONE.
+- Live validation (13a–13f) green.
+- Author has used `fitt learn` in real life at least
+  once and the recorded lesson was still present a week
+  later.
+
+## Size note
+
+Per the requirements doc: this phase is honestly 1–2
+weekends, not "1 weekend." Tool-turn persistence (Task 6)
+is a disk-format migration that touches parser +
+append + every call site that persists; Decaying
+injection (Task 8) adds four new code paths to
+`_load_context`. Ship the four thematic groups as
+independently committed slices so each commit is a
+small, reviewable unit even if the whole phase takes
+two sessions.
