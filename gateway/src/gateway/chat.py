@@ -66,6 +66,24 @@ async def _parse_request(request: Request, config: Config) -> ChatCompletionRequ
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}") from e
 
+    # Debug-only request-body logging. Off by default because
+    # bodies contain user prompts. Flip ``server.log_bodies:
+    # true`` in config.yaml when diagnosing
+    # "why does this client's request behave differently from
+    # that one" mysteries — exactly the kind of debugging that
+    # caught the 2026-05-08 Continue-vs-Telegram tool-call
+    # divergence where the same model behaved differently
+    # depending on what Continue's agent mode injected into the
+    # system prompt. Logs the client tag so you can grep for a
+    # specific interface's requests.
+    if getattr(config.server, "log_bodies", False):
+        client_tag = getattr(request.state, "client", "unknown")
+        _log.info(
+            "chat.request_body",
+            client=client_tag,
+            body=payload,
+        )
+
     try:
         parsed = ChatCompletionRequest.model_validate(payload)
     except ValidationError as e:
