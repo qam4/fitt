@@ -34,6 +34,15 @@ _POSITIVE_CASES: list[tuple[str, str]] = [
     ("rm -rf against $HOME", "rm -rf $HOME"),
     ("rm -rf against .git", "rm -rf .git"),
     ("rm -rf against .git", "rm -rf .git/"),
+    # Phase 4.7 — FITT-specific destruction
+    ("rm -rf against $FITT_HOME", "rm -rf $FITT_HOME"),
+    ("rm -rf against $FITT_HOME", "rm -rf $FITT_HOME/"),
+    ("rm -rf against $HOME/.fitt", "rm -rf $HOME/.fitt"),
+    ("rm -rf against ~/.fitt", "rm -rf ~/.fitt"),
+    ("rm -rf against ~/.fitt", "rm -rf ~/.fitt/"),
+    ("git clean -fdx", "git clean -fdx"),
+    ("git clean -fdx", "git clean -xdf"),
+    ("git clean -fdx", "git clean -f -d -x"),
     ("git push --force", "git push origin main --force"),
     ("git push --force", "git push --force origin"),
     ("git push --force", "git push -f origin"),
@@ -86,6 +95,19 @@ _NEGATIVE_CASES: list[str] = [
     "git push --tags",
     "git push --force-with-lease origin",  # this IS a safer form; allow
     "git reset --hard HEAD~1",  # local reset, not origin
+    # Phase 4.7 negatives — FITT-specific patterns should not
+    # over-match their benign siblings.
+    # setenv isn't the same as rm -rf
+    "FITT_HOME=/tmp/x ./script.sh",
+    "echo $FITT_HOME",
+    # ~/.fitt mentioned but not deleted
+    "ls ~/.fitt",
+    "cat ~/.fitt/config.yaml",
+    # git clean variants that aren't the -fdx trifecta
+    "git clean --dry-run -fd",
+    "git clean -fd",  # tracked-not-staged safe; we don't block
+    "git clean -n",
+    "git clean -fdX",  # -X only (ignored) without -d is also ok
     # curl without piping to interpreter
     "curl -o out.txt https://example.com/file.sh",
     "curl https://api.example.com/data | jq .",

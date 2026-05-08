@@ -29,11 +29,16 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 3. Deny-list additions
 
-- [ ] 3a. Add patterns to `gateway/src/gateway/tools/deny_list.py`:
-       `rm -rf $FITT_HOME`, `rm -rf $HOME/.fitt`,
-       `git clean -fdx` (the phase's baseline additions).
-- [ ] 3b. Positive + negative tests for each new pattern in
-       `tests/test_deny_list.py`.
+- [x] 3a. Add patterns to `gateway/src/gateway/tools/deny_list.py`:
+       `rm -rf $FITT_HOME`, `rm -rf $HOME/.fitt`, `rm -rf ~/.fitt`,
+       `git clean -fdx` (the phase's baseline additions). The
+       FITT-specific patterns order BEFORE the broader `$HOME`
+       ones so the specific label ("wipes identity, history,
+       audit") wins over the generic home-directory label.
+- [x] 3b. Positive + negative tests for each new pattern in
+       `tests/test_deny_list.py`. Negatives cover benign
+       siblings (`FITT_HOME=... cmd`, `ls ~/.fitt`,
+       `git clean --dry-run -fd`, `git clean -fd`).
 
 ## 4. `project_shell` tool
 

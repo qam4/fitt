@@ -69,6 +69,23 @@ DENY_PATTERNS: list[DenyPattern] = [
         re.compile(r"\brm\s+-rf?\s+~(?:$|\s)"),
         "rm -rf against home directory",
     ),
+    # Phase 4.7: FITT-specific narrow patterns. Ordered BEFORE
+    # the broad ``rm -rf $HOME`` / ``rm -rf ~`` patterns because
+    # the deny list is first-match-wins and we want the specific
+    # label ("wipes identity, history, audit") to surface rather
+    # than the generic home-directory one.
+    DenyPattern(
+        re.compile(r"\brm\s+-rf?\s+\$FITT_HOME\b"),
+        "rm -rf against $FITT_HOME (wipes identity, history, audit)",
+    ),
+    DenyPattern(
+        re.compile(r"\brm\s+-rf?\s+\$HOME/\.fitt\b"),
+        "rm -rf against $HOME/.fitt (wipes identity, history, audit)",
+    ),
+    DenyPattern(
+        re.compile(r"\brm\s+-rf?\s+~/\.fitt\b"),
+        "rm -rf against ~/.fitt (wipes identity, history, audit)",
+    ),
     DenyPattern(
         re.compile(r"\brm\s+-rf?\s+\$HOME\b"),
         "rm -rf against $HOME",
@@ -76,6 +93,23 @@ DENY_PATTERNS: list[DenyPattern] = [
     DenyPattern(
         re.compile(r"\brm\s+-rf?\s+\.git(?:$|\s|/)"),
         "rm -rf against .git directory",
+    ),
+    DenyPattern(
+        # Match ``git clean -fdx`` (drops untracked + ignored,
+        # high-surprise) regardless of flag ordering within a
+        # single dash group (``-fdx``, ``-xdf``) or spread as
+        # separate short flags (``-f -d -x``). Does NOT match
+        # long forms like ``git clean --force -d -x`` — if a
+        # pattern there matters, file a PR. The -x is the
+        # surprise factor vs the safer -fd (which only drops
+        # untracked-but-tracked-by-gitignore, already handled
+        # by `git reset` paths).
+        re.compile(
+            r"\bgit\s+clean\b(?=[^\n]*\s-[A-Za-z]*f[A-Za-z]*)"
+            r"(?=[^\n]*\s-[A-Za-z]*d[A-Za-z]*)"
+            r"(?=[^\n]*\s-[A-Za-z]*x[A-Za-z]*)"
+        ),
+        "git clean -fdx (discards untracked + ignored, surprise factor)",
     ),
     # ---- destructive git -----------------------------------------
     DenyPattern(
