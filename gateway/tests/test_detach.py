@@ -29,7 +29,6 @@ the approval middleware relies on.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -42,16 +41,14 @@ from gateway.config import Secrets, TelegramSecrets
 from gateway.projects import Project
 
 from ._fixtures import PERSONAL_TOKEN, build_test_config
+from ._llm_stubs import make_response, make_tool_call
 
 # --------------------------------------------------------------- helpers
 
 
 def _tool_call(call_id: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": call_id,
-        "type": "function",
-        "function": {"name": name, "arguments": json.dumps(args)},
-    }
+    """Compat shim → shared ``make_tool_call``."""
+    return make_tool_call(call_id, name, args)
 
 
 def _fake_response(
@@ -59,30 +56,8 @@ def _fake_response(
     content: str | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
 ) -> Any:
-    class _R:
-        def __init__(self) -> None:
-            self.usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 3})()
-
-        def model_dump(self, **_: Any) -> dict[str, Any]:
-            msg: dict[str, Any] = {"role": "assistant"}
-            if content is not None:
-                msg["content"] = content
-            if tool_calls:
-                msg["tool_calls"] = tool_calls
-            return {
-                "id": "chatcmpl-fake",
-                "object": "chat.completion",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": msg,
-                        "finish_reason": "tool_calls" if tool_calls else "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 5, "completion_tokens": 3},
-            }
-
-    return _R()
+    """Compat shim → shared ``make_response``."""
+    return make_response(content=content, tool_calls=tool_calls)
 
 
 def _auth() -> dict[str, str]:

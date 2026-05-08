@@ -9,7 +9,6 @@ log gained the right entries, (c) memory was appended, and
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -27,39 +26,18 @@ from gateway.tools import (
 )
 
 from ._fixtures import build_test_config
+from ._llm_stubs import make_response, make_tool_call
 
 # --------------------------------------------------------------- litellm stubs
 
 
 def _fake_completion(*, content: str = "fired", tool_calls: list[dict] | None = None) -> Any:
-    class _Resp:
-        def __init__(self) -> None:
-            self.usage = type(
-                "Usage",
-                (),
-                {"prompt_tokens": 10, "completion_tokens": 5},
-            )()
+    """Compat shim that delegates to the shared stub library.
 
-        def model_dump(self, **_: Any) -> dict[str, Any]:
-            msg: dict[str, Any] = {"role": "assistant"}
-            if content:
-                msg["content"] = content
-            if tool_calls:
-                msg["tool_calls"] = tool_calls
-            return {
-                "id": "chatcmpl-fake",
-                "object": "chat.completion",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": msg,
-                        "finish_reason": "tool_calls" if tool_calls else "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-            }
-
-    return _Resp()
+    Retained as a thin wrapper so existing tests in this file
+    keep working; new tests should import ``make_response`` /
+    ``stub_*`` builders from ``_llm_stubs`` directly."""
+    return make_response(content=content, tool_calls=tool_calls)
 
 
 @pytest.fixture
@@ -238,13 +216,7 @@ async def test_fire_with_approval_mode_auto_runs_an_ask_tool(
         if len(passes) == 1:
             return _fake_completion(
                 content=None,
-                tool_calls=[
-                    {
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "custom_write", "arguments": json.dumps({})},
-                    }
-                ],
+                tool_calls=[make_tool_call("c1", "custom_write", {})],
             )
         return _fake_completion(content="done")
 

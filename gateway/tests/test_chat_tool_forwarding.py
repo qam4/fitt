@@ -35,16 +35,14 @@ from gateway.app import create_app
 from gateway.projects import Project
 
 from ._fixtures import PERSONAL_TOKEN, build_test_config
+from ._llm_stubs import make_response, make_tool_call
 
 # --------------------------------------------------------------- helpers
 
 
 def _tool_call(call_id: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": call_id,
-        "type": "function",
-        "function": {"name": name, "arguments": json.dumps(args)},
-    }
+    """Compat shim → shared ``make_tool_call``."""
+    return make_tool_call(call_id, name, args)
 
 
 def _fake_response(
@@ -55,47 +53,14 @@ def _fake_response(
     in_tok: int = 5,
     out_tok: int = 3,
 ) -> Any:
-    """Build something that looks like a litellm ModelResponse.
-
-    We only rely on ``model_dump`` / ``usage``. chat.py itself
-    uses those two surfaces.
-    """
-
-    class _Response:
-        def __init__(self) -> None:
-            self.usage = type(
-                "Usage",
-                (),
-                {"prompt_tokens": in_tok, "completion_tokens": out_tok},
-            )()
-
-        def model_dump(self, **_: Any) -> dict[str, Any]:
-            msg: dict[str, Any] = {"role": "assistant"}
-            if content is not None:
-                msg["content"] = content
-            if tool_calls:
-                msg["tool_calls"] = tool_calls
-            return {
-                "id": "chatcmpl-fake",
-                "object": "chat.completion",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": msg,
-                        "finish_reason": (
-                            finish_reason
-                            if finish_reason is not None
-                            else ("tool_calls" if tool_calls else "stop")
-                        ),
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": self.usage.prompt_tokens,
-                    "completion_tokens": self.usage.completion_tokens,
-                },
-            }
-
-    return _Response()
+    """Compat shim → shared ``make_response``."""
+    return make_response(
+        content=content,
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
+        in_tok=in_tok,
+        out_tok=out_tok,
+    )
 
 
 @pytest.fixture
