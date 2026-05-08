@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from .lessons import LessonsStore
 from .memory_templates import DEFAULTS, LEGACY_TEMPLATES
 
 _log = logging.getLogger(__name__)
@@ -86,11 +87,14 @@ class MemoryStore:
         sessions_dir: Path,
         max_history_chars: int,
         enabled: bool,
+        *,
+        lessons: LessonsStore | None = None,
     ) -> None:
         self._identity_dir = identity_dir
         self._sessions_dir = sessions_dir
         self._max = max_history_chars
         self._enabled = enabled
+        self._lessons = lessons
         if self._enabled:
             self._ensure_identity_defaults()
 
@@ -105,11 +109,33 @@ class MemoryStore:
         return self._sessions_dir / session_id / "history" / f"{day.isoformat()}.md"
 
     def load_context(self, session_id: str) -> LoadedContext:
-        """Assemble identity + today's history for one session."""
+        """Assemble identity + lessons + today's history for
+        one session.
+
+        System-prefix layering (Phase 5):
+
+        1. Operator-authored identity (user, soul, tools) — stable
+           across requests, edited by hand in ``$EDITOR``.
+        2. ``[Learned corrections]`` block — auto-mutated by the
+           ``learn_*`` tools, empty when there are no lessons.
+
+        Order matters: identity first (the "who am I" voice),
+        lessons after (shorter, terser, recent corrections),
+        capability block prepended at the chat layer. Tested
+        in ``test_memory_lessons_injection.py``.
+        """
         if not self._enabled:
             return LoadedContext(system_prefix="", history_messages=[])
 
-        system_prefix = self._load_identity()
+        system_prefix_parts: list[str] = []
+        identity = self._load_identity()
+        if identity:
+            system_prefix_parts.append(identity)
+        lessons_block = self._load_lessons_block()
+        if lessons_block:
+            system_prefix_parts.append(lessons_block)
+        system_prefix = "\n\n".join(system_prefix_parts)
+
         history_file = self.history_path(session_id)
         messages, dropped = self._load_and_truncate_history(history_file)
 
@@ -235,6 +261,26 @@ class MemoryStore:
             if content:
                 parts.append(content)
         return "\n\n".join(parts)
+
+    def _load_lessons_block(self) -> str:
+        """Return the ``[Learned corrections]`` system-prompt
+        block, or empty string if there's no lessons store or
+        the store is empty.
+
+        The block name + bullet formatting live in the
+        :class:`LessonsStore` renderer; this method's only job
+        is to check presence and delegate. That keeps memory
+        agnostic to lesson internals."""
+        if self._lessons is None:
+            return ""
+        try:
+            return self._lessons.render_block()
+        except Exception as e:  # pragma: no cover - defensive
+            _log.warning(
+                "memory.lessons.render_failed",
+                extra={"error": str(e)},
+            )
+            return ""
 
     def _load_and_truncate_history(self, path: Path) -> tuple[list[dict[str, str]], int]:
         """Read a history file, parse into turns, drop oldest turns

@@ -60,11 +60,27 @@ def create_app(config: Config) -> FastAPI:
     # Memory store lives for the lifetime of the app. It reads the
     # identity files fresh on every request, so editing them takes
     # effect without a restart.
+    #
+    # Phase 5: a LessonsStore rides alongside the identity files at
+    # ``$FITT_HOME/identity/lessons.md``. Auto-mutated by the
+    # ``learn_*`` tools, hand-editable by operators. Injected into
+    # every request as a ``[Learned corrections]`` block after the
+    # identity content.
+    from .lessons import LessonsStore, default_lessons_path
+
+    memory_cfg = config.memory
+    lessons_store = LessonsStore(
+        default_lessons_path(memory_cfg.identity_dir),
+        max_entries=getattr(memory_cfg, "max_lessons", 50),
+    )
+    app.state.lessons = lessons_store
+
     app.state.memory = MemoryStore(
-        identity_dir=config.memory.identity_dir,
-        sessions_dir=config.memory.sessions_dir,
-        max_history_chars=config.memory.max_history_chars,
-        enabled=config.memory.enabled,
+        identity_dir=memory_cfg.identity_dir,
+        sessions_dir=memory_cfg.sessions_dir,
+        max_history_chars=memory_cfg.max_history_chars,
+        enabled=memory_cfg.enabled,
+        lessons=lessons_store,
     )
 
     # Session registry: same freshness guarantee. `fitt session new`
@@ -98,6 +114,7 @@ def create_app(config: Config) -> FastAPI:
         build_fileops_tools,
         build_git_tools,
         build_inline_tools,
+        build_lessons_tools,
         build_project_shell_tool,
         build_send_message_tool,
         build_shell_tools,
@@ -186,6 +203,8 @@ def create_app(config: Config) -> FastAPI:
     for t in build_shell_tools():
         tool_registry.register(t)
     for t in build_cron_tools():
+        tool_registry.register(t)
+    for t in build_lessons_tools():
         tool_registry.register(t)
 
     # Phase 4.7: project_shell. Registered with baked-in per-
@@ -341,6 +360,7 @@ def create_app(config: Config) -> FastAPI:
         capability_gaps=app.state.capability_gaps,
         cron_service=app.state.cron,
         local_shell=app.state.local_shell,
+        lessons=app.state.lessons,
     )
     app.state.cron_runner = cron_runner
     app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=cron_runner.fire)

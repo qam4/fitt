@@ -1425,5 +1425,98 @@ def _kind_colour(kind: str) -> str:
     return "cyan"
 
 
+# --------------------------------------------------------------- fitt learn (Phase 5)
+
+
+def _open_lessons_store() -> Any:
+    """Open the LessonsStore against ``$FITT_HOME/identity/lessons.md``.
+
+    CLI mutations go straight to disk; the running gateway
+    picks up the change on the next request via the lessons
+    store's mtime-based reload."""
+    from .config import fitt_home
+    from .lessons import LessonsStore, default_lessons_path
+
+    identity_dir = fitt_home() / "identity"
+    return LessonsStore(default_lessons_path(identity_dir))
+
+
+@main.group("learn")
+def learn_group() -> None:
+    """List, add, and remove learned corrections (lessons).
+
+    Lessons live in ``$FITT_HOME/identity/lessons.md``. They
+    get injected into every request's system prompt as the
+    ``[Learned corrections]`` block. Edit the file directly
+    with your ``$EDITOR`` or use these commands; either way
+    the running gateway sees the change on the next request.
+    """
+
+
+@learn_group.command("list")
+def learn_list_cmd() -> None:
+    """Print every current lesson."""
+    store = _open_lessons_store()
+    lessons = store.read()
+    if not lessons:
+        _console.print(
+            "[dim]No lessons recorded. Add one with `fitt learn "
+            'add "always use uv"` or let the agent record one '
+            "via `learn_add`.[/dim]"
+        )
+        return
+
+    table = Table(title="FITT lessons")
+    table.add_column("Category", style="cyan")
+    table.add_column("Text")
+    for lsn in lessons:
+        table.add_row(lsn.category or "-", lsn.text)
+    _console.print(table)
+
+
+@learn_group.command("add")
+@click.argument("text")
+@click.option(
+    "--category",
+    default=None,
+    help="Optional tag (e.g. 'tooling', 'style').",
+)
+def learn_add_cmd(text: str, category: str | None) -> None:
+    """Record a new lesson.
+
+    Bypasses approval middleware — the CLI operator IS the
+    human, same posture as ``fitt cron add``.
+    """
+    store = _open_lessons_store()
+    try:
+        lesson = store.add(text, category=category)
+    except ValueError as e:
+        _console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+    _console.print(f"[green]Recorded[/green] {lesson.render()}")
+
+
+@learn_group.command("remove")
+@click.argument("substring")
+def learn_remove_cmd(substring: str) -> None:
+    """Remove lessons whose text contains ``substring``."""
+    store = _open_lessons_store()
+    removed = store.remove(substring)
+    if removed == 0:
+        _console.print(f"[yellow]No lessons matched {substring!r}.[/yellow]")
+        return
+    _console.print(f"[yellow]Removed {removed} lesson(s) matching {substring!r}.[/yellow]")
+
+
+@learn_group.command("path")
+def learn_path_cmd() -> None:
+    """Print the on-disk path of ``lessons.md``.
+
+    Useful for piping to ``$EDITOR`` or for scripts that want
+    to inspect the file directly."""
+    store = _open_lessons_store()
+    _console.print(str(store.path))
+
+
 if __name__ == "__main__":
     main()

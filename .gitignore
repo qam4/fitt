@@ -55,3 +55,4 @@ desktop.ini
 
 # Open WebUI bind-mount data (chat history, admin account)
 open-webui-data/
+.aider*

@@ -116,6 +116,13 @@ class MemoryConfig(BaseModel):
     max_history_chars: int = 24_000
     identity_dir: Path = Field(default_factory=lambda: fitt_home() / "identity")
     sessions_dir: Path = Field(default_factory=lambda: fitt_home() / "sessions")
+    # Phase 5 — lessons ceiling.
+    max_lessons: int = 50
+    # Phase 5 — history retention for the background pruner. Default
+    # 90 days. Files past this get removed by the history pruner;
+    # turns inside files past this are dropped from injection via
+    # the decay layer.
+    history_max_days: int = 90
 
     @field_validator("identity_dir", "sessions_dir", mode="before")
     @classmethod

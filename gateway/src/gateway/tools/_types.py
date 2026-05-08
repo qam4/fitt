@@ -239,6 +239,14 @@ class ToolContext:
     ``project_shell`` — the tool fails with a readable error
     when it's missing."""
 
+    lessons: Any = None
+    """The :class:`~gateway.lessons.LessonsStore` the
+    ``learn_*`` tools mutate. Typed ``Any`` to dodge the
+    import cycle ``_types`` would otherwise create with
+    ``lessons``. ``None`` in tests that don't exercise the
+    learn tools; those tools fail with a readable error when
+    it's missing."""
+
     # Future additions (Task 13+):
     #   audit:   AuditLog           -- write one entry per call
     #   gaps:    CapabilityGapLog   -- record "I need a tool to X"

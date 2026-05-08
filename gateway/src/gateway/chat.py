@@ -782,6 +782,7 @@ async def chat_completions(request: Request) -> Response:
             cron=getattr(request.app.state, "cron", None),
             events=getattr(request.app.state, "events", None),
             local_shell=getattr(request.app.state, "local_shell", None),
+            lessons=getattr(request.app.state, "lessons", None),
         )
         return await _run_tool_loop(
             parsed=parsed,

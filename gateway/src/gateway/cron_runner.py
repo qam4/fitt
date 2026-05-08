@@ -67,6 +67,7 @@ class CronRunner:
         capability_gaps: Any = None,
         cron_service: Any = None,
         local_shell: Any = None,
+        lessons: Any = None,
     ) -> None:
         self._config = config
         self._tool_registry = tool_registry
@@ -79,6 +80,7 @@ class CronRunner:
         self._capability_gaps = capability_gaps
         self._cron_service = cron_service
         self._local_shell = local_shell
+        self._lessons = lessons
 
     # -------------------------------------------------- public API
 
@@ -260,6 +262,7 @@ class CronRunner:
             cron=self._cron_service,
             events=self._events,
             local_shell=self._local_shell,
+            lessons=self._lessons,
         )
 
         alias_router = AliasRouter(self._config)
