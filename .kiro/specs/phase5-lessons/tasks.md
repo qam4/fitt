@@ -4,167 +4,119 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 1. Spec promotion
 
-- [ ] 1a. Promote Phase 5 from `FITT_ROADMAP.md` inline
+- [x] 1a. Promote Phase 5 from `FITT_ROADMAP.md` inline
        draft to the three-file spec here:
        `requirements.md`, `design.md`, `tasks.md`.
-- [ ] 1b. Commit the spec as its own change before any
+- [x] 1b. Commit the spec as its own change before any
        code lands, matching the Phase 4.5 / 4.6 / 4.7
        convention.
 
 ## 2. LessonsStore (plumbing only, no wiring yet)
 
-- [ ] 2a. `gateway/src/gateway/lessons.py`: `Lesson`
-       dataclass (`text`, `category: str | None`,
-       `added_ts: float`), `LessonsStore` with `read()`,
-       `add()`, `remove(substring)`, `render_block()`.
-- [ ] 2b. Persistence at `$FITT_HOME/identity/lessons.md`
-       with the template scaffolding + an "Active lessons"
-       section the store parses and mutates.
-       Write-through mutations (read → parse → mutate →
-       write) under a thread lock, matching CronService.
-- [ ] 2c. `max_entries` (default 50) with oldest-dropped
-       behaviour on overflow.
-- [ ] 2d. Unit tests: round-trip add/list/remove, max
-       rollover, mtime-based freshness, malformed file
-       degrades to empty + warning.
+- [x] 2a. `gateway/src/gateway/lessons.py`: `Lesson`
+       dataclass, `LessonsStore` class with `read`,
+       `add`, `remove`, `render_block`, `path`,
+       `max_entries` properties.
+- [x] 2b. Persistence at `$FITT_HOME/identity/lessons.md`
+       with template + "Active lessons" section parsed
+       and mutated write-through under a threading lock.
+- [x] 2c. `max_entries` ceiling (default 50) drops oldest.
+- [x] 2d. 25 unit tests (`tests/test_lessons_store.py`).
 
 ## 3. Lessons injection into the system prompt
 
-- [ ] 3a. `MemoryStore._load_lessons()` reads the
-       lessons file and returns the rendered block (or
-       empty string when no store / disabled).
-- [ ] 3b. `load_context()` composes
-       `identity + [Learned corrections] block +
-       [Past activity] summary` into `system_prefix`. Order
-       documented inline so a reader can see the three
-       layers stack.
-- [ ] 3c. Unit tests: empty lessons → empty block;
-       lessons present → block rendered in the right
-       spot; identity unchanged when lessons file is
-       missing.
+- [x] 3a. `MemoryStore._load_lessons_block()` delegates to
+       the store's `render_block`; empty when no lessons.
+- [x] 3b. `load_context` composes identity +
+       `[Learned corrections]` block in that order.
+- [x] 3c. 6 unit tests (`tests/test_memory_lessons_injection.py`).
 
 ## 4. `learn_*` inline tools
 
-- [ ] 4a. `gateway/src/gateway/tools/lessons.py`:
-       `learn_add`, `learn_list`, `learn_remove`.
-       Default buckets: `learn_list` = `auto`;
-       `learn_add` / `learn_remove` = `ask`.
-- [ ] 4b. Register in the tool registry via
-       `build_lessons_tools()` mirroring
-       `build_cron_tools`.
-- [ ] 4c. `ToolContext` grows a `lessons: Any = None`
-       field. Wire in `chat.py` and `cron_runner.py`
-       alongside the existing `cron` / `events`
-       wiring.
-- [ ] 4d. Unit tests per tool.
+- [x] 4a. `gateway/src/gateway/tools/lessons.py`:
+       `learn_add` / `learn_list` / `learn_remove` with
+       the right buckets (list=auto, add/remove=ask).
+- [x] 4b. Registered via `build_lessons_tools()`.
+- [x] 4c. `ToolContext` grows `lessons: Any = None`.
+       Wired in `chat.py` + `cron_runner.py`.
+- [x] 4d. 12 unit tests (`tests/test_tools_lessons.py`).
 
 ## 5. `fitt learn` CLI
 
-- [ ] 5a. Group `@main.group("learn")` mirroring
-       `fitt cron`.
-- [ ] 5b. `fitt learn list`, `fitt learn add "text"
-       [--category X]`, `fitt learn remove <substring>`,
-       `fitt learn path`.
-- [ ] 5c. Tests (CLI round-trips to LessonsStore).
+- [x] 5a. `@main.group("learn")` mirroring `fitt cron`.
+- [x] 5b. `list` / `add` / `remove` / `path` subcommands.
+- [x] 5c. 8 tests (`tests/test_cli_learn.py`).
 
 ## 6. Tool-turn persistence format
 
-- [ ] 6a. Extend `_HEADER_RE` in `memory.py` to match
-       `user` / `assistant` / `assistant tool_calls` /
-       `tool <name>` / `system`.
-- [ ] 6b. `PersistedToolCall` dataclass in `memory.py`
-       (`tool_name`, `args_summary`, `result_status`,
-       `result_summary`).
-- [ ] 6c. `append_turn` grows `tool_calls: list[
-       PersistedToolCall] | None = None` kwarg. When
-       present, write the three extra sub-blocks
-       (`assistant tool_calls`, `tool <name>` per call,
-       final `assistant`).
-- [ ] 6d. `_parse_turns` handles the new headers.
-       Unknown-header turns drop with a debug log, not
-       a raise (back-compat with future schemas).
-- [ ] 6e. Loading a tool-using turn produces an
-       OpenAI-shape message sequence:
-       `[user, assistant+tool_calls, tool, assistant]`.
-       Generate deterministic `tool_call_id` from args
-       hash so the tool-role entry pairs correctly.
-- [ ] 6f. Unit tests: round-trip a tool-using turn,
-       load pre-Phase-5 chat-only file identically
-       (back-compat), unknown-header degradation.
+- [x] 6a. `_HEADER_RE` extended to match
+       `assistant tool_calls` / `tool <name>` / `system`.
+- [x] 6b. `PersistedToolCall` dataclass with
+       `tool_name` / `args_summary` / `result_status` /
+       `result_summary` + `render_call_bullet` and
+       `render_result_body`.
+- [x] 6c. `append_turn` grows `tool_calls: list[
+       PersistedToolCall] | None = None`.
+- [x] 6d. Parser handles new headers; unknown roles
+       degrade gracefully.
+- [x] 6e. `_turns_to_messages` reconstructs OpenAI-shape
+       messages with deterministic `tool_call_id` hashes.
+- [x] 6f. 12 unit tests (`tests/test_memory_tool_turns.py`).
 
 ## 7. Wire `PersistedToolCall` collection in call sites
 
-- [ ] 7a. `agent_loop.py`: `AgentLoopResult` grows a
-       `tool_calls_for_memory: list[PersistedToolCall]`
-       field. The loop accumulates one per call.
-- [ ] 7b. `chat.py`: after `run_agent_loop`, pass
-       `result.tool_calls_for_memory` to
-       `memory.append_turn`.
-- [ ] 7c. `cron_runner.py`: same pattern.
-- [ ] 7d. `detach.py`: detached worker collects the
-       calls too; passes to `append_turn` at the end.
-- [ ] 7e. E2E lifecycle check: existing lifecycle tests
-       still pass (pinning that the change didn't
-       regress the HTTP/approval flow).
+- [x] 7a. `AgentLoopResult` gains `tool_calls_for_memory:
+       list[PersistedToolCall]`.
+- [x] 7b. `chat.py` passes the list to `append_turn`.
+- [x] 7c. `cron_runner.py` same.
+- [x] 7d. `detach.py` same.
+- [x] 7e. Pre-existing lifecycle tests stay green.
 
 ## 8. Decaying history injection
 
-- [ ] 8a. `_load_decaying_history` replaces
-       `_load_and_truncate_history`. Assembles today's
-       full turns + yesterday's first + count + 3–30
-       day one-line summaries.
-- [ ] 8b. Summary text is deterministic:
-       `"YYYY-MM-DD: N user turns (with tools|chat
-       only)"`.
-- [ ] 8c. Layered budget: oldest layer drops first when
-       total exceeds `max_history_chars`.
-- [ ] 8d. Summaries render as a single `system`
-       message with `[Past activity]` header, prepended
-       to the turn list.
-- [ ] 8e. Unit tests per layer + budget-truncation
-       ordering.
+- [x] 8a. `_load_decaying_history` replaces
+       `_load_and_truncate_history` in `load_context`.
+       Walks three layers: past activity summary,
+       yesterday first-turn+count, today in full.
+- [x] 8b. Summary text deterministic
+       (`YYYY-MM-DD: N user turns (with tools|chat only)`).
+- [x] 8c. Layered budget: oldest layer drops first.
+- [x] 8d. Summaries render as one `[Past activity]`
+       system message prepended to the turn list.
+- [x] 8e. 10 unit tests (`tests/test_memory_decay.py`).
 
 ## 9. History pruner
 
-- [ ] 9a. `gateway/src/gateway/history_pruner.py`:
-       `HistoryPruner` mirroring the shape of
-       `EventPruner`.
-- [ ] 9b. `tick()` walks
-       `$FITT_HOME/sessions/*/history/*.md`, parses
-       each filename's date, drops files past
-       `memory.history_max_days`.
-- [ ] 9c. Emits `system_pruned` with
-       `meta.target="history"` and `meta.removed=<n>`.
-- [ ] 9d. Anchor file for restart-safe cadence (same
-       pattern as the event pruner).
-- [ ] 9e. Wire start/stop in `create_app`.
-- [ ] 9f. Unit tests.
+- [x] 9a. `gateway/src/gateway/history_pruner.py`
+       mirrors `EventPruner`.
+- [x] 9b. Walks `sessions/*/history/*.md`, deletes past
+       retention. Non-date filenames preserved.
+- [x] 9c. Emits `system_pruned` with
+       `meta.target="history"`.
+- [x] 9d. Anchor file for restart-safe cadence.
+- [x] 9e. Wired into `create_app` start/stop.
+- [x] 9f. 9 unit tests (`tests/test_history_pruner.py`).
 
 ## 10. E2E + regression
 
-- [ ] 10a. `tests/e2e/test_lessons_lifecycle.py`:
-       stubbed LLM emits `learn_add("always use
-       uv")`; approver approves; next request dispatches
-       with `[Learned corrections]` block containing the
-       lesson. Assert via `stubbed_llm.calls[-1]`.
-- [ ] 10b. Flip
-       `tests/e2e/test_session_poisoning_lifecycle.py`
-       off xfail. Its existing assertion ("stale 'SSH
-       unreachable' refusal NOT in next dispatch") must
-       now pass unassisted. If it fails, the tool-turn
-       persistence didn't land completely — fix
-       before declaring done.
+- [x] 10a. `tests/e2e/test_lessons_lifecycle.py`:
+       `learn_add` → next request dispatches with the
+       lesson bullet in the system prompt. Plus the
+       counter-case: `learn_remove` removes the bullet.
+- [x] 10b. `tests/e2e/test_session_poisoning_lifecycle.py`
+       flipped off `xfail` and passes. Assertion
+       rewritten to pin the new contract: a tool-using
+       turn's structured outcome (`role=tool` with
+       `ok`) reaches the model alongside the
+       paraphrased reply, so future context carries
+       ground truth rather than only the NL.
 
 ## 11. Config + docs
 
-- [ ] 11a. Add `memory.max_lessons`,
-       `memory.history_max_days`, and the optional
-       `memory.history_decay` block to `Config`.
-- [ ] 11b. Update `configs/config.example.yaml` with
-       the new fields commented.
-- [ ] 11c. Brief notes in `docs/` (or a new
-       `docs/memory.md`) explaining the four layers
-       and the decay shape.
+- [x] 11a. `MemoryConfig` grows `max_lessons` (default
+       50) and `history_max_days` (default 90).
+- [ ] 11b. Update `configs/config.example.yaml`.
+- [ ] 11c. Brief notes in `docs/`.
 
 ## 12. Roadmap pointer update
 

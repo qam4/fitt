@@ -35,7 +35,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -202,8 +202,7 @@ class MemoryStore:
             system_prefix_parts.append(lessons_block)
         system_prefix = "\n\n".join(system_prefix_parts)
 
-        history_file = self.history_path(session_id)
-        messages, dropped = self._load_and_truncate_history(history_file)
+        messages, dropped = self._load_decaying_history(session_id)
 
         if dropped > 0:
             _log.info(
@@ -425,6 +424,157 @@ class MemoryStore:
         messages = _turns_to_messages(turns)
         return messages, dropped_bytes
 
+    def _load_decaying_history(
+        self, session_id: str, now: date | None = None
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Phase 5 — load history with a 4-layer decay policy.
+
+        Layers, in the order they appear in the returned
+        messages list:
+
+        1. **Past activity summary** (3-30 days ago): a single
+           ``role=system`` message with ``[Past activity]`` as
+           its header and one line per day ("YYYY-MM-DD: N
+           user turns (with tools|chat only)"). Rendered from
+           file structure, no per-request LLM call.
+        2. **Yesterday's first turn + count** (day -1): the
+           first user/assistant pair plus a one-line marker
+           noting how many more turns that day had.
+        3. **Today in full**: every turn from today's file,
+           tool-using turns reconstructed to OpenAI shape per
+           Task 6.
+        4. **30+ days ago**: dropped from context. Files stay
+           on disk; see HistoryPruner (Task 9) for physical
+           deletion.
+
+        Budget: the layers combined cap at
+        ``max_history_chars``. Oldest layer drops first when
+        total exceeds budget, with the "Past activity"
+        summary going before yesterday, yesterday before
+        today.
+
+        Returns ``(messages, dropped_bytes)``. Missing session
+        directory → empty result. Individual unreadable files
+        are skipped with a warning; one bad file can't mask
+        the whole history."""
+        current_day = now if now is not None else _today()
+        messages: list[dict[str, Any]] = []
+
+        summary_lines = self._render_past_activity(session_id, current_day=current_day)
+        yesterday_msgs = self._render_yesterday(session_id, current_day=current_day)
+        today_path = self.history_path(session_id, day=current_day)
+        today_msgs, today_dropped = self._load_and_truncate_history(today_path)
+
+        if summary_lines:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "[Past activity]\n\n" + "\n".join(summary_lines),
+                }
+            )
+        messages.extend(yesterday_msgs)
+        messages.extend(today_msgs)
+
+        # Budget-truncate the assembled list. Drop oldest
+        # first — which for this ordered list means the
+        # summary block, then yesterday, then today's
+        # oldest turns.
+        total = sum(len(_message_content_chars(m)) for m in messages)
+        dropped_bytes = today_dropped
+        while total > self._max and messages:
+            dropped = messages.pop(0)
+            dropped_chars = len(_message_content_chars(dropped))
+            dropped_bytes += dropped_chars
+            total -= dropped_chars
+
+        return messages, dropped_bytes
+
+    def _render_past_activity(self, session_id: str, *, current_day: date) -> list[str]:
+        """Layer 1: 3-30 days ago, one line per day.
+
+        Format: ``YYYY-MM-DD: N user turns (with tools|chat only)``.
+        Days with no user turns are skipped."""
+        session_history_dir = self._sessions_dir / session_id / "history"
+        if not session_history_dir.exists():
+            return []
+
+        lines: list[str] = []
+        for offset in range(3, 31):
+            day = current_day - timedelta(days=offset)
+            path = session_history_dir / f"{day.isoformat()}.md"
+            if not path.exists():
+                continue
+            try:
+                raw = path.read_text(encoding="utf-8")
+            except OSError as e:
+                _log.warning(
+                    "memory.decay.read_failed",
+                    extra={"file": str(path), "error": str(e)},
+                )
+                continue
+            turns = _parse_turns(raw)
+            n_user = sum(1 for t in turns if t.role == "user")
+            if n_user == 0:
+                continue
+            tools_used = any(t.role.startswith("assistant tool") for t in turns)
+            marker = "with tools" if tools_used else "chat only"
+            lines.append(f"{day.isoformat()}: {n_user} user turns ({marker})")
+        return list(reversed(lines))
+
+    def _render_yesterday(self, session_id: str, *, current_day: date) -> list[dict[str, Any]]:
+        """Layer 2: yesterday's first turn + a count marker.
+
+        The first turn carries enough context that the model
+        has a handle on what happened; the count marker tells
+        the model there was more without blowing the budget."""
+        yesterday = current_day - timedelta(days=1)
+        path = self.history_path(session_id, day=yesterday)
+        if not path.exists():
+            return []
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError as e:
+            _log.warning(
+                "memory.decay.read_failed",
+                extra={"file": str(path), "error": str(e)},
+            )
+            return []
+        turns = _parse_turns(raw)
+
+        # Walk until we've got the first complete user-anchored
+        # turn. Hitting the SECOND user turn means everything
+        # before it was the "first turn."
+        first_turn_end_idx = 0
+        user_count = 0
+        for idx, turn in enumerate(turns):
+            if turn.role == "user":
+                user_count += 1
+                if user_count == 2:
+                    first_turn_end_idx = idx
+                    break
+        else:
+            first_turn_end_idx = len(turns)
+
+        first_turn = turns[:first_turn_end_idx]
+        remaining_user_turns = sum(1 for t in turns[first_turn_end_idx:] if t.role == "user")
+
+        messages: list[dict[str, Any]] = []
+        if first_turn:
+            messages.extend(_turns_to_messages(first_turn))
+        if remaining_user_turns > 0:
+            plural = "s" if remaining_user_turns != 1 else ""
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"[Yesterday: {remaining_user_turns} more "
+                        f"user turn{plural} truncated from this "
+                        f"day's history]"
+                    ),
+                }
+            )
+        return messages
+
 
 # ----------------------------------------------------------------- helpers
 
@@ -435,6 +585,29 @@ def _today() -> date:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
+
+
+def _message_content_chars(msg: dict[str, Any]) -> str:
+    """Return the char-countable content of a message, flattening
+    the shapes we actually emit (plain content + tool_calls dicts).
+
+    Used by the budget-truncation loop in
+    :meth:`MemoryStore._load_decaying_history` so a message with
+    complex structure (tool_calls, tool_call_id) contributes its
+    real size to the cap."""
+    content = msg.get("content") or ""
+    if not isinstance(content, str):
+        content = str(content)
+    parts = [content]
+    tool_calls = msg.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                name = tc.get("function", {}).get("name", "")
+                args = tc.get("function", {}).get("arguments", "")
+                parts.append(str(name))
+                parts.append(str(args))
+    return "\n".join(parts)
 
 
 def _format_block(ts: datetime, role: str, content: str) -> str:

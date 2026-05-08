@@ -395,6 +395,28 @@ def create_app(config: Config) -> FastAPI:
     async def _stop_event_pruner() -> None:  # pragma: no cover - lifespan hook
         await app.state.event_pruner.stop()
 
+    # Phase 5 Task 9: history pruner. Same shape as the event
+    # pruner (daily tick, anchor file, system_pruned event).
+    # Walks sessions/*/history/*.md and deletes files older
+    # than ``memory.history_max_days`` (default 90).
+    from .history_pruner import HistoryPruner, default_history_anchor_path
+
+    history_max_days = int(getattr(config.memory, "history_max_days", 90))
+    app.state.history_pruner = HistoryPruner(
+        sessions_dir=config.memory.sessions_dir,
+        events=app.state.events,
+        max_age_days=history_max_days,
+        anchor_path=default_history_anchor_path(fitt_home()),
+    )
+
+    @app.on_event("startup")
+    async def _start_history_pruner() -> None:  # pragma: no cover - lifespan hook
+        await app.state.history_pruner.start()
+
+    @app.on_event("shutdown")
+    async def _stop_history_pruner() -> None:  # pragma: no cover - lifespan hook
+        await app.state.history_pruner.stop()
+
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)
 
