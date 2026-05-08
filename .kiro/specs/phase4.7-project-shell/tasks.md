@@ -4,26 +4,28 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## 1. Spec promotion
 
-- [ ] 1a. Promote the Phase 4.7 inline draft from
+- [x] 1a. Promote the Phase 4.7 inline draft from
        `FITT_ROADMAP.md` to the three-file spec here:
        `requirements.md`, `design.md`, `tasks.md`.
-- [ ] 1b. Commit the spec separately from the first code
+- [x] 1b. Commit the spec separately from the first code
        slice so the rationale has its own change in history.
 
 ## 2. Local-shell interpreter probe
 
-- [ ] 2a. `gateway/src/gateway/tools/local_shell.py` with
+- [x] 2a. `gateway/src/gateway/tools/local_shell.py` with
        `ShellInterpreter` dataclass + `LocalShellProbe` class.
        Probe runs `echo probe` under each candidate
        (`bash -lc`, `C:\Program Files\Git\bin\bash.exe -lc`,
        `wsl -- bash -lc`) and returns the first success.
-- [ ] 2b. Tests (`tests/test_local_shell.py`): resolves to
+- [x] 2b. Tests (`tests/test_local_shell.py`): resolves to
        `bash` / `git-bash` / `wsl` / `none` in the four
        expected scenarios (monkeypatch subprocess so the
        test doesn't depend on the host shell layout).
-- [ ] 2c. Wire the probe at `create_app` time; cache the
+- [x] 2c. Wire the probe at `create_app` time; cache the
        result on `app.state.local_shell`. Log the resolved
        interpreter at boot (`fitt.gateway shell.interpreter`).
+       `FITT_SKIP_SHELL_PROBE=1` short-circuits the probe for
+       tests that don't exercise `project_shell`.
 
 ## 3. Deny-list additions
 

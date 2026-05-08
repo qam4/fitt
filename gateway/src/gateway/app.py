@@ -6,6 +6,8 @@ selected middleware without touching the rest of the stack.
 
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -130,6 +132,42 @@ def create_app(config: Config) -> FastAPI:
         app.state.ssh_key_path = None
 
     app.state.execution_backend = ExecutionBackend(ssh_key_path=app.state.ssh_key_path)
+
+    # Phase 4.7: resolve the local POSIX-shell interpreter at
+    # startup so shell-requiring tools don't discover "no bash
+    # on this Windows hub" on the first live request. The
+    # probe caches its result; later calls are free. An
+    # unresolvable hub (no bash, no Git Bash, no WSL) logs a
+    # WARNING here and attaches a ``label="none"`` interpreter —
+    # ``project_shell``'s local path fails with a readable
+    # error in that case; SSH-backed projects are unaffected.
+    #
+    # ``FITT_SKIP_SHELL_PROBE=1`` short-circuits the probe with
+    # a ``none`` interpreter. Intended for tests that don't
+    # exercise project_shell and shouldn't pay the 2s-ish
+    # subprocess cost per create_app. Production should never
+    # set this.
+    from .tools.local_shell import LocalShellProbe, ShellInterpreter
+
+    if os.environ.get("FITT_SKIP_SHELL_PROBE") == "1":
+        app.state.local_shell = ShellInterpreter.none()
+    else:
+        _shell_probe = LocalShellProbe()
+        try:
+            import asyncio as _asyncio
+
+            app.state.local_shell = _asyncio.run(_shell_probe.detect())
+        except RuntimeError as exc:
+            # ``asyncio.run`` complains if we're inside a
+            # running loop. Fall back to ``none`` so create_app
+            # stays synchronous and callable from any context.
+            import logging as _stdlog
+
+            _stdlog.getLogger("fitt.gateway").warning(
+                "shell.probe_skipped",
+                extra={"error": str(exc), "reason": "running in an event loop"},
+            )
+            app.state.local_shell = ShellInterpreter.none()
 
     tool_policy = ToolPolicy.from_config(config.tools)
     tool_registry = ToolRegistry(tool_policy)

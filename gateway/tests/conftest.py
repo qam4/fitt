@@ -30,4 +30,9 @@ def isolate_fitt_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))
     if os.name == "nt":
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    # Skip the Phase 4.7 shell probe by default. Tests that
+    # exercise project_shell or the probe itself unset or
+    # override this. Avoids a ~2s subprocess tax on every
+    # ``create_app`` call.
+    monkeypatch.setenv("FITT_SKIP_SHELL_PROBE", "1")
     return fake_home
