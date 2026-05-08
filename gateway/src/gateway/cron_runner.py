@@ -29,7 +29,7 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any
 
-from .agent_loop import run_agent_loop
+from .agent_loop import record_narrated_tool_call, run_agent_loop
 from .capabilities import build_capability_block
 from .cron import CronJob
 from .events import EventLog
@@ -131,6 +131,22 @@ class CronRunner:
                     "iterations": result.iterations,
                     "silent": job.silent,
                 },
+            )
+            # Narration detector: if the model emitted a tool-call
+            # shape in content instead of calling the tool, emit
+            # a ``tool_call_narrated`` event so the operator sees
+            # the failure in fitt inbox / events.jsonl rather
+            # than it being invisibly swallowed into the
+            # cron_completed body. Observed 2026-05-07 with
+            # qwen2.5-coder:14b; see
+            # :func:`gateway.capabilities.detect_narrated_tool_call`
+            # for the full rationale.
+            record_narrated_tool_call(
+                self._events,
+                result.assistant_text,
+                session_key=session_key,
+                alias=alias,
+                iterations=result.iterations,
             )
             # Persist the turn so the model remembers what
             # happened on this firing when the same cron fires

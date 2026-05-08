@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .audit import new_entry as new_audit_entry
-from .capabilities import parse_gap
+from .capabilities import detect_narrated_tool_call, parse_gap
 from .errors import NoBackendAvailable, UnknownAlias, UnknownTool
 from .router import AliasRouter
 from .tools import ApprovalDecision, Tool, ToolContext, ToolRegistry, ToolResult
@@ -297,6 +297,68 @@ def record_gap(gap_log: Any, assistant_text: str, session_key: str) -> None:
         gap_log.append(gap)
     except Exception as exc:
         _log.warning("capabilities.gap_append_failed", extra={"error": str(exc)})
+
+
+# --------------------------------------------------------------- narrated tool calls
+
+
+def record_narrated_tool_call(
+    events: Any,
+    assistant_text: str,
+    *,
+    session_key: str,
+    alias: str,
+    iterations: int,
+) -> None:
+    """Emit a ``tool_call_narrated`` event when the model wrote
+    a JSON-fenced tool call in its final ``content`` instead of
+    emitting a real ``tool_calls`` structure.
+
+    Observed 2026-05-07 with qwen2.5-coder:14b: cron firings
+    produced replies like ``I'll call send_message now\\n```json
+    \\n{"name": "send_message", ...}\\n``` `` with no real
+    tool_calls. The agent loop treats that as a natural stop
+    (no calls to execute, reply complete) and the narration
+    ends up as the user-facing ``cron_completed.body``.
+
+    Emitting an event rather than silently mutating the reply
+    follows the roadmap's "fail loud" principle: the operator
+    sees in events.jsonl / fitt inbox that the model failed at
+    tool-calling, and can decide how to respond (switch models,
+    tighten prompts, ignore for this model).
+
+    Swallows all errors — observability should never break the
+    turn that succeeded modulo the narration."""
+    if not assistant_text or events is None:
+        return
+    try:
+        narrated = detect_narrated_tool_call(assistant_text)
+    except Exception as exc:
+        _log.debug("capabilities.detect_narrated_failed", extra={"error": str(exc)})
+        return
+    if narrated is None:
+        return
+    try:
+        # Local import mirrors the pattern used by the cron
+        # runner and detach worker — keeps the agent-loop module
+        # event-log-agnostic so tests can supply a simple mock.
+        from .events import new_entry as new_event
+
+        events.append(
+            new_event(
+                kind="tool_call_narrated",
+                session_key=session_key,
+                title=f"model narrated {narrated.tool_name or 'tool'} call as text",
+                body=narrated.raw_fence,
+                meta={
+                    "alias": alias,
+                    "tool_name": narrated.tool_name,
+                    "iterations": iterations,
+                },
+            )
+        )
+    except Exception as exc:
+        _log.warning("capabilities.narrated_emit_failed", extra={"error": str(exc)})
 
 
 # --------------------------------------------------------------- the loop

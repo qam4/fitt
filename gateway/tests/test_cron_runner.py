@@ -508,3 +508,80 @@ async def test_default_alias_falls_back_to_first_when_no_fitt_default(
     app = create_app(cfg)
     runner: CronRunner = app.state.cron_runner
     assert runner._default_alias() == "my-custom-alias"
+
+
+async def test_fire_detects_narrated_tool_call_in_reply(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard for the 2026-05-07 "qwen-coder narrates
+    tool JSON instead of calling it" failure mode.
+
+    We stub the LLM to return the exact narration pattern
+    observed live — no real tool_calls, just the JSON in
+    content. The cron firing should still produce a
+    cron_completed event (the body is what it is; we don't
+    mutate the reply), AND a tool_call_narrated event so the
+    operator can see in fitt inbox that this happened."""
+
+    narrated_content = (
+        "I'll call send_message now.\n"
+        "\n"
+        "```json\n"
+        '{"name": "send_message", "arguments": {"text": "reminder"}}\n'
+        "```"
+    )
+
+    async def fake(**_: Any) -> Any:
+        return _fake_completion(content=narrated_content)
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    runner: CronRunner = app.state.cron_runner
+    job = CronJob(
+        id="narr",
+        name="narration test",
+        message="just remind me",
+        schedule=CronSchedule(kind="every", every_secs=60),
+    )
+    await runner.fire(job)
+
+    events = app.state.events.read()
+    kinds = [e.kind for e in events]
+
+    # cron_completed still lands — the narration doesn't
+    # invalidate the firing; the body just happens to be
+    # unhelpful. The operator-facing signal is the parallel
+    # tool_call_narrated event.
+    assert "cron_completed" in kinds
+    assert "tool_call_narrated" in kinds
+
+    narrated = next(e for e in events if e.kind == "tool_call_narrated")
+    assert narrated.meta["tool_name"] == "send_message"
+    assert "send_message" in narrated.body
+    assert narrated.session_key.startswith("cron:narr:")
+
+
+async def test_fire_happy_path_does_not_emit_narration_event(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counter-test: a plain natural-language reply must NOT
+    trip the narration detector. No tool_call_narrated event
+    should land when the model replied normally."""
+
+    async def fake(**_: Any) -> Any:
+        return _fake_completion(content="Done. Test works!")
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    runner: CronRunner = app.state.cron_runner
+    job = CronJob(
+        id="clean",
+        name="clean reply",
+        message="say hi",
+        schedule=CronSchedule(kind="every", every_secs=60),
+    )
+    await runner.fire(job)
+
+    kinds = [e.kind for e in app.state.events.read()]
+    assert "cron_completed" in kinds
+    assert "tool_call_narrated" not in kinds

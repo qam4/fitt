@@ -31,6 +31,7 @@ from pydantic import ValidationError
 from .agent_loop import (
     _MAX_TOOL_CALL_ITERATIONS,
     record_gap,
+    record_narrated_tool_call,
     response_to_dict,
     run_agent_loop,
 )
@@ -641,6 +642,18 @@ async def _run_tool_loop(
                 error=str(exc),
             )
     record_gap(capability_gaps, assistant_text, session_id)
+    # Narrated-tool-call detector: emits an event when the model
+    # wrote tool JSON in content instead of using the tool_calls
+    # channel. Visible in fitt inbox so operators notice when a
+    # local model is silently failing the tool-use channel.
+    # See capabilities.detect_narrated_tool_call for the rationale.
+    record_narrated_tool_call(
+        events,
+        assistant_text,
+        session_key=session_id,
+        alias=parsed.model,
+        iterations=result.iterations,
+    )
 
     backend_header = backend_tag(model_used) if model_used else "(unknown)"
     log_request(

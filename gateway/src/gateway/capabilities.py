@@ -280,6 +280,86 @@ def parse_gap(
     )
 
 
+# --------------------------------------------------------------- narrated tool calls
+
+
+@dataclass(frozen=True, slots=True)
+class NarratedToolCall:
+    """A JSON-shaped tool-call that the model emitted in
+    ``content`` instead of the API's ``tool_calls`` channel.
+
+    Observed live 2026-05-07 with qwen2.5-coder:14b: cron
+    firings produced replies like
+    ``I'll call send_message now\\n```json\\n{"name": ..., "arguments": {...}}\\n``` ``
+    with no real ``tool_calls`` structure. The agent loop treats
+    this as a natural stop (no tool calls, reply complete), the
+    cron_runner records it as ``cron_completed.body``, and the
+    user gets a JSON dump pushed to their phone — not what they
+    asked for.
+
+    We detect the pattern so operators see the failure mode in
+    audit/event logs and can decide whether to (a) switch models
+    (the operator's choice, in line with "models are configuration"),
+    (b) tighten prompting, or (c) treat it as expected for a
+    local-only setup where cloud escalation is off the table."""
+
+    tool_name: str
+    """The ``name`` field inside the narrated JSON. Empty string
+    if the detector matched the shape but couldn't extract a
+    name cleanly."""
+
+    raw_fence: str
+    """The full fenced block that triggered the match, up to ~500
+    chars. Useful when the pattern triggers on a weird emission
+    we didn't anticipate."""
+
+
+# Backtick fence containing a JSON object that has a "name" key
+# and (optionally) an "arguments" key. Permissive on whitespace
+# and the inner JSON shape — we're looking for the *pattern*,
+# not parsing it rigorously. The model doesn't always emit valid
+# JSON inside the fence, and a too-strict detector misses the
+# exact emissions we want to catch.
+_NARRATED_TOOL_RE = re.compile(
+    r"""
+    ```\s*(?:json)?\s*\n             # opening fence, optional 'json' tag
+    (?P<body>
+        \{                            # object open
+        [^`]*?                        # any non-backtick run (non-greedy)
+        "name"\s*:\s*"(?P<name>[^"]+)"
+        [^`]*?                        # arguments, etc.
+        \}
+    )
+    \s*\n```                          # closing fence
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+
+
+def detect_narrated_tool_call(assistant_text: str) -> NarratedToolCall | None:
+    """Return a :class:`NarratedToolCall` if ``assistant_text``
+    contains a JSON-fenced tool-call-shaped payload; else None.
+
+    Callers should only invoke this when the model's response
+    had no actual ``tool_calls`` — a reply that includes BOTH
+    a real tool call and a narrated one is the model being
+    chatty, not failing. The caller is responsible for that
+    precondition; this function looks at text only.
+
+    First match wins. A long reply with multiple narrated calls
+    is unusual; we record the first and treat the rest as
+    collateral until we see a pattern that demands otherwise.
+    """
+    if not assistant_text:
+        return None
+    m = _NARRATED_TOOL_RE.search(assistant_text)
+    if m is None:
+        return None
+    raw = (m.group("body") or "")[:500]
+    name = m.group("name") or ""
+    return NarratedToolCall(tool_name=name, raw_fence=raw)
+
+
 def _tidy(s: str) -> str:
     """Clean up one captured phrase.
 

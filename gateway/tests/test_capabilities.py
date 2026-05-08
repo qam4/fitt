@@ -24,6 +24,7 @@ from gateway.capabilities import (
     CapabilityGapLog,
     GapReport,
     build_capability_block,
+    detect_narrated_tool_call,
     parse_gap,
     rank_gaps,
 )
@@ -300,3 +301,73 @@ def test_rank_ties_broken_by_recency() -> None:
 
 def test_rank_empty() -> None:
     assert rank_gaps([]) == []
+
+
+# --------------------------------------------------------------- detect_narrated_tool_call
+
+
+def test_detect_narrated_tool_call_matches_exact_live_emission() -> None:
+    """The exact emission pattern observed 2026-05-07 from
+    qwen2.5-coder:14b during a cron firing. The model announces
+    it will call a tool, then writes the tool JSON in a fenced
+    block — but emits no real tool_calls structure."""
+    reply = (
+        "I'll create that cron now.\n"
+        "\n"
+        "```json\n"
+        "{\n"
+        '  "name": "cron_add",\n'
+        '  "arguments": {\n'
+        '    "schedule_spec": "at 2026-05-06T13:00:00",\n'
+        '    "message": "It is time to go have lunch."\n'
+        "  }\n"
+        "}\n"
+        "```"
+    )
+    got = detect_narrated_tool_call(reply)
+    assert got is not None
+    assert got.tool_name == "cron_add"
+    assert "cron_add" in got.raw_fence
+
+
+def test_detect_narrated_tool_call_matches_send_message_shape() -> None:
+    """Same pattern, different tool. Another live emission."""
+    reply = '```json\n{"name": "send_message", "arguments": {"text": "Test 7 works"}}\n```'
+    got = detect_narrated_tool_call(reply)
+    assert got is not None
+    assert got.tool_name == "send_message"
+
+
+def test_detect_narrated_tool_call_ignores_plain_reply() -> None:
+    """Normal natural-language replies must not false-positive."""
+    assert detect_narrated_tool_call("Done. I've scheduled that for 2 PM.") is None
+    assert detect_narrated_tool_call("") is None
+
+
+def test_detect_narrated_tool_call_ignores_code_fences_without_name_field() -> None:
+    """Many model replies legitimately contain fenced JSON — a
+    data dump, a config example, an illustrative snippet. These
+    should not trip the detector.
+
+    Rule: the fenced body must contain a top-level ``"name"``
+    key that looks like a tool name. Data examples lack that."""
+    reply = 'Here\'s the config shape:\n```json\n{"server": {"port": 8421}, "timezone": "UTC"}\n```'
+    assert detect_narrated_tool_call(reply) is None
+
+
+def test_detect_narrated_tool_call_returns_first_match_only() -> None:
+    """A reply with two narrated calls (rare but possible)
+    returns only the first. We can iterate on this rule if we
+    see a reason to."""
+    reply = (
+        "```json\n"
+        '{"name": "first_tool", "arguments": {}}\n'
+        "```\n"
+        "and also\n"
+        "```json\n"
+        '{"name": "second_tool", "arguments": {}}\n'
+        "```"
+    )
+    got = detect_narrated_tool_call(reply)
+    assert got is not None
+    assert got.tool_name == "first_tool"
