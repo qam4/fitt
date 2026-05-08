@@ -778,18 +778,41 @@ def audit_verify(config_file: Path | None) -> None:
         "duration (1h, 30m, 7d)."
     ),
 )
+@click.option(
+    "-f",
+    "--follow",
+    is_flag=True,
+    help=(
+        "After printing the initial window, keep watching the "
+        "audit file for new entries. Filters apply to follow "
+        "output too. Ctrl-C exits cleanly."
+    ),
+)
+@click.option(
+    "--poll-interval",
+    type=float,
+    default=0.5,
+    help="Seconds between file-stat polls in follow mode (default: 0.5).",
+)
 @click.option("--config-file", type=click.Path(path_type=Path), default=None)
 def audit_tail(
     limit: int,
     tool: str | None,
     session: str | None,
     since: str | None,
+    follow: bool,
+    poll_interval: float,
     config_file: Path | None,
 ) -> None:
-    """Print recent audit entries as a compact table."""
-    from datetime import UTC, datetime
-    from time import time as _now
+    """Print recent audit entries as a compact table.
 
+    With ``-f`` / ``--follow``, after printing the initial
+    window the command keeps watching the audit file and
+    streams new entries as they appear. The filters (``--tool``,
+    ``--session``, ``--since``) apply to streamed output too, so
+    ``fitt audit tail -f --tool project_shell`` is a live view
+    of shell calls running on the hub.
+    """
     from .audit import AuditLog, default_audit_paths
     from .config import fitt_home
 
@@ -816,26 +839,59 @@ def audit_tail(
 
     filtered = [e for e in entries if matches(e)]
     tail = filtered[-limit:]
-    if not tail:
+    if not tail and not follow:
         _console.print(
             f"[dim](no entries match; log has {len(entries)} total, "
             f"{len(filtered)} after filters)[/dim]"
         )
         return
     for entry in tail:
-        ts_str = datetime.fromtimestamp(entry.get("ts", _now()), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        decision = entry.get("decision", "?")
-        colour = "green" if entry.get("ok") else "red"
-        _console.print(
-            f"[dim]{ts_str}[/dim] "
-            f"[bold]{entry.get('tool', '?'):<20}[/bold] "
-            f"[{colour}]{decision:<18}[/{colour}] "
-            f"client={entry.get('client', '?')} "
-            f"session={entry.get('session_key', '?')} "
-            f"duration_ms={entry.get('duration_ms', 0)}"
-        )
-        if entry.get("error"):
-            _console.print(f"  [red]error:[/red] {entry['error'][:200]}")
+        _print_audit_entry(entry)
+
+    if not follow:
+        return
+
+    # Follow mode. Track the total count we've printed; poll the
+    # log for new entries and emit whichever new ones pass the
+    # filter. Ctrl-C is caught so the user gets a clean exit.
+    seen_count = len(entries)
+    try:
+        while True:
+            import time as _time
+
+            _time.sleep(poll_interval)
+            fresh = audit_log.iter_entries()
+            if len(fresh) <= seen_count:
+                continue
+            new = fresh[seen_count:]
+            seen_count = len(fresh)
+            for entry in new:
+                if matches(entry):
+                    _print_audit_entry(entry)
+    except KeyboardInterrupt:
+        _console.print("[dim]interrupted.[/dim]")
+
+
+def _print_audit_entry(entry: dict[str, Any]) -> None:
+    """Render one audit entry to the console in the compact
+    ``fitt audit tail`` shape. Factored out so both initial
+    and follow paths use the same formatter."""
+    from datetime import UTC, datetime
+    from time import time as _now
+
+    ts_str = datetime.fromtimestamp(entry.get("ts", _now()), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    decision = entry.get("decision", "?")
+    colour = "green" if entry.get("ok") else "red"
+    _console.print(
+        f"[dim]{ts_str}[/dim] "
+        f"[bold]{entry.get('tool', '?'):<20}[/bold] "
+        f"[{colour}]{decision:<18}[/{colour}] "
+        f"client={entry.get('client', '?')} "
+        f"session={entry.get('session_key', '?')} "
+        f"duration_ms={entry.get('duration_ms', 0)}"
+    )
+    if entry.get("error"):
+        _console.print(f"  [red]error:[/red] {entry['error'][:200]}")
 
 
 def _parse_since(s: str) -> float:
