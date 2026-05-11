@@ -153,6 +153,11 @@ Read them before making structural changes.
   the criteria (OpenAI-compatible tool_calls, BFCL scores,
   architecture signal) and a worked example from the 2026-05
   `fitt-smart` re-evaluation.
+- [`docs/prior-art.md`](./prior-art.md) — watch-list of
+  projects in FITT's design space (MeshClaw, OpenClaw,
+  Hermes Agent, coding CLIs, LLM gateways). What we've
+  borrowed, what we haven't, and why FITT still exists
+  separately.
 - [`gateway/README.md`](../gateway/README.md) — config reference,
   HTTP API, CLI, troubleshooting.
 - [`FITT_ROADMAP.md`](../FITT_ROADMAP.md) — guiding principles,
