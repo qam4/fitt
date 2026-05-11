@@ -401,7 +401,8 @@ def _record_gap(request: Request, assistant_text: str, session_key: str) -> None
     and append to the log. All errors are swallowed with a
     warning — gap logging must never break a successful chat."""
     gap_log = getattr(request.app.state, "capability_gaps", None)
-    record_gap(gap_log, assistant_text, session_key)
+    tool_registry = getattr(request.app.state, "tool_registry", None)
+    record_gap(gap_log, assistant_text, session_key, tool_registry=tool_registry)
 
 
 async def _peek_latest_pending_tool(approval: Any, session_id: str) -> tuple[str, str]:
@@ -664,7 +665,12 @@ async def _run_tool_loop(
                 session_id=session_id,
                 error=str(exc),
             )
-    record_gap(capability_gaps, assistant_text, session_id)
+    record_gap(
+        capability_gaps,
+        assistant_text,
+        session_id,
+        tool_registry=tool_registry,
+    )
     # Narrated-tool-call detector: emits an event when the model
     # wrote tool JSON in content instead of using the tool_calls
     # channel. Visible in fitt inbox so operators notice when a

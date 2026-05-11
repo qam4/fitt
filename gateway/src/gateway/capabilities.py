@@ -107,7 +107,7 @@ def build_capability_block(registry: ToolRegistry) -> str:
 
     # Trailer: the preamble + tool list above, plus this block,
     # are what the model sees every request. Keep the trailer
-    # small but informative. Two parts:
+    # small but informative. Three parts:
     #
     # 1. How tool approvals actually work. Without this the model
     #    has no mental model for the "I called an ask-bucket
@@ -118,7 +118,18 @@ def build_capability_block(registry: ToolRegistry) -> str:
     #    the client supports; the model's job is just to call
     #    the tool and wait for the result.
     #
-    # 2. How to report a missing capability. Unchanged from
+    # 2. Honest reporting. The 2026-05-10 Telegram session ended
+    #    every model turn with some variant of "You now have a
+    #    fully tested, production-grade tool!" regardless of
+    #    whether anything actually worked. Success theater
+    #    camouflages Problem C (self-deception) — a failed turn
+    #    that announces itself as a triumph is harder to catch
+    #    than a failed turn that says so. The research (see
+    #    hallucinations-and-poisoning.md) says prompting alone
+    #    doesn't eliminate this behaviour, but it reduces
+    #    magnitude, and costs us nothing if it doesn't help.
+    #
+    # 3. How to report a missing capability. Unchanged from
     #    Phase 4; the gap log consumes this format.
     trailer_lines = [
         "",
@@ -138,6 +149,14 @@ def build_capability_block(registry: ToolRegistry) -> str:
         "approval procedure. The UI handles it. A brief note "
         'like "I\'ll create that cron now" before the tool call '
         "is fine; a full confirmation ritual is not.",
+        "",
+        "[Honest reporting]",
+        "Report what actually happened, including partial "
+        "progress and failures. Do not frame incomplete work "
+        "as complete, do not celebrate outcomes that haven't "
+        "been verified, and do not claim to have done things "
+        "you only described. No victory laps. If a tool call "
+        "failed or was never made, say so.",
         "",
         "When a request needs a capability not listed above, "
         "reply in this format: \"I'd need a tool to <action>. "

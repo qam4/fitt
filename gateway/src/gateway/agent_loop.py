@@ -289,10 +289,33 @@ async def execute_tool_call(
 # --------------------------------------------------------------- capability gaps
 
 
-def record_gap(gap_log: Any, assistant_text: str, session_key: str) -> None:
+def record_gap(
+    gap_log: Any,
+    assistant_text: str,
+    session_key: str,
+    *,
+    tool_registry: Any = None,
+) -> None:
     """Append a capability-gap entry if the assistant's final
     reply contains the standard gap phrasing. Swallowed errors
-    keep gap logging from ever breaking a successful turn."""
+    keep gap logging from ever breaking a successful turn.
+
+    When ``tool_registry`` is provided and the parsed gap's
+    ``suggestion`` matches a tool that's already registered,
+    skip the append and log ``capabilities.gap_false_positive``
+    instead. This catches the 2026-05-10 failure mode where a
+    different bug (argument-name errors) made the model fall
+    back to the gap-reporter phrasing for tools it actually
+    had, polluting the log with entries like "I'd need a tool
+    to read a file. Consider adding read_file." for a
+    read_file that was registered the entire time.
+
+    The filter is suggestion-only. A short-form gap
+    ("I'd need a tool to X." with no "Consider adding")
+    logs as before — we can't tell which tool it means.
+    That's intentional: false-negative (missing some noise
+    entries) beats false-positive (suppressing real gap
+    reports that just happened not to include a suggestion)."""
     if not assistant_text or gap_log is None:
         return
     try:
@@ -302,6 +325,40 @@ def record_gap(gap_log: Any, assistant_text: str, session_key: str) -> None:
         return
     if gap is None:
         return
+    if tool_registry is not None and gap.suggestion:
+        # Suggestion text is often prose ("Consider adding
+        # ``read_file``" or "consider a read_file tool"). Strip
+        # punctuation/backticks and check each word against
+        # the registry — if any word matches a registered tool
+        # name, this is a false positive.
+        suggestion_tokens = {
+            token.strip("`'\".,;:!?()[]{}").lower() for token in gap.suggestion.split()
+        }
+        try:
+            registered_names = {n.lower() for n in tool_registry.list_names()}
+        except Exception as exc:
+            _log.debug(
+                "capabilities.registry_check_failed",
+                extra={"error": str(exc)},
+            )
+            registered_names = set()
+        collision = suggestion_tokens & registered_names
+        if collision:
+            _log.info(
+                "capabilities.gap_false_positive",
+                extra={
+                    "session_key": session_key,
+                    "action": gap.action,
+                    "suggestion": gap.suggestion,
+                    "matched_tool": sorted(collision)[0],
+                    "hint": (
+                        "model used gap-reporter phrasing for a "
+                        "tool that is already registered; not "
+                        "appending to capability_gaps.log"
+                    ),
+                },
+            )
+            return
     try:
         gap_log.append(gap)
     except Exception as exc:
