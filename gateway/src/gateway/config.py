@@ -245,7 +245,7 @@ class AllowedToken(BaseModel):
     # Optional client tag — drives per-client approval defaults in
     # Phase 4+. When absent, the client is treated as "webui" (least
     # trusted) so older secrets files stay safe by default.
-    client: Literal["ide", "telegram", "webui", "cli"] | None = None
+    client: Literal["ide", "telegram", "webui", "cli", "coding-cli"] | None = None
 
 
 class TelegramSecrets(BaseModel):

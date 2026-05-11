@@ -78,10 +78,10 @@ end-to-end decide-handler flow the Telegram bot uses.
 
 ## FITT capability block leaks into coding-CLI clients (Aider)
 
-**First observed:** 2026-05-11.
-**Tag:** design, medium pain. Cross-references the Phase 4
-"tool forwarding, not replacement" decision and the prompt-
-injection concerns in Phase 4.7's threat model.
+**First observed:** 2026-05-11. **Fixed:** 2026-05-11.
+**Tag:** design (closed), medium pain. Cross-references the
+Phase 4 "tool forwarding, not replacement" decision and the
+prompt-injection concerns in Phase 4.7's threat model.
 
 Pointed Aider at FITT as its model backend. Aider's own
 system prompt asked something shaped like "what tools do you
@@ -133,6 +133,44 @@ This is the concrete answer to the "how much does the coding
 framework interfere when FITT is used in an IDE or CLI" open
 question. Router mode for known coding agents; agent mode
 for everything else.
+
+**Fix landed 2026-05-11:** A new `coding-cli` client tag joins
+`{ide, telegram, webui, cli}` as an accepted value for
+`X-FITT-Client` and the `client:` field on tokens. Single
+source of truth lives at `gateway.auth.is_router_mode_client()`;
+`chat.py`'s chat handler calls it once at request entry and
+branches:
+
+* Router mode (`coding-cli`): skip memory load, skip
+  capability-block construction, skip `_inject_memory`, skip
+  `_inject_fitt_tools`, and skip the FITT tool loop
+  altogether. The request body reaches LiteLLM as the client
+  sent it (minus the client's concrete `model` field, replaced
+  by the alias's backend model id — that's the whole point).
+  Approval middleware isn't consulted because no FITT tool
+  runs.
+* Agent mode (everything else — today's behaviour): unchanged.
+
+What FITT still does for router-mode clients: alias resolution
+(`fitt-smart` → the configured backend), dispatch via
+LiteLLM, cost tracking, audit-log entry for the model call,
+fallback handling, `X-FITT-Backend` header. What the client's
+own agent owns: system prompt, tool schemas, tool execution,
+approval UX, memory.
+
+Default for unclassified clients stays `webui` (from the auth
+middleware's token resolution), which is NOT router mode —
+safer toward visibility than silently stripping every FITT
+feature for a client that hasn't opted in. 9 tests pin the
+no-system-message, no-FITT-tools-merged, no-memory-leak,
+no-FITT-tool-loop, still-resolves-aliases,
+still-rejects-concrete-model-ids contract, plus the Telegram
+regression guard and the unclassified-client default.
+
+Operator setup for Aider: add
+`X-FITT-Client: coding-cli` to Aider's `extra_headers` config,
+or tag the Aider token with `client: coding-cli` in
+`secrets.yaml`.
 
 ---
 

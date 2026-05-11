@@ -36,6 +36,7 @@ from .agent_loop import (
     response_to_dict,
     run_agent_loop,
 )
+from .auth import is_router_mode_client
 from .capabilities import build_capability_block
 from .config import Config
 from .cost import estimate_cost
@@ -787,13 +788,32 @@ async def chat_completions(request: Request) -> Response:
     session_id = resolve_session_id(request, session_registry)
     started = time.perf_counter()
 
+    client = getattr(request.state, "client", "unknown")
+    router_mode = is_router_mode_client(client)
+
     # ---- memory load + injection ---------------------------------
-    ctx = memory.load_context(session_id)
-    # Capability block goes first in the system prefix so the
-    # model always knows what tools are live. Falls back to an
-    # empty string (no block) when no tools are registered yet.
-    capability_block = build_capability_block(tool_registry) if tool_registry.list_names() else ""
-    request_body = _inject_memory(parsed.to_litellm_body(), ctx, capability_block=capability_block)
+    # Router-mode clients (Aider, Claude Code, Cursor, ...) own
+    # their own agent loop and their own system prompt. Injecting
+    # FITT's capability block, identity, or lessons into their
+    # request actively confuses the client's agent (see the Aider
+    # collision in docs/observed-issues.md). Skip the injection
+    # entirely; the client's system prompt reaches the model
+    # verbatim.
+    if router_mode:
+        ctx = LoadedContext(system_prefix="", history_messages=[])
+        capability_block = ""
+        request_body = parsed.to_litellm_body()
+    else:
+        ctx = memory.load_context(session_id)
+        # Capability block goes first in the system prefix so the
+        # model always knows what tools are live. Falls back to an
+        # empty string (no block) when no tools are registered yet.
+        capability_block = (
+            build_capability_block(tool_registry) if tool_registry.list_names() else ""
+        )
+        request_body = _inject_memory(
+            parsed.to_litellm_body(), ctx, capability_block=capability_block
+        )
 
     # The memory'd body will be dispatched; we remember the original
     # user message to persist later (not the history copy).
@@ -806,12 +826,16 @@ async def chat_completions(request: Request) -> Response:
     # (Telegram, Open WebUI, curl) don't touch either field and
     # get the original streaming path unchanged. This keeps
     # backward compatibility; Phase 3.5 callers see no difference.
+    #
+    # Router-mode clients are never routed through the FITT tool
+    # loop regardless of their ``tools`` field — the client's
+    # agent is driving, FITT is a thin pass-through.
     wants_tools = ("tools" in request_body) or ("tool_choice" in request_body)
     client_disabled = (
         wants_tools and not request_body.get("tools") and not request_body.get("tool_choice")
     )
     tools_available = bool(tool_registry.list_names())
-    use_tools = wants_tools and tools_available and not client_disabled
+    use_tools = wants_tools and tools_available and not client_disabled and not router_mode
 
     if use_tools:
         # Force non-streaming for tool-using turns so we can inspect
