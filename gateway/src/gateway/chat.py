@@ -30,6 +30,7 @@ from pydantic import ValidationError
 
 from .agent_loop import (
     _MAX_TOOL_CALL_ITERATIONS,
+    record_claim_mismatch,
     record_gap,
     record_narrated_tool_call,
     response_to_dict,
@@ -687,6 +688,19 @@ async def _run_tool_loop(
         iterations=result.iterations,
         tools_were_offered=True,
         had_real_tool_calls=bool(result.tool_calls_for_memory),
+    )
+    # Receipt cross-check: emit a ``tool_claim_mismatch`` event
+    # when the assistant reply claims it ran a tool that
+    # doesn't appear in this turn's tool_calls_for_memory. The
+    # 2026-05-10 22:48 failure mode: "Yes, I executed the
+    # edit_file tool" with zero matching runs. See
+    # gateway/claim_check.py for the parsing rules.
+    record_claim_mismatch(
+        events,
+        assistant_text,
+        session_key=session_id,
+        alias=parsed.model,
+        tool_calls_for_memory=result.tool_calls_for_memory,
     )
 
     backend_header = backend_tag(model_used) if model_used else "(unknown)"

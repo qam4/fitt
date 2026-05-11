@@ -46,6 +46,7 @@ from typing import Any
 
 from .audit import new_entry as new_audit_entry
 from .capabilities import detect_narrated_tool_call, is_tool_use_expected_but_none, parse_gap
+from .claim_check import parse_claims, verify_claims
 from .errors import NoBackendAvailable, UnknownAlias, UnknownTool
 from .memory import PersistedToolCall
 from .router import AliasRouter
@@ -459,6 +460,85 @@ def record_narrated_tool_call(
         )
     except Exception as exc:
         _log.warning("capabilities.narrated_emit_failed", extra={"error": str(exc)})
+
+
+# --------------------------------------------------------------- claim mismatch
+
+
+def record_claim_mismatch(
+    events: Any,
+    assistant_text: str,
+    *,
+    session_key: str,
+    alias: str,
+    tool_calls_for_memory: list[PersistedToolCall] | None,
+) -> None:
+    """Emit a ``tool_claim_mismatch`` event when the assistant
+    reply claims it did something the agent loop has no record
+    of running this turn.
+
+    Minimum-viable receipt cross-check — see
+    :mod:`gateway.claim_check` for the parsing rules. Catches
+    the 2026-05-10 22:48 failure mode: "Yes, I executed the
+    edit_file tool" when no tool calls ran this turn. Doesn't
+    attempt content-verification (the model quoted text that
+    doesn't match the tool result) — that's deferred.
+
+    One event per mismatch. A reply claiming two un-grounded
+    tool calls produces two events, each naming the specific
+    claim + snippet so the operator can tell them apart in
+    ``fitt inbox``.
+
+    Swallows all errors — observability must not break a
+    successful turn."""
+    if events is None or not assistant_text:
+        return
+    try:
+        claims = parse_claims(assistant_text)
+    except Exception as exc:
+        _log.debug("claim_check.parse_failed", extra={"error": str(exc)})
+        return
+    if not claims:
+        return
+    tools_that_ran = [
+        (tc.tool_name if hasattr(tc, "tool_name") else str(tc))
+        for tc in (tool_calls_for_memory or [])
+    ]
+    try:
+        mismatches = verify_claims(claims, tools_that_ran)
+    except Exception as exc:
+        _log.debug("claim_check.verify_failed", extra={"error": str(exc)})
+        return
+    if not mismatches:
+        return
+    try:
+        # Local import mirrors record_narrated_tool_call — keeps
+        # the module event-log-agnostic so tests can inject
+        # simple mocks.
+        from .events import new_entry as new_event
+
+        for mismatch in mismatches:
+            events.append(
+                new_event(
+                    kind="tool_claim_mismatch",
+                    session_key=session_key,
+                    title=(
+                        f"model claimed {mismatch.claim.tool_name!r} but it didn't run this turn"
+                    ),
+                    body=mismatch.claim.snippet,
+                    meta={
+                        "alias": alias,
+                        "claimed_tool": mismatch.claim.tool_name,
+                        "claim_kind": mismatch.claim.kind,
+                        "tools_that_ran": mismatch.tools_that_ran,
+                    },
+                )
+            )
+    except Exception as exc:
+        _log.warning(
+            "claim_check.emit_failed",
+            extra={"error": str(exc)},
+        )
 
 
 # --------------------------------------------------------------- the loop

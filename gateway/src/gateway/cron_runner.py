@@ -29,7 +29,7 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any
 
-from .agent_loop import record_narrated_tool_call, run_agent_loop
+from .agent_loop import record_claim_mismatch, record_narrated_tool_call, run_agent_loop
 from .capabilities import build_capability_block
 from .cron import CronJob
 from .events import EventLog
@@ -155,6 +155,16 @@ class CronRunner:
                 iterations=result.iterations,
                 tools_were_offered=True,
                 had_real_tool_calls=bool(result.tool_calls_for_memory),
+            )
+            # Receipt cross-check: catches the self-deception
+            # mode where the model reports "I ran X" but no X
+            # ran this firing. See gateway/claim_check.py.
+            record_claim_mismatch(
+                self._events,
+                result.assistant_text,
+                session_key=session_key,
+                alias=alias,
+                tool_calls_for_memory=result.tool_calls_for_memory,
             )
             # Persist the turn so the model remembers what
             # happened on this firing when the same cron fires
