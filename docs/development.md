@@ -140,6 +140,14 @@ Read them before making structural changes.
   FITT. One page, ~30 min.
 - [`docs/faq.md`](./faq.md) — recurring user questions.
 - [`docs/development.md`](./development.md) — this file.
+- [`docs/hallucinations-and-poisoning.md`](./hallucinations-and-poisoning.md)
+  — research survey and design proposals for agent
+  reliability (hallucination, context poisoning, self-
+  deception, visibility).
+- [`docs/observed-issues.md`](./observed-issues.md) — running
+  log of friction and small design problems from live use.
+  When an entry starts to hurt enough, promote to a spec or
+  roadmap entry.
 - [`gateway/README.md`](../gateway/README.md) — config reference,
   HTTP API, CLI, troubleshooting.
 - [`FITT_ROADMAP.md`](../FITT_ROADMAP.md) — guiding principles,
