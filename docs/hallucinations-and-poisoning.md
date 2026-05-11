@@ -521,6 +521,32 @@ referenced below where relevant but the fix plans live there.
    instead of the hundredth turn of a chat session. Estimate:
    hours.
 
+   *Shipped 2026-05-11.* `gateway/src/gateway/alias_probe.py`
+   fires a canary tool-call request per alias at startup using
+   a synthetic `_fitt_probe` tool in the `tools` array and
+   `tool_choice="auto"`. Shape-level classification: real
+   `tool_calls` in the response → `ok`; text-only reply over 30
+   chars with no `tool_calls` → `narrated` (the exact 2026-05-07
+   qwen2.5-coder and 2026-05-10 qwen3-next failure mode);
+   `finish_reason=length` → `truncated`; transport failure or
+   timeout → `transport_error`. Wired as an
+   `@app.on_event("startup")` hook that runs probes concurrently
+   via `asyncio.gather` and emits one ERROR log per non-`ok`
+   alias with the concrete model id, finish reason, and a
+   200-char preview of the narrated reply. Probes skip aliases
+   whose backend needs an api key that's missing (already caught
+   by the api_keys check; re-probing would just log a duplicate
+   401). Disable for tests via `server.boot_probe_enabled =
+   false`; timeout configurable via
+   `server.boot_probe_timeout_s` (default 10s). 10 tests cover
+   the `ok` / `narrated` / sentinel-shape / truncated /
+   transport / timeout / batch / skip paths and a regression
+   for the 2026-05-10 sentinel narration shape specifically.
+   Extracts helpers from `agent_loop.py`
+   (`extract_tool_calls`, `assistant_message_from_response`,
+   `response_to_dict`) so the probe's classification stays byte-
+   for-byte aligned with the runtime tool-call loop.
+
 2. **Per-turn event stream (addresses Problem D; force-multiplies
    everything below it).** Define an event schema: `thinking`,
    `tool_started`, `tool_completed`, `approval_requested`,

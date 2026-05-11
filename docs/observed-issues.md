@@ -221,6 +221,21 @@ reliability probe per alias — is deferred. It needs real
 LLM dispatch at startup (network, token cost, timeout
 handling) and is bigger than this half-day item.
 
+**Fix landed 2026-05-11 (both halves of Principle 11
+backlog).** The tool-call reliability probe shipped as
+`gateway/src/gateway/alias_probe.py`: a canary request per
+alias at startup with a synthetic `_fitt_probe` tool in the
+`tools` array, shape-level classification of the response,
+one ERROR log per narrated / truncated / transport-failed
+alias. Would have caught the 2026-05-07 qwen2.5-coder
+narration and the 2026-05-10 qwen3-next sentinel pattern on
+the first gateway boot instead of on the first live
+Telegram turn. Sized to the same half-day bucket as the
+api_keys check thanks to the `extract_tool_calls` helper
+from `agent_loop.py` being reusable. Disabled via
+`server.boot_probe_enabled = false` in tests; 10s default
+timeout configurable via `server.boot_probe_timeout_s`.
+
 ---
 
 ## `_persisted_args` serialization leak poisons tool-call history

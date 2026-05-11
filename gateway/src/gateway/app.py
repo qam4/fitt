@@ -446,6 +446,65 @@ def create_app(config: Config) -> FastAPI:
     async def _stop_history_pruner() -> None:  # pragma: no cover - lifespan hook
         await app.state.history_pruner.stop()
 
+    # Boot-time alias tool-call reliability probe (Principle 11).
+    # Fires one canary tool-call request per alias and logs an
+    # ERROR per binding that narrates instead of emitting real
+    # tool_calls. See gateway/alias_probe.py. Disabled via
+    # ``server.boot_probe_enabled = false`` for tests that don't
+    # want network traffic at startup.
+    @app.on_event("startup")
+    async def _run_boot_probe() -> None:  # pragma: no cover - lifespan hook
+        if not config.server.boot_probe_enabled:
+            return
+        from .alias_probe import probe_all_aliases
+        from .router import AliasRouter
+
+        router = AliasRouter(config)
+        try:
+            results = await probe_all_aliases(
+                config,
+                router,
+                timeout_s=config.server.boot_probe_timeout_s,
+            )
+        except Exception as exc:
+            # Probe infrastructure itself failed. Log and move
+            # on — we're a reliability check, not a load-bearing
+            # component.
+            _log.warning(
+                "alias_probe.infrastructure_failure",
+                extra={"error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+
+        for r in results:
+            if r.status == "ok":
+                _log.info(
+                    "alias_probe.ok",
+                    extra={
+                        "alias": r.alias,
+                        "model": r.model_used,
+                        "detail": r.detail,
+                    },
+                )
+            elif r.status == "skipped_no_api_key":
+                # api_keys check already logged this — stay
+                # quiet at DEBUG so we don't double-shout.
+                _log.debug(
+                    "alias_probe.skipped",
+                    extra={"alias": r.alias, "detail": r.detail},
+                )
+            else:
+                _log.error(
+                    f"alias_probe.{r.status}",
+                    extra={
+                        "alias": r.alias,
+                        "model": r.model_used,
+                        "finish_reason": r.finish_reason,
+                        "detail": r.detail,
+                        "reply_preview": r.reply_preview,
+                    },
+                )
+
     # Middleware registration order matters: auth runs first (outermost).
     app.add_middleware(AuthMiddleware, config=config)
 

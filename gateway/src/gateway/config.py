@@ -86,6 +86,15 @@ class ServerConfig(BaseModel):
     port: int = 8421
     log_level: str = "info"
     log_bodies: bool = False
+    # Boot-time alias tool-call reliability probe (Principle 11).
+    # At startup we fire one canary tool-call request per alias
+    # and log ERROR for any binding that narrates instead of
+    # emitting real tool_calls. See gateway/alias_probe.py for
+    # the rationale (qwen2.5-coder:14b on 2026-05-07 and
+    # qwen3-next-80b on 2026-05-10 both failed this silently
+    # until a live Telegram session surfaced it).
+    boot_probe_enabled: bool = True
+    boot_probe_timeout_s: float = 10.0
 
 
 class LoggingConfig(BaseModel):
