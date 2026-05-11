@@ -557,10 +557,12 @@ def _persisted_tool_call_from_result(
 
     * ``tool_name``: from the tool's registry entry (or the
       raw call's name if the tool wasn't found in the registry).
-    * ``args_summary``: a short rendering of the call's
-      arguments. Reuses the small logic we already use for the
-      approval prompt but with a tight 80-char cap — tomorrow's
-      context shouldn't carry long ``content=...`` blobs.
+    * ``args``: the structured arguments dict as the model
+      emitted them. The 2026-05-11 correction replaces the
+      earlier ``args_summary`` string: the summary was lossy
+      and couldn't round-trip, producing the
+      ``_persisted_args`` placeholder that poisoned
+      subsequent turns (see docs/observed-issues.md).
     * ``result_status`` / ``result_summary``: derived from the
       tool's :class:`ToolResult`. Success = ``ok``; error =
       ``error`` plus the first ~300 chars of the payload; the
@@ -570,42 +572,35 @@ def _persisted_tool_call_from_result(
       out so the persisted record is cleaner).
     """
     tool_name = tool.name if tool is not None else call.get("function", {}).get("name", "(unknown)")
-    args_summary = _short_args_summary(call)
+    args = _extract_args_dict(call)
     status, summary = _status_and_summary_from_result(result)
     return PersistedToolCall(
         tool_name=tool_name,
-        args_summary=args_summary,
+        args=args,
         result_status=status,
         result_summary=summary,
     )
 
 
-def _short_args_summary(call: dict[str, Any]) -> str:
-    """Compact ``key=value, ...`` rendering of a tool call's
-    arguments. Caps at 80 chars with a truncation marker.
+def _extract_args_dict(call: dict[str, Any]) -> dict[str, Any]:
+    """Parse the model's emitted arguments from a tool-call
+    dict into a structured Python dict.
 
-    This is distinct from ``approval._summarise_args`` (which
-    widens for ``project_shell`` to fit a command string) —
-    the persisted record is what tomorrow's context reads,
-    and a 1KB command string there is costlier than an
-    ellipsis."""
+    OpenAI's contract: ``function.arguments`` is a JSON
+    string. We decode it so the persisted record carries the
+    real structure. On malformed input (model emitted
+    non-JSON, or the arguments field is the wrong type) we
+    persist an empty dict and move on — the rest of the turn
+    still completes, and the audit log has the raw input if
+    forensics are needed."""
+    raw = call.get("function", {}).get("arguments", "{}")
     try:
-        raw = call.get("function", {}).get("arguments", "{}")
-        args = json.loads(raw) if isinstance(raw, str) else raw
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (json.JSONDecodeError, TypeError):
-        args = {}
-    if not isinstance(args, dict):
-        return repr(args)[:80]
-    parts: list[str] = []
-    for k, v in args.items():
-        rendered = repr(v)
-        if len(rendered) > 40:
-            rendered = rendered[:37] + "..."
-        parts.append(f"{k}={rendered}")
-    summary = ", ".join(parts)
-    if len(summary) > 80:
-        summary = summary[:77] + "..."
-    return summary
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed
 
 
 def _status_and_summary_from_result(result: ToolResult) -> tuple[str, str]:

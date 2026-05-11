@@ -36,35 +36,66 @@ doc.
 ## `_persisted_args` serialization leak poisons tool-call history
 
 **First observed:** 2026-05-10 (Telegram coding session).
-**Tag:** bug, high pain. Cross-references Problem B in
-hallucinations doc.
+**Fixed:** 2026-05-11.
+**Tag:** bug (closed), high pain. Cross-references Problem B
+in hallucinations doc.
 
-Tool calls in persisted history show up as
-`http_get(_persisted_args="url='https://wttr.in/...'")`. That's
-not an OpenAI tool_call shape. `_persisted_args` is a gateway-
-internal wrapper key that's leaking into the history markdown
-when the turn gets persisted. Once one turn lands with this
-shape, every subsequent turn's model sees the pattern in its
-loaded history and mirrors it — producing tool calls with
-`_persisted_args=` as the argument name instead of the real
-argument names. The tool handler rejects them with "Missing
-required argument: project." The model gets confused by its
-own errors and falls back to the gap-reporter ("I'd need a
-tool to read a file") for tools that are literally in its
-capability list.
+Tool calls in persisted history showed up as
+`http_get(_persisted_args="url='https://wttr.in/...'")`.
+That's not an OpenAI tool_call shape. `_persisted_args` was
+a gateway-internal placeholder added by the history reader
+when it couldn't invert the pretty-printed args summary
+back into a real structured dict. Once one turn persisted
+with this shape, every subsequent turn's model saw the
+pattern in its loaded history and mirrored it — producing
+tool calls with `_persisted_args=` as the argument name
+instead of the real argument names. The tool handler
+rejected them with "Missing required argument: project."
+The model got confused by its own errors and fell back to
+the gap-reporter ("I'd need a tool to read a file") for
+tools that were literally in its capability list.
 
 **Cost:** From the 2026-05-10 session, roughly 40% of tool
 calls failed on argument names from the moment the leak
-started, and the model visibly got worse at recovery as the
-session dragged on. This single bug cut the session's
+started, and the model visibly got worse at recovery as
+the session dragged on. This single bug cut the session's
 usefulness in half.
 
-**Fix plan:** Find where tool_calls are rendered into history
-markdown (likely `gateway/src/gateway/memory.py`'s persist
-path for `assistant tool_calls`), ensure real argument names
-are emitted, add a regression test that pins the on-disk
-shape for a tool call with both required and optional
-arguments. Half a day of work.
+**Root cause:** The on-disk format stored args as a lossy
+summary string (`project='hub', command='ls'`, truncated
+at 80 chars). The reader then had to reconstruct an
+OpenAI-shape `tool_calls` dict from that summary, which
+isn't possible — the summary is lossy and ambiguous. The
+reader's workaround was to stuff the un-parseable text
+into a `_persisted_args` placeholder key.
+
+**Fix:** Changed the on-disk format to store the real
+structured args as a fenced JSON block alongside the
+human-readable bullet. Reader reads the JSON directly. No
+parser needed on the summary. `_persisted_args` key
+deleted. Tests updated to pin byte-accurate round-trip
+(the property the old design couldn't give us).
+
+**Operator action:** The fix is not backwards-compatible
+with history files in the old format. If you have any
+`.md` files under `$FITT_HOME/sessions/<session>/history/`
+written before the fix, the reader will now raise loudly
+on load with a message pointing here. Clear them:
+
+```bash
+rm -rf $FITT_HOME/sessions/*/history
+```
+
+History files for chat-only sessions (no tool calls) load
+identically across the change and don't need clearing.
+Only files containing `## <ts> assistant tool_calls`
+headers are affected. If you're not sure, check with:
+
+```bash
+grep -l 'assistant tool_calls' $FITT_HOME/sessions/*/history/*.md
+```
+
+If no files match, nothing to clear.
 
 ---
 

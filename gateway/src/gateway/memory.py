@@ -81,20 +81,40 @@ class _Turn:
 class PersistedToolCall:
     """Phase 5 — one tool call persisted with its result.
 
-    Written to the on-disk history as a bullet under an
-    ``assistant tool_calls`` header, followed by a
+    Written to the on-disk history as a bullet + JSON fence
+    under an ``assistant tool_calls`` header, followed by a
     ``tool <name>`` block carrying ``result_status`` +
     ``result_summary``.
 
-    Kept short by design — ``args_summary`` caps at ~80 chars,
-    ``result_summary`` at ~300 chars. The point is to preserve
-    the OUTCOME of the call (so tomorrow's context knows the
-    SSH call succeeded) without ballooning context windows
-    with full stdout.
+    On-disk shape per call:
+
+        - <tool_name>
+        ```json
+        {"project": "hub", "path": "README.md"}
+        ```
+
+    Args are stored as the original structured dict, not a
+    summary string. That's a 2026-05-11 correction of the
+    original design: the summary-string format was lossy
+    (truncated at 80 chars, ``repr``-based) and not round-
+    trip-safe. When the gateway loaded history it had to
+    stuff the un-parseable summary into a placeholder key
+    (``_persisted_args``) that then leaked into the model's
+    context, creating a self-reinforcing poisoning loop
+    (see docs/observed-issues.md).
+
+    ``result_summary`` stays lossy (capped at ~300 chars).
+    Results are genuinely too large to keep verbatim; the
+    model only needs the outcome, not the full payload.
+    Args are not in that category — the model emitted them
+    itself and the originals are small.
     """
 
     tool_name: str
-    args_summary: str
+    args: dict[str, Any]
+    """Structured arguments dict, exactly as the model
+    emitted them. Preserved byte-accurate through the
+    persistence round trip."""
     result_status: str
     """Short status: ``ok`` on success; ``exit=N`` for shell
     tools that returned a non-zero exit; ``error`` for other
@@ -106,11 +126,19 @@ class PersistedToolCall:
     stdout — that's too much for tomorrow's context."""
 
     def render_call_bullet(self) -> str:
-        """One line for the ``assistant tool_calls`` block."""
-        args = self.args_summary
-        if len(args) > 80:
-            args = args[:77] + "..."
-        return f"- {self.tool_name}({args})"
+        """Multi-line rendering for the ``assistant tool_calls``
+        block: a one-line bullet with the tool name, followed
+        by a fenced JSON block with the original args.
+
+        Three lines are emitted (bullet, fence open, JSON,
+        fence close) so humans scrolling the history file see
+        the tool name first and the args below it. The reader
+        walks the lines in order: bullet establishes the
+        current call, the next ```json fence is its args."""
+        import json as _json
+
+        args_json = _json.dumps(self.args, ensure_ascii=False)
+        return f"- {self.tool_name}\n```json\n{args_json}\n```"
 
     def render_result_body(self) -> str:
         """Body content for the corresponding ``tool <name>``
@@ -657,14 +685,20 @@ def _parse_turns(text: str) -> list[_Turn]:
     return turns
 
 
-# Matches a single call bullet inside an ``assistant tool_calls``
-# block: "- tool_name(args...)". Captures the tool name and the
-# args text so we can reconstruct an OpenAI-shape ``tool_calls``
-# entry when loading.
-_TOOL_CALL_BULLET_RE = re.compile(
-    r"^\s*-\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
-    r"\s*\((?P<args>.*)\)\s*$"
-)
+# Matches the opening line of a single call inside an
+# ``assistant tool_calls`` block: ``- <tool_name>``. The args
+# live below this on a ```json fenced block; the two are
+# matched up by the call bullet's line position, not a regex
+# capture. See ``_parse_tool_calls_block`` for the walking
+# logic.
+_TOOL_CALL_BULLET_RE = re.compile(r"^\s*-\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*$")
+
+# Matches the pre-2026-05-11 bullet shape:
+# ``- <tool_name>(<args_summary>)``. We detect it specifically
+# so we can raise loudly when loading a pre-fix history file,
+# instead of silently ignoring the line and handing the model
+# an ``assistant tool_calls`` turn with zero calls in it.
+_LEGACY_TOOL_CALL_BULLET_RE = re.compile(r"^\s*-\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(")
 
 
 def _turns_to_messages(turns: list[_Turn]) -> list[dict[str, Any]]:
@@ -773,38 +807,113 @@ def _parse_tool_calls_block(
     a matching list of result-placeholder dicts (filled in by
     the caller from the following ``tool <name>`` blocks).
 
-    Returns ``(tool_calls, result_placeholders)``. The ids are
-    deterministic hashes of the bullet text so the two halves
-    can pair without the on-disk format needing explicit ids.
+    On-disk format per call (2026-05-11 onward):
+
+        - <tool_name>
+        ```json
+        {"arg": "value", ...}
+        ```
+
+    The walker steps through lines looking for bullet headers;
+    each bullet must be followed by a ```json`` fence with
+    valid JSON. Malformed shapes (missing fence, non-JSON body,
+    JSON that isn't an object) raise rather than silently
+    substituting a placeholder — see docs/observed-issues.md
+    for the placeholder-poisoning bug that this replaces.
+
+    Returns ``(tool_calls, result_placeholders)``. Call ids
+    are deterministic hashes of the bullet line so the two
+    halves can pair without the on-disk format needing
+    explicit ids.
     """
     import hashlib
     import json
 
     tool_calls: list[dict[str, Any]] = []
     result_placeholders: list[dict[str, Any]] = []
-    for idx, line in enumerate(body.splitlines()):
+    lines = body.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # Detect pre-2026-05-11 bullet format before the strict
+        # match so we raise loudly instead of silently skipping.
+        legacy_m = _LEGACY_TOOL_CALL_BULLET_RE.match(line)
+        if legacy_m is not None:
+            raise ValueError(
+                f"malformed assistant tool_calls block: bullet "
+                f"at line {i + 1} uses the pre-2026-05-11 "
+                f"parenthesised-args format "
+                f"('{line.strip()}'). The persistence format "
+                f"changed to name + fenced JSON; old files are "
+                f"not readable. Clear the history file and "
+                f"start fresh."
+            )
         m = _TOOL_CALL_BULLET_RE.match(line)
         if not m:
+            i += 1
             continue
         name = m.group("name")
-        args_text = m.group("args").strip()
-        call_id = "persisted-" + hashlib.sha1(line.encode("utf-8")).hexdigest()[:12]
+
+        # Expect ```json on the next non-blank line. Skip
+        # blanks so a bit of formatting slack doesn't break
+        # parsing.
+        j = i + 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        if j >= len(lines) or lines[j].strip() != "```json":
+            raise ValueError(
+                f"malformed assistant tool_calls block: bullet "
+                f"'- {name}' at line {i + 1} is not followed by "
+                f"a ```json fence. Corrupted history file or "
+                f"pre-2026-05-11 format; clear the file "
+                f"and start fresh."
+            )
+        # Collect fence body until closing ```.
+        json_start = j + 1
+        json_end = json_start
+        while json_end < len(lines) and lines[json_end].strip() != "```":
+            json_end += 1
+        if json_end >= len(lines):
+            raise ValueError(
+                f"malformed assistant tool_calls block: ```json "
+                f"fence for '- {name}' opened at line {j + 1} "
+                f"but never closed"
+            )
+        json_text = "\n".join(lines[json_start:json_end])
+        try:
+            args = json.loads(json_text)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"malformed assistant tool_calls block: ```json "
+                f"body for '- {name}' at lines {json_start + 1}-"
+                f"{json_end} is not valid JSON: {e}"
+            ) from e
+        if not isinstance(args, dict):
+            raise ValueError(
+                f"malformed assistant tool_calls block: ```json "
+                f"body for '- {name}' must be a JSON object, got "
+                f"{type(args).__name__}"
+            )
+
+        # Compose the id from the bullet line + JSON body so
+        # re-persisted identical calls get identical ids (and
+        # differently-argued calls get different ids).
+        id_source = f"{line}\n{json_text}"
+        call_id = "persisted-" + hashlib.sha1(id_source.encode("utf-8")).hexdigest()[:12]
         tool_calls.append(
             {
                 "id": call_id,
                 "type": "function",
                 "function": {
-                    # Preserve the args literally — the model
-                    # will see the bullet's args text, same as
-                    # what was rendered in the live call. The
-                    # function.arguments field is a JSON string
-                    # per the OpenAI contract; wrap in a
-                    # single-field object so the shape validates.
                     "name": name,
-                    "arguments": json.dumps({"_persisted_args": args_text}),
+                    # The OpenAI contract: arguments is a
+                    # JSON string, not a dict. Preserve the
+                    # on-disk JSON verbatim so the model sees
+                    # exactly what it emitted last turn.
+                    "arguments": json_text,
                 },
             }
         )
         result_placeholders.append({"tool_call_id": call_id, "content": ""})
-        _ = idx
+        i = json_end + 1
     return tool_calls, result_placeholders

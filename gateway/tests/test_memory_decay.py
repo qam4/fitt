@@ -208,7 +208,10 @@ def test_past_activity_summary_detects_tools_used(tmp_path: Path) -> None:
         date(2026, 5, 5),
         [
             ("user", "do the thing"),
-            ("assistant tool_calls", "- read_file(path='x')"),
+            (
+                "assistant tool_calls",
+                '- read_file\n```json\n{"path": "x"}\n```',
+            ),
             ("tool read_file", "ok"),
             ("assistant", "done"),
         ],

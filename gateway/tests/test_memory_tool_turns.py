@@ -10,10 +10,11 @@ persistence":
   sequence with ``role: assistant + tool_calls``, ``role: tool``
   per call, and a final ``role: assistant``.
 * A Phase-2-shape file (only user/assistant headers) loads
-  identically — back-compat is the whole reason the evolution
-  is a superset rather than a rewrite.
-* Unknown-role headers degrade gracefully (debug log, turn
-  skipped, other turns unaffected).
+  identically — the chat-only path stays back-compat forever.
+* Unknown-role headers degrade gracefully.
+* The tool-call args round-trip byte-accurate through write +
+  read (2026-05-11 correction to the original lossy-string
+  design; see docs/observed-issues.md).
 
 The ``test_session_poisoning_lifecycle`` e2e test is what pins
 the user-facing outcome ("stale refusal doesn't reach the
@@ -22,7 +23,10 @@ model"); these unit tests pin the machinery behind it.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from gateway.memory import MemoryStore, PersistedToolCall
 
@@ -45,33 +49,52 @@ def _make_store(tmp_path: Path) -> MemoryStore:
 def test_persisted_tool_call_render_call_bullet() -> None:
     call = PersistedToolCall(
         tool_name="project_shell",
-        args_summary="project='hub', command='ls'",
+        args={"project": "hub", "command": "ls"},
         result_status="ok",
         result_summary="",
     )
-    assert call.render_call_bullet() == ("- project_shell(project='hub', command='ls')")
+    expected = '- project_shell\n```json\n{"project": "hub", "command": "ls"}\n```'
+    assert call.render_call_bullet() == expected
 
 
-def test_persisted_tool_call_truncates_long_args() -> None:
-    """Args over 80 chars get truncated with `...` so the on-disk
-    bullet stays readable and compact."""
-    long_args = "command='" + ("x" * 200) + "'"
+def test_persisted_tool_call_render_call_bullet_empty_args() -> None:
+    """A tool with no arguments still renders a complete
+    fenced-JSON block (empty object). Reader expects the
+    fence to always be present."""
     call = PersistedToolCall(
-        tool_name="project_shell",
-        args_summary=long_args,
+        tool_name="list_capabilities",
+        args={},
         result_status="ok",
         result_summary="",
     )
     bullet = call.render_call_bullet()
-    assert bullet.endswith("...)")
-    # Still parses (name + wrapped args).
-    assert bullet.startswith("- project_shell(")
+    assert bullet.startswith("- list_capabilities\n")
+    assert "```json" in bullet
+    assert "{}" in bullet
+    assert bullet.endswith("\n```")
+
+
+def test_persisted_tool_call_preserves_long_args_verbatim() -> None:
+    """Args are no longer truncated at persist time. A long
+    command string survives the round-trip exactly. This is
+    the property the 2026-05-11 format change added — the
+    old format truncated at 80 chars and lost information,
+    which broke reconstruction on reload."""
+    long_command = "x" * 500
+    call = PersistedToolCall(
+        tool_name="project_shell",
+        args={"command": long_command},
+        result_status="ok",
+        result_summary="",
+    )
+    bullet = call.render_call_bullet()
+    assert long_command in bullet
 
 
 def test_persisted_tool_call_render_result_body_ok_only() -> None:
     call = PersistedToolCall(
         tool_name="read_file",
-        args_summary="path='x'",
+        args={"path": "x"},
         result_status="ok",
         result_summary="",
     )
@@ -81,7 +104,7 @@ def test_persisted_tool_call_render_result_body_ok_only() -> None:
 def test_persisted_tool_call_render_result_body_with_summary() -> None:
     call = PersistedToolCall(
         tool_name="project_shell",
-        args_summary="command='false'",
+        args={"command": "false"},
         result_status="exit=1",
         result_summary="command failed",
     )
@@ -110,7 +133,7 @@ def test_tool_turn_writes_four_blocks(tmp_path: Path) -> None:
     calls = [
         PersistedToolCall(
             tool_name="project_shell",
-            args_summary="project='hub', command='ls'",
+            args={"project": "hub", "command": "ls"},
             result_status="ok",
             result_summary="",
         ),
@@ -128,8 +151,11 @@ def test_tool_turn_writes_four_blocks(tmp_path: Path) -> None:
         f"tool_calls → tool <name> → assistant; got positions "
         f"{user_idx} / {calls_idx} / {tool_idx} / {final_idx}"
     )
-    # Tool-call bullet is in the calls block.
-    assert "- project_shell(project='hub', command='ls')" in raw
+    # Tool-call bullet uses the name + JSON fence shape.
+    assert "- project_shell" in raw
+    assert "```json" in raw
+    assert '"project": "hub"' in raw
+    assert '"command": "ls"' in raw
     # Tool block body carries the status.
     assert "ok" in raw
 
@@ -143,7 +169,7 @@ def test_tool_turn_loads_as_openai_shape(tmp_path: Path) -> None:
     calls = [
         PersistedToolCall(
             tool_name="project_shell",
-            args_summary="project='hub', command='ls'",
+            args={"project": "hub", "command": "ls"},
             result_status="ok",
             result_summary="",
         ),
@@ -177,6 +203,79 @@ def test_tool_turn_loads_as_openai_shape(tmp_path: Path) -> None:
     assert msgs[3] == {"role": "assistant", "content": "there's foo.txt"}
 
 
+def test_tool_call_arguments_round_trip_byte_accurate(
+    tmp_path: Path,
+) -> None:
+    """The 2026-05-11 fix: args must round-trip exactly
+    through write → load. The old lossy-string format
+    truncated at 80 chars and stuffed the un-parseable
+    leftover into a ``_persisted_args`` placeholder that
+    then leaked into the model's context, creating a self-
+    reinforcing poisoning loop (see
+    docs/observed-issues.md). This test pins the fix: the
+    reconstructed ``arguments`` JSON parses back to the
+    exact dict that was persisted, and there is NO
+    ``_persisted_args`` key anywhere in the output."""
+    store = _make_store(tmp_path)
+    original_args = {
+        "project": "home-ai-cluster",
+        "path": "README.md",
+        "line_range": [1, 200],
+        "nested": {"encoding": "utf-8", "follow_symlinks": False},
+        "long_value": "a" * 300,
+    }
+    calls = [
+        PersistedToolCall(
+            tool_name="read_file",
+            args=original_args,
+            result_status="ok",
+            result_summary="",
+        ),
+    ]
+    store.append_turn("main", "read it", "done", tool_calls=calls)
+
+    ctx = store.load_context("main")
+    assistant_call = ctx.history_messages[1]
+    reconstructed_args_json = assistant_call["tool_calls"][0]["function"]["arguments"]
+    reconstructed_args = json.loads(reconstructed_args_json)
+    assert reconstructed_args == original_args
+
+    # Explicit guard: _persisted_args placeholder must not
+    # appear anywhere in the reconstructed messages. The
+    # poisoning loop begins the moment this key lands in
+    # history the model can read.
+    serialized_all = json.dumps(ctx.history_messages)
+    assert "_persisted_args" not in serialized_all
+
+
+def test_tool_call_arguments_round_trip_with_special_chars(
+    tmp_path: Path,
+) -> None:
+    """Shell commands carry quotes, newlines, and backslashes.
+    The JSON-on-disk format must handle these without
+    ambiguity. The old repr-based summary could lose track
+    of quote types mid-string."""
+    store = _make_store(tmp_path)
+    original_args = {
+        "command": 'grep -rn "TODO\\|FIXME" src/ | head -5',
+        "env": {"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"},
+    }
+    calls = [
+        PersistedToolCall(
+            tool_name="project_shell",
+            args=original_args,
+            result_status="ok",
+            result_summary="",
+        ),
+    ]
+    store.append_turn("main", "grep", "done", tool_calls=calls)
+
+    ctx = store.load_context("main")
+    assistant_call = ctx.history_messages[1]
+    reconstructed = json.loads(assistant_call["tool_calls"][0]["function"]["arguments"])
+    assert reconstructed == original_args
+
+
 def test_multiple_tool_calls_pair_correctly(tmp_path: Path) -> None:
     """Two tool calls → two tool blocks → two ``role: tool``
     entries, each with its own id matching the corresponding
@@ -186,13 +285,13 @@ def test_multiple_tool_calls_pair_correctly(tmp_path: Path) -> None:
     calls = [
         PersistedToolCall(
             tool_name="read_file",
-            args_summary="path='a.txt'",
+            args={"path": "a.txt"},
             result_status="ok",
             result_summary="",
         ),
         PersistedToolCall(
             tool_name="read_file",
-            args_summary="path='b.txt'",
+            args={"path": "b.txt"},
             result_status="ok",
             result_summary="",
         ),
@@ -222,7 +321,7 @@ def test_tool_result_with_error_preserves_status_and_summary(
     calls = [
         PersistedToolCall(
             tool_name="project_shell",
-            args_summary="command='false'",
+            args={"command": "false"},
             result_status="exit=1",
             result_summary="command failed: exit 1",
         ),
@@ -235,14 +334,89 @@ def test_tool_result_with_error_preserves_status_and_summary(
     assert "command failed" in tool_msg["content"]
 
 
-# --------------------------------------------------------------- back-compat
+# --------------------------------------------------------------- malformed history
+
+
+def test_pre_fix_bullet_format_raises_loudly(tmp_path: Path) -> None:
+    """A history file written in the pre-2026-05-11 format
+    (bullet with parenthesised args, no JSON fence) must
+    raise on load rather than silently substituting a
+    placeholder. The placeholder was the bug; failing
+    loudly is the intended post-fix behaviour. Operator
+    clears the history file and moves on."""
+    store = _make_store(tmp_path)
+    path = store.history_path("main")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "## 2026-05-07T10:00:00Z user\n\n"
+        "hi\n\n"
+        "## 2026-05-07T10:00:05Z assistant tool_calls\n\n"
+        "- read_file(path='x.txt')\n\n"
+        "## 2026-05-07T10:00:06Z tool read_file\n\n"
+        "ok\n\n"
+        "## 2026-05-07T10:00:07Z assistant\n\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="malformed assistant tool_calls"):
+        store.load_context("main")
+
+
+def test_json_fence_without_closing_raises(tmp_path: Path) -> None:
+    """A ```json fence that never closes is corruption;
+    raise rather than silently eating the rest of the
+    file."""
+    store = _make_store(tmp_path)
+    path = store.history_path("main")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "## 2026-05-07T10:00:00Z user\n\n"
+        "hi\n\n"
+        "## 2026-05-07T10:00:05Z assistant tool_calls\n\n"
+        "- read_file\n"
+        "```json\n"
+        '{"path": "x.txt"\n'
+        "\n"
+        "## 2026-05-07T10:00:06Z tool read_file\n\n"
+        "ok\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"never closed|not valid JSON"):
+        store.load_context("main")
+
+
+def test_json_fence_with_non_object_raises(tmp_path: Path) -> None:
+    """OpenAI's tool_calls contract requires arguments to
+    be a JSON object. A fenced array or scalar is malformed."""
+    store = _make_store(tmp_path)
+    path = store.history_path("main")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "## 2026-05-07T10:00:00Z user\n\n"
+        "hi\n\n"
+        "## 2026-05-07T10:00:05Z assistant tool_calls\n\n"
+        "- read_file\n"
+        "```json\n"
+        '["not", "an", "object"]\n'
+        "```\n\n"
+        "## 2026-05-07T10:00:06Z tool read_file\n\n"
+        "ok\n"
+        "## 2026-05-07T10:00:07Z assistant\n\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        store.load_context("main")
+
+
+# --------------------------------------------------------------- back-compat (chat-only path)
 
 
 def test_phase2_shape_file_loads_identically(tmp_path: Path) -> None:
-    """A history file written by Phase 2 (user + assistant
-    turns only, no tool headers) must load identically in
-    Phase 5. Back-compat is what lets us ship a schema change
-    without nuking existing installs."""
+    """A history file with only user + assistant turns (no
+    tool-call machinery) loads identically across Phase 2
+    and 5. The chat-only path stays back-compat; only the
+    tool-using shape changed."""
     store = _make_store(tmp_path)
     path = store.history_path("main")
     path.parent.mkdir(parents=True, exist_ok=True)

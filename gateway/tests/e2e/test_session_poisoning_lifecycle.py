@@ -66,7 +66,10 @@ async def test_tool_outcome_reaches_model_alongside_stale_paraphrase(
         "## 2026-05-07T10:00:00Z user\n\n"
         "fetch my repo\n\n"
         "## 2026-05-07T10:00:05Z assistant tool_calls\n\n"
-        "- run_tests(project='hub')\n\n"
+        "- run_tests\n"
+        "```json\n"
+        '{"project": "hub"}\n'
+        "```\n\n"
         "## 2026-05-07T10:00:06Z tool run_tests\n\n"
         "ok\n\n"
         "## 2026-05-07T10:00:10Z assistant\n\n"
