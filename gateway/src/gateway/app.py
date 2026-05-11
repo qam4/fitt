@@ -20,9 +20,11 @@ from .errors import (
     UnknownAlias,
     UnknownSession,
 )
-from .logging_config import configure_logging
+from .logging_config import configure_logging, get_logger
 from .memory import MemoryStore
 from .sessions import SessionRegistry
+
+_log = get_logger("fitt.gateway.app")
 
 
 def create_app_from_env() -> FastAPI:
@@ -56,6 +58,18 @@ def create_app(config: Config) -> FastAPI:
         redoc_url=None,
     )
     app.state.config = config
+
+    # Principle 11: fail loud on detectable misconfigurations.
+    # At startup, walk the config + secrets pair and emit an
+    # ERROR log for any openai-backend model missing its
+    # api_keys entry. Non-fatal — other aliases may work fine,
+    # and refusing to start on one misconfigured entry would
+    # make things worse. See docs/observed-issues.md for the
+    # failure mode this catches.
+    from .config import check_missing_api_keys
+
+    for warning in check_missing_api_keys(config):
+        _log.error("config.missing_api_key", extra={"detail": warning})
 
     # Memory store lives for the lifetime of the app. It reads the
     # identity files fresh on every request, so editing them takes

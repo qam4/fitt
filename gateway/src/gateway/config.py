@@ -366,3 +366,54 @@ def load_config(
     if load_secrets_too:
         cfg.secrets = load_secrets(secrets_path)
     return cfg
+
+
+# ----------------------------------------------------------------- boot-time checks
+
+
+def check_missing_api_keys(config: Config) -> list[str]:
+    """Return a list of human-readable warnings for
+    ``openai``-backend models whose ``api_keys`` entry is missing
+    from ``secrets.yaml``.
+
+    Principle 11 (fail loud on detectable misconfigurations).
+    The old behaviour was: gateway starts cleanly, the first
+    request to the affected alias dispatches through LiteLLM's
+    fallback OpenAI client, which raises
+    ``AuthenticationError: the api_key client option must be
+    set either by passing api_key to the client or by setting
+    OPENAI_API_KEY env variable``. The message is technically
+    correct but misleading — the operator's fix isn't to set
+    ``OPENAI_API_KEY``, it's to add the matching entry in
+    ``secrets.api_keys.<model.id>``.
+
+    This check runs at gateway boot. Missing keys don't block
+    startup — other aliases might work fine — but each missing
+    key yields a warning string the caller is expected to log
+    at ERROR level so the misconfiguration is unmissable.
+
+    Returns an empty list when everything checks out. Safe to
+    call with ``config.secrets`` as ``None``; in that case we
+    skip the check (we can't tell whether keys are missing
+    without secrets, and ``load_secrets_too=False`` is an
+    explicit opt-out used by the CLI for non-dispatch commands
+    like ``fitt session new``).
+    """
+    if config.secrets is None:
+        return []
+    warnings: list[str] = []
+    for model in config.models:
+        if model.backend != "openai":
+            continue
+        if model.id not in config.secrets.api_keys:
+            warnings.append(
+                f"model {model.id!r} has backend=openai but no "
+                f"api_keys.{model.id} entry in secrets.yaml. Any "
+                f"alias dispatching to this model will fail at "
+                f"first request with a misleading "
+                f"'OPENAI_API_KEY not set' error. Add to "
+                f"secrets.yaml:\n"
+                f"    api_keys:\n"
+                f"      {model.id}: <your-api-key>"
+            )
+    return warnings

@@ -36,7 +36,9 @@ doc.
 ## Silent failure when api_keys entry is missing for an openai-backend model
 
 **First observed:** 2026-05-11.
-**Tag:** design, Principle 11 violation, medium pain.
+**Partially fixed:** 2026-05-11 (boot-time ERROR log; the
+LiteLLM runtime failure is unchanged).
+**Tag:** design, Principle 11 (closed).
 
 Adding a new `openai`-backend model (e.g. a new NVIDIA NIM
 binding) requires two coordinated edits: `config.yaml` gets
@@ -91,6 +93,30 @@ detect-at-boot-warn-loudly shape. If we do one we should
 consider doing the other in the same session.
 
 Hours of work. Not blocking but shouldn't sit forever.
+
+**Fix landed 2026-05-11:** `gateway/src/gateway/config.py`
+gained `check_missing_api_keys(config)` which returns a
+list of human-readable warnings for openai-backend models
+whose `api_keys` entry is missing. `app.py`'s `create_app`
+calls it at startup and emits an ERROR log line per
+warning. Non-fatal — other aliases still work. Tests in
+`test_config_boot_checks.py` cover happy path, missing key,
+key-name-mismatch (the exact mistake in the incident),
+mixed backends, multiple gaps, and the secrets-not-loaded
+CLI case.
+
+The runtime LiteLLM failure with its misleading
+"OPENAI_API_KEY not set" message is unchanged — we can't
+intercept that without a much bigger middleware
+intervention — but now the operator sees the real cause
+in the gateway logs at startup before the misleading
+runtime error lands. That's the Principle 11 property we
+wanted.
+
+The sibling Principle 11 item — boot-time tool-call
+reliability probe per alias — is deferred. It needs real
+LLM dispatch at startup (network, token cost, timeout
+handling) and is bigger than this half-day item.
 
 ---
 
