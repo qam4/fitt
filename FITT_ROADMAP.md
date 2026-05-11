@@ -682,6 +682,33 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects
 
 ---
 
+## Phase 4.8 — Visibility Proxies (Spec-driven, ~1 weekend)
+
+**Goal:** Make what FITT is doing visible, without waiting for the full admin dashboard (Phase 7+). Ship small, cheap surfaces for the same data the dashboard will eventually render, in order of phone/IDE reach. Closes Problem D (invisibility) from `docs/hallucinations-and-poisoning.md` for the single-user case the author actually lives in.
+
+**Why now, why as its own phase:** the full dashboard is a 2–3 weekend project; the reliability work of 2026-05-10 made it clear that the author is flying blind on several axes (tool results, claim mismatches, gap reports, approval state) and re-deriving what happened from `docker compose exec` into a remote shell is the friction that makes `fitt inbox` unused in practice. The proxies are each a few hours, each independently useful, each reusable when the dashboard lands (they read the same files).
+
+**Key work, in dependency order:**
+
+- **Per-turn event stream.** Structured event emission alongside today's `events.jsonl` for everything that happens inside a tool-using turn: `turn_started`, `llm_call_started` / `completed` (with model, latency, token counts, cost), `tool_call_planned` (name + args), `approval_requested` / `granted` / `denied`, `tool_call_executed` (result summary, exit code for shell, duration), `tool_call_narrated` (Problem A hit), `tool_claim_mismatch` (Problem C hit), `gap_reported`, `turn_finished`. Per-session JSONL file at `$FITT_HOME/sessions/<session>/turns.jsonl`. The backend for every later proxy; everything else in this phase is a renderer over it. Emits from `agent_loop.py`, `chat.py`, `cron_runner.py`, `approval.py` at the existing call sites.
+- **`fitt watch` CLI.** Tails `turns.jsonl` for the active session (or a named one) with a Kiro-style concise renderer: one line per event, color-coded, tool calls expanded inline. Replaces "grep seven files" with one command the author actually runs. Works offline from any machine that can reach `$FITT_HOME` (including `docker compose exec gateway fitt watch`).
+- **Telegram `/inbox` command.** Bot-side command that reads the last N events (default 20) across sessions and posts a paged summary. Same data as `fitt inbox`, but usable from the phone where the author actually is. Respects per-client auth — only tokens with `client: telegram` can call it.
+- **HTTP read endpoints.** `GET /v1/events?since=<ts>&kind=<k>&session=<s>`, `GET /v1/audit?since=<ts>`, `GET /v1/capability-gaps`, `GET /v1/sessions/<id>/turns`. JSON responses, bearer auth (same tokens as chat). Lets curl, scripts, and the future dashboard all read from one API. Opens the door for non-FITT clients (Raycast, Alfred, custom widgets) without exposing `$FITT_HOME` over SSH.
+- **Static HTML viewer at `GET /v1/events/view`.** Single self-contained HTML page with HTMX auto-refresh (every 5s) hitting `/v1/events`. No templates, no build step, no framework — enough to open `http://<tailnet-ip>:8080/v1/events/view` on a phone browser and watch events land. The 80% of the dashboard for 10% of the work. Explicit stepping-stone: when the real dashboard lands, this endpoint either stays as a fallback or redirects.
+
+**Scope boundaries:**
+
+- No writes from HTTP / HTML viewer. Read-only surface. Writes still go through chat / CLI.
+- No authentication beyond the bearer token that already exists. No per-event ACLs.
+- No log rotation for `turns.jsonl` in this phase. Same posture as `events.jsonl` and `audit.jsonl` — append-only, operator-managed for now.
+- No dashboard. The real `$FITT_HOME` admin UI with edit capability, config diffing, session browser, and live turn view is Phase 7+. This phase is the "can I see what happened in the last 10 minutes" floor.
+
+**Prerequisites:** Phase 4 (event log), Phase 4.5 (events.jsonl persistence), Phase 4.7 (tool-call events with enough structure to render).
+
+*Full spec: `.kiro/specs/phase4.8-visibility-proxies/` (to be written when this phase starts).*
+
+---
+
 ## Phase 5 — Lessons + Decaying History (Spec-driven, ~1 weekend)
 
 **Goal:** FITT remembers what you told it last month. "Monitor training pid 456" just works because the pattern was learned from an earlier conversation.
@@ -781,7 +808,7 @@ Features we know we'll want eventually but shouldn't pre-build. Each one lands w
 - **OS-level agent sandbox.** Triggered by "I want to use `trust_session` on `project_shell` without reading every command." Linux: Landlock + seccomp directly (same stack Cursor uses in their 2026 rollout). macOS: `sandbox-exec` with a dynamic Seatbelt profile. Windows: punt or run the gateway under WSL2 and reuse the Linux path. Sandbox's job is to flip Phase 4.7's honest-but-uncomfortable threat model: "even if the model runs `rm -rf ~`, it can't actually touch `~`." This is the real security boundary; Phase 4.7's deny list is a floor, not a boundary. 2–3 weeks of focused work, operating-system-specific, and genuinely security-critical — too big to bundle into any earlier phase.
 - **Telegram message formatting.** Triggered — model replies render raw markdown verbatim on the phone (`**in 5 minutes**` arrives with asterisks intact) because Telegram doesn't speak CommonMark, we don't pass a `parse_mode`, and neither of Telegram's own dialects (Markdown legacy / MarkdownV2 / HTML) matches what models emit. Planned fix: CommonMark → Telegram HTML via `markdown-it-py`, whitelist-sanitised to Telegram's allowed tag set (`<b>`, `<i>`, `<code>`, `<pre>`, `<a>`, `<blockquote>`, `<tg-spoiler>`), applied in `streaming.py`'s `_flush` and in the event-push formatter. HTML not MarkdownV2 because a half-written `<b>` degrades gracefully under streaming edits while half-written `*…*` crashes the parser for the whole message. Cosmetic, so scheduled here rather than in an earlier phase; a few hours when we want to land it.
 - **Vector / semantic memory.** Triggered by "the agent consistently forgets things older than a week." Add embeddings (local Ollama model on a satellite), SQLite + FAISS, migrate markdown to structured memory.
-- **Admin web UI.** Triggered by "editing YAML over SSH is painful." Add a FastAPI + Jinja/HTMX dashboard reading the same files the CLI reads.
+- **Admin dashboard.** Triggered by "I can see what FITT did yesterday but only if I SSH into the NAS and read six JSONL files." A FastAPI + Jinja/HTMX dashboard over `$FITT_HOME`, covering both the config files (`config.yaml`, `secrets.yaml`, `projects.yaml`, `cron.json`) and the live runtime state (`events.jsonl`, `audit.jsonl`, `capability_gaps.log`, per-session `history/*.md`, and the per-turn event stream once Phase 4.8 ships it). Live turn view as the centerpiece: model reasoning, tool calls, approvals pending, results — in one pane while the turn is in flight. Browse + edit from a phone browser on Tailscale. Inspired by MeshClaw's dashboard: the hub's state stops being buried in files the operator has to grep and becomes visible. Deferred here because it's big; Phase 4.8 ships user-visible proxies (CLI, Telegram, HTTP, static HTML) piecemeal while it waits.
 - **Subagents / parallel execution.** Triggered by "I want FITT to research X while executing Y." Add background task spawning with result injection.
 - **Heartbeat loop.** Triggered by "I want FITT to pick up self-written TODOs." Self-directed behavior; 60-second loop picks up tasks from a queue the agent writes to.
 - **Replan in spec-runner.** Triggered by "the runner stops too often on solvable blockers." LLM-driven revision of remaining tasks after a failure.
@@ -825,6 +852,7 @@ FITT's architecture has two testable layers:
 | 4.5   | 3 hrs        | half weekend  |
 | 4.6   | 5 hrs        | 1 weekend     |
 | 4.7   | 5 hrs        | 1 weekend     |
+| 4.8   | 6 hrs        | 1 weekend     |
 | 5     | 10 hrs       | 1–2 weekends  |
 | 6     | 6 hrs        | 1 weekend     |
 | 7     | 20 hrs       | 3 weekends    |

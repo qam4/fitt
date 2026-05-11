@@ -33,6 +33,66 @@ doc.
 
 ---
 
+## FITT capability block leaks into coding-CLI clients (Aider)
+
+**First observed:** 2026-05-11.
+**Tag:** design, medium pain. Cross-references the Phase 4
+"tool forwarding, not replacement" decision and the prompt-
+injection concerns in Phase 4.7's threat model.
+
+Pointed Aider at FITT as its model backend. Aider's own
+system prompt asked something shaped like "what tools do you
+have?" FITT answered with its own capability block — the
+gateway-side `list_capabilities` / inline tool descriptions
+— not with what Aider actually has. The inside-Aider session
+then spent its first turn calling `list_capabilities`, got
+FITT's tools back, and tried to reconcile two completely
+separate agent frameworks in one conversation.
+
+This is the Mode 1 / Mode 2 collision in the open. FITT wants
+to be a hub that layers memory + tools + approvals on top of
+the model (the Telegram case). Aider is itself a coding agent
+that owns its own loop, prompt, tools, diff workflow, and
+commit discipline. When Aider treats FITT as "just an
+OpenAI-compatible endpoint," any FITT-side injection —
+capability block in the system prompt, FITT tools merged
+into the request's `tools` array, memory snippets prepended
+— actively confuses Aider's own agent.
+
+**Cost:** Proportional to how much the author wants to use
+FITT-as-router for coding-CLI tools (Aider today; Claude
+Code, Cursor, Continue-Agent, Codex, Kiro-CLI tomorrow). At
+minimum: one wasted turn per session chasing a ghost tool
+list. Worst case: the model pattern-matches on FITT's `ssh`-
+routed file tools and tries to call them instead of Aider's
+own file edits, which silently breaks the Aider workflow.
+
+**Fix plan:** Router-mode for coding-CLI clients. Classify
+clients via `X-FITT-Client` (values `aider`, `claude-code`,
+`cursor`, `codex`, or the generic `coding-cli`). When the
+client is in router mode: skip capability-block injection,
+skip FITT tool merge into the `tools` array, skip memory
+injection, skip approval middleware (the client owns that
+surface). Keep: alias resolution, backend dispatch, cost
+tracking, and audit-log entry for model usage. Preserve
+today's "agent mode" for Telegram / Open WebUI / raw curl
+where FITT's layered value is exactly what's wanted.
+
+Default for unclassified clients stays "agent mode" — safer
+toward visibility than silently stripping everything.
+
+Work sits in `gateway/src/gateway/chat.py` at `_inject_memory`,
+`_inject_fitt_tools`, and the capability-block check around
+line 770. One mode-enum, three gates. Tests prove router-mode
+requests pass through cleanly.
+
+This is the concrete answer to the "how much does the coding
+framework interfere when FITT is used in an IDE or CLI" open
+question. Router mode for known coding agents; agent mode
+for everything else.
+
+---
+
 ## Silent failure when api_keys entry is missing for an openai-backend model
 
 **First observed:** 2026-05-11.
