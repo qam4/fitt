@@ -396,12 +396,85 @@ Until that exists, this doc is the process.
 
 ## Current recommendations (volatile; updated when we swap)
 
-**`fitt-smart` (2026-05-11):** needs swapping. Currently
-`qwen/qwen3-next-80b-a3b-instruct`. Candidate trail above.
+**`fitt-smart` (swapped 2026-05-11):** now
+`deepseek-ai/deepseek-v4-flash` via NIM. Early use report in
+the decisions log below.
 
 **`fitt-default`:** [unchanged]
 
 **`fitt-fast`:** [unchanged]
+
+## Decisions log
+
+What actually got bound, when, and why. Newest first. Paired
+with the alias tool-call probe (shipped 2026-05-11) — every
+binding change produces a probe result at the next gateway
+boot, which is the shortest loop we have between "swap" and
+"evidence the swap holds."
+
+### 2026-05-11 — `fitt-smart` → `deepseek-ai/deepseek-v4-flash`
+
+**Swapped from:** `qwen/qwen3-next-80b-a3b-instruct` (bound
+2026-05-08 without a rubric; failed on sentinel narration
+2026-05-08, poisoned a 21-hour Telegram session 2026-05-10).
+
+**Chose:** deepseek-v4-flash per the "first try" on the
+recommendation trail above. MIT license, explicit agentic
+post-training, native OpenAI-compatible function calling
+(128 parallel calls claimed), 1M context window, MoE with
+13B active — small enough to stay fast on Telegram.
+
+**Applied rubric:**
+
+- Criterion 1 (native tool_calls): vendor claim "native
+  function calling," no "specially designed format" red
+  flag. Pass.
+- Criterion 2 (long-context reliability): 1M stated
+  context, ~500K usable per the 50% rule. Plenty for
+  FITT's sessions.
+- Criterion 3 (MoE + agentic post-training): explicit. Not
+  the Qwen3-Next "MoE general reasoning without agentic
+  training" anti-pattern.
+- Criterion 4 (reasoning): 13B active is below the 35B
+  rule-of-thumb minimum, but V4-Flash's agentic post-
+  training compensates on the agentic-specific workload
+  that matters for `fitt-smart`. Revisit if reasoning
+  feels thin during the two-week trial.
+- Criterion 5 (cost): free tier on NIM, same posture as the
+  previous binding.
+- Criterion 6 (license): MIT. Cleaner than Qwen's weight
+  license.
+
+**Verification path:**
+
+1. Boot-time alias tool-call probe (`alias_probe.ok` log
+   line on gateway start, single-canary signal).
+2. Early use in Telegram and router-mode opencode. User
+   report on 2026-05-11: "it's working ok."
+3. Two-week live trial per Principle 9 ends 2026-05-25;
+   check `observed-issues.md` and `fitt inbox` then.
+
+**What to watch for before declaring the swap durable:**
+
+- Sentinel / JSON-fence narration in raw history (grep
+  `tool_call_narrated` in `events.jsonl`). Zero expected;
+  nonzero means reconsider.
+- `tool_claim_mismatch` events — the receipt cross-check
+  that would catch Problem C if deepseek develops the
+  "yes I did it" hallucination pattern under long context.
+- Reasoning quality on multi-step tasks relative to the
+  13B-active number. If V4-Flash stumbles on composing
+  tool results, V4-Pro is the next step up (same family,
+  49B active, slower).
+- NIM rate limits on the free tier. Not yet observed with
+  the previous binding; worth watching if Telegram latency
+  drifts.
+
+**If it degrades:** the recommendation trail's step 2 is
+`qwen3-coder-480b-a35b-instruct`, step 3 is
+`deepseek-v4-pro`, step 4 is `llama-3.3-70b-instruct`. Apply
+the rubric fresh — the answer may have changed by the time
+we re-run it.
 
 ## When to revisit
 
