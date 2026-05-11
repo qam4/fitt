@@ -33,6 +33,67 @@ doc.
 
 ---
 
+## Silent failure when api_keys entry is missing for an openai-backend model
+
+**First observed:** 2026-05-11.
+**Tag:** design, Principle 11 violation, medium pain.
+
+Adding a new `openai`-backend model (e.g. a new NVIDIA NIM
+binding) requires two coordinated edits: `config.yaml` gets
+the `models:` entry + alias pointer, and `secrets.yaml` gets
+an `api_keys.<model.id>` entry. If the `api_keys` entry is
+missing or keyed on the wrong name, the gateway starts
+cleanly with no warning. The first time the alias is
+dispatched, LiteLLM's router can't find an api_key, falls
+back to its default OpenAI client, and raises
+`litellm.AuthenticationError: the api_key client option
+must be set either by passing api_key to the client or by
+setting OPENAI_API_KEY env variable`.
+
+The error message is correct but misleading: the fix isn't
+to set `OPENAI_API_KEY`, it's to add the matching
+`api_keys` entry in `secrets.yaml`. An operator seeing
+this for the first time will reasonably try the obvious
+thing and end up confused.
+
+**Cost:** Low in absolute terms (minutes of confusion per
+incident) but it's a Principle 11 violation — the
+misconfiguration is detectable at boot and we're not
+surfacing it. Every new model binding is a fresh
+opportunity to hit it.
+
+**Related gotcha worth naming:** `api_keys` is keyed on
+the model's `id` field, not on the alias name. Several
+aliases can point at the same model id and share a key.
+Easy to assume otherwise when staring at `aliases:` and
+`api_keys:` side by side.
+
+**Fix plan:** Add a boot-time pass in config load (likely
+`config.py` or `app.py` startup) that walks every model
+with `backend: openai`, verifies `secrets.api_keys.<id>`
+exists, and logs an ERROR with the exact
+`api_keys` entry to add when it doesn't. Don't refuse to
+start — other aliases might still work — but make the
+misconfiguration unmissable in the logs.
+
+Shape:
+
+```
+ERROR config.secrets.missing_api_key
+  model_id=nvidia-qwen3-coder
+  fix="add `api_keys: { nvidia-qwen3-coder: nvapi-... }` to secrets.yaml"
+```
+
+Worth bundling with the second Principle 11 item: a
+boot-time tool-call reliability probe per alias (in the
+hallucinations doc's action list). Both have the same
+detect-at-boot-warn-loudly shape. If we do one we should
+consider doing the other in the same session.
+
+Hours of work. Not blocking but shouldn't sit forever.
+
+---
+
 ## `_persisted_args` serialization leak poisons tool-call history
 
 **First observed:** 2026-05-10 (Telegram coding session).
