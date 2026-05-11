@@ -368,6 +368,11 @@ def detect_narrated_tool_call(assistant_text: str) -> NarratedToolCall | None:
     First match wins. A long reply with multiple narrated calls
     is unusual; we record the first and treat the rest as
     collateral until we see a pattern that demands otherwise.
+
+    *Kept for the body-extraction use case.* Prefer
+    :func:`is_tool_use_expected_but_none` for the "should we
+    have called a tool?" decision — that one is shape-based
+    and doesn't ratchet on specific narration patterns.
     """
     if not assistant_text:
         return None
@@ -377,6 +382,81 @@ def detect_narrated_tool_call(assistant_text: str) -> NarratedToolCall | None:
     raw = (m.group("body") or "")[:500]
     name = m.group("name") or ""
     return NarratedToolCall(tool_name=name, raw_fence=raw)
+
+
+# ------------------------------ shape-level tool-use-expected check
+
+
+_MIN_REPLY_CHARS_FOR_EXPECTED_TOOL = 40
+"""A turn is only "suspicious" when the reply has enough
+content to plausibly have substituted prose for a tool call.
+Short replies like "Yes." or "Will do." are legitimately
+short and shouldn't false-positive. 40 chars is roughly "a
+short paragraph" — calibrated from the 2026-05-10 narration
+samples, which ran 80-500 chars each."""
+
+
+def is_tool_use_expected_but_none(
+    assistant_text: str,
+    *,
+    tools_were_offered: bool,
+    finish_reason: str | None,
+    had_real_tool_calls: bool,
+) -> bool:
+    """Shape-level check: did this turn LOOK like it should
+    have produced a tool call, but didn't?
+
+    Returns True when:
+
+    * The client offered tools in the request (``tools`` or
+      ``tool_choice`` field present), and
+    * The model stopped cleanly (``finish_reason == "stop"``
+      or equivalent; not an error or length cutoff), and
+    * No real ``tool_calls`` were emitted, and
+    * The reply was long enough to plausibly substitute prose
+      for a tool call (``>= _MIN_REPLY_CHARS_FOR_EXPECTED_TOOL``).
+
+    This is the model-independent successor to the JSON-fence
+    regex. It doesn't care WHAT the model emitted in place of a
+    tool call — only that it was offered tools and chose not to
+    use them while still replying substantively. Catches
+    narration (JSON fence, TOOL_NAME: sentinel, made-up XML,
+    anything next month's model invents), capability false-
+    negatives ("I can't do that" when the tool is there), and
+    silent stubborn models that keep answering from training
+    data instead of reaching for `http_get`.
+
+    Does NOT catch:
+    * Models that correctly decline because no listed tool
+      actually applies. These are legitimate short-form gap
+      reports or genuine "I don't have a tool for that"
+      replies. Short-reply threshold handles the common case;
+      true gap phrasing is handled by the gap-reporter path
+      separately (see :func:`parse_gap`).
+    * Models that ran a tool and then narrated extra detail.
+      ``had_real_tool_calls=True`` short-circuits.
+
+    Callers: the chat loop and cron runner, after the LLM
+    response has been inspected. Emits a
+    ``tool_expected_none_called`` event (see
+    :func:`gateway.agent_loop.record_narrated_tool_call`)
+    that surfaces in ``fitt inbox`` so the operator sees in
+    real time when the alias is silently failing the
+    tool-use channel.
+    """
+    if not tools_were_offered:
+        return False
+    if had_real_tool_calls:
+        return False
+    if finish_reason not in (None, "stop", "end_turn"):
+        # The model was cut off (length, content filter, etc.)
+        # — that's a different problem, not a tool-use failure.
+        return False
+    if not assistant_text:
+        return False
+    if len(assistant_text) < _MIN_REPLY_CHARS_FOR_EXPECTED_TOOL:
+        return False
+    return True
 
 
 def _tidy(s: str) -> str:

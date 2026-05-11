@@ -371,3 +371,220 @@ def test_detect_narrated_tool_call_returns_first_match_only() -> None:
     got = detect_narrated_tool_call(reply)
     assert got is not None
     assert got.tool_name == "first_tool"
+
+
+# ------------------------------ is_tool_use_expected_but_none
+
+
+def test_expected_but_none_fires_on_narrated_jsonfence() -> None:
+    """JSON-fenced narration from the 2026-05-07 incident —
+    tools were offered, no real tool_calls, finish_reason=stop,
+    substantive reply. Signal fires."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    reply = (
+        "I'll create that cron now.\n"
+        "\n"
+        "```json\n"
+        '{"name": "cron_add", "arguments": {"schedule_spec": "at 1 PM"}}\n'
+        "```"
+    )
+    assert (
+        is_tool_use_expected_but_none(
+            reply,
+            tools_were_offered=True,
+            finish_reason="stop",
+            had_real_tool_calls=False,
+        )
+        is True
+    )
+
+
+def test_expected_but_none_fires_on_sentinel_narration() -> None:
+    """The 2026-05-08 sentinel shape — same invariants should
+    fire regardless of specific narration format, which is the
+    whole point of the shape-based check."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    reply = (
+        "```tool TOOL_NAME: read_file BEGIN_ARG: project home-ai-cluster path README.md END_ARG ```"
+    )
+    assert (
+        is_tool_use_expected_but_none(
+            reply,
+            tools_were_offered=True,
+            finish_reason="stop",
+            had_real_tool_calls=False,
+        )
+        is True
+    )
+
+
+def test_expected_but_none_fires_on_capability_false_negative() -> None:
+    """The 2026-05-10 opening: "I can't provide weather
+    forecasts" when http_get was in the capability block.
+    No narration pattern at all, but tools were offered,
+    reply was substantive, model chose not to use them.
+    This is exactly the "silent stubborn model" case the
+    shape-based check catches that the old regex missed."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    reply = (
+        "I can't provide weather forecasts. For accurate "
+        "predictions, I recommend checking the National "
+        "Weather Service or your favorite weather app."
+    )
+    assert (
+        is_tool_use_expected_but_none(
+            reply,
+            tools_were_offered=True,
+            finish_reason="stop",
+            had_real_tool_calls=False,
+        )
+        is True
+    )
+
+
+def test_expected_but_none_does_not_fire_without_tools_offered() -> None:
+    """If the client didn't send ``tools``/``tool_choice``,
+    the model was never asked to call anything. Plain chat
+    with qwen3 doesn't trigger the signal no matter what
+    the reply looks like."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    reply = "I can't provide weather forecasts because this is a stateless chat request."
+    assert (
+        is_tool_use_expected_but_none(
+            reply,
+            tools_were_offered=False,
+            finish_reason="stop",
+            had_real_tool_calls=False,
+        )
+        is False
+    )
+
+
+def test_expected_but_none_does_not_fire_with_real_tool_calls() -> None:
+    """The model DID call a tool AND narrated some extra prose.
+    That's a chatty model, not a failed one. Short-circuit."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    reply = "Calling http_get now."
+    assert (
+        is_tool_use_expected_but_none(
+            reply,
+            tools_were_offered=True,
+            finish_reason="stop",
+            had_real_tool_calls=True,
+        )
+        is False
+    )
+
+
+def test_expected_but_none_does_not_fire_on_short_reply() -> None:
+    """Legitimately short replies ("Done.", "Yes.") don't
+    trigger the signal — they're plausibly just confirming
+    a prior tool result, not substituting prose for a tool
+    call. Threshold is 40 chars."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    assert (
+        is_tool_use_expected_but_none(
+            "Yes.",
+            tools_were_offered=True,
+            finish_reason="stop",
+            had_real_tool_calls=False,
+        )
+        is False
+    )
+    assert (
+        is_tool_use_expected_but_none(
+            "Done, anything else?",
+            tools_were_offered=True,
+            finish_reason="stop",
+            had_real_tool_calls=False,
+        )
+        is False
+    )
+
+
+def test_expected_but_none_does_not_fire_on_length_cutoff() -> None:
+    """finish_reason=length means the model was cut off by
+    a token limit, not by choice. That's a different problem
+    (context too long) than "chose not to use a tool."
+    Same for content_filter and other error-y finish reasons."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    long_reply = "a" * 100
+    assert (
+        is_tool_use_expected_but_none(
+            long_reply,
+            tools_were_offered=True,
+            finish_reason="length",
+            had_real_tool_calls=False,
+        )
+        is False
+    )
+    assert (
+        is_tool_use_expected_but_none(
+            long_reply,
+            tools_were_offered=True,
+            finish_reason="content_filter",
+            had_real_tool_calls=False,
+        )
+        is False
+    )
+
+
+def test_expected_but_none_does_not_fire_on_empty_reply() -> None:
+    """Empty reply — no narration, no action, nothing to
+    detect. Likely a tool-loop-intermediate response the
+    caller shouldn't have invoked us on."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    assert (
+        is_tool_use_expected_but_none(
+            "",
+            tools_were_offered=True,
+            finish_reason="stop",
+            had_real_tool_calls=False,
+        )
+        is False
+    )
+
+
+def test_expected_but_none_accepts_end_turn_finish_reason() -> None:
+    """Anthropic uses ``end_turn`` where OpenAI uses ``stop``.
+    Same meaning: model finished cleanly. Both should trip
+    the signal when the other conditions hold."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    long_reply = "a" * 100
+    assert (
+        is_tool_use_expected_but_none(
+            long_reply,
+            tools_were_offered=True,
+            finish_reason="end_turn",
+            had_real_tool_calls=False,
+        )
+        is True
+    )
+
+
+def test_expected_but_none_accepts_none_finish_reason() -> None:
+    """Some providers / stubs leave finish_reason as None
+    when the model stopped naturally. Treat it as stop.
+    This is also the default in callers that don't plumb
+    finish_reason through, which today is all of them."""
+    from gateway.capabilities import is_tool_use_expected_but_none
+
+    long_reply = "a" * 100
+    assert (
+        is_tool_use_expected_but_none(
+            long_reply,
+            tools_were_offered=True,
+            finish_reason=None,
+            had_real_tool_calls=False,
+        )
+        is True
+    )

@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .audit import new_entry as new_audit_entry
-from .capabilities import detect_narrated_tool_call, parse_gap
+from .capabilities import detect_narrated_tool_call, is_tool_use_expected_but_none, parse_gap
 from .errors import NoBackendAvailable, UnknownAlias, UnknownTool
 from .memory import PersistedToolCall
 from .router import AliasRouter
@@ -375,35 +375,69 @@ def record_narrated_tool_call(
     session_key: str,
     alias: str,
     iterations: int,
+    tools_were_offered: bool,
+    finish_reason: str | None = "stop",
+    had_real_tool_calls: bool = False,
 ) -> None:
-    """Emit a ``tool_call_narrated`` event when the model wrote
-    a JSON-fenced tool call in its final ``content`` instead of
-    emitting a real ``tool_calls`` structure.
+    """Emit a ``tool_call_narrated`` event when the turn LOOKED
+    like it should have produced a tool call but didn't.
 
-    Observed 2026-05-07 with qwen2.5-coder:14b: cron firings
-    produced replies like ``I'll call send_message now\\n```json
-    \\n{"name": "send_message", ...}\\n``` `` with no real
-    tool_calls. The agent loop treats that as a natural stop
-    (no calls to execute, reply complete) and the narration
-    ends up as the user-facing ``cron_completed.body``.
+    Uses :func:`capabilities.is_tool_use_expected_but_none` as
+    the decision gate — model-independent shape check, no
+    regex on specific narration patterns. Catches JSON-fence
+    narration, TOOL_NAME: sentinel narration, capability false-
+    negatives ("I can't do that" when the tool is listed),
+    stubborn-training-data replies, and anything next month's
+    model invents in place of real ``tool_calls``.
 
-    Emitting an event rather than silently mutating the reply
-    follows the roadmap's "fail loud" principle: the operator
-    sees in events.jsonl / fitt inbox that the model failed at
-    tool-calling, and can decide how to respond (switch models,
-    tighten prompts, ignore for this model).
+    The event kind stays ``tool_call_narrated`` for back-compat
+    with ``fitt inbox`` filters and existing consumers, even
+    though the semantic is now broader than JSON-fence narration.
+
+    As a best-effort niceness: if the reply happens to contain
+    a JSON-fenced tool-call-shaped payload, extract the tool
+    name + fence body for the event's title and body so the
+    operator gets a concrete preview. When no fence matches,
+    fall back to a generic title and a truncated reply snippet.
 
     Swallows all errors — observability should never break the
-    turn that succeeded modulo the narration."""
-    if not assistant_text or events is None:
+    turn that succeeded modulo the narration.
+    """
+    if events is None:
         return
     try:
-        narrated = detect_narrated_tool_call(assistant_text)
+        should_emit = is_tool_use_expected_but_none(
+            assistant_text,
+            tools_were_offered=tools_were_offered,
+            finish_reason=finish_reason,
+            had_real_tool_calls=had_real_tool_calls,
+        )
     except Exception as exc:
-        _log.debug("capabilities.detect_narrated_failed", extra={"error": str(exc)})
+        _log.debug(
+            "capabilities.shape_check_failed",
+            extra={"error": str(exc)},
+        )
         return
-    if narrated is None:
+    if not should_emit:
         return
+    # Best-effort regex match to pick out a concrete tool name
+    # and fence body for the event. Falls back to a generic
+    # title when no fence matches (which is the whole point of
+    # the new shape check: catch narration regardless of shape).
+    narrated_name = ""
+    event_body = assistant_text[:500]
+    try:
+        narrated = detect_narrated_tool_call(assistant_text)
+        if narrated is not None:
+            narrated_name = narrated.tool_name
+            event_body = narrated.raw_fence
+    except Exception:
+        pass
+    title = (
+        f"model narrated {narrated_name} call as text"
+        if narrated_name
+        else "model declined to call a tool when one was expected"
+    )
     try:
         # Local import mirrors the pattern used by the cron
         # runner and detach worker — keeps the agent-loop module
@@ -414,11 +448,11 @@ def record_narrated_tool_call(
             new_event(
                 kind="tool_call_narrated",
                 session_key=session_key,
-                title=f"model narrated {narrated.tool_name or 'tool'} call as text",
-                body=narrated.raw_fence,
+                title=title,
+                body=event_body,
                 meta={
                     "alias": alias,
-                    "tool_name": narrated.tool_name,
+                    "tool_name": narrated_name,
                     "iterations": iterations,
                 },
             )

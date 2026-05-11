@@ -136,14 +136,16 @@ class CronRunner:
                     "silent": job.silent,
                 },
             )
-            # Narration detector: if the model emitted a tool-call
-            # shape in content instead of calling the tool, emit
-            # a ``tool_call_narrated`` event so the operator sees
+            # Narration detector: if the turn looked like it
+            # should have called a tool but didn't (shape-based
+            # check, model-independent), emit a
+            # ``tool_call_narrated`` event so the operator sees
             # the failure in fitt inbox / events.jsonl rather
             # than it being invisibly swallowed into the
-            # cron_completed body. Observed 2026-05-07 with
-            # qwen2.5-coder:14b; see
-            # :func:`gateway.capabilities.detect_narrated_tool_call`
+            # cron_completed body. Catches JSON-fence narration,
+            # TOOL_NAME: sentinels, capability false-negatives,
+            # and anything else the model invents. See
+            # :func:`gateway.capabilities.is_tool_use_expected_but_none`
             # for the full rationale.
             record_narrated_tool_call(
                 self._events,
@@ -151,6 +153,8 @@ class CronRunner:
                 session_key=session_key,
                 alias=alias,
                 iterations=result.iterations,
+                tools_were_offered=True,
+                had_real_tool_calls=bool(result.tool_calls_for_memory),
             )
             # Persist the turn so the model remembers what
             # happened on this firing when the same cron fires

@@ -671,17 +671,22 @@ async def _run_tool_loop(
         session_id,
         tool_registry=tool_registry,
     )
-    # Narrated-tool-call detector: emits an event when the model
-    # wrote tool JSON in content instead of using the tool_calls
-    # channel. Visible in fitt inbox so operators notice when a
-    # local model is silently failing the tool-use channel.
-    # See capabilities.detect_narrated_tool_call for the rationale.
+    # Narrated-tool-call detector: emits an event when the turn
+    # looked like it should have produced a tool call but didn't.
+    # Visible in fitt inbox so operators notice when a local
+    # model is silently failing the tool-use channel.
+    # Shape-based: model-independent, catches JSON-fence
+    # narration, TOOL_NAME: sentinels, capability false-negatives,
+    # and anything else next month's model invents. See
+    # capabilities.is_tool_use_expected_but_none for the rationale.
     record_narrated_tool_call(
         events,
         assistant_text,
         session_key=session_id,
         alias=parsed.model,
         iterations=result.iterations,
+        tools_were_offered=True,
+        had_real_tool_calls=bool(result.tool_calls_for_memory),
     )
 
     backend_header = backend_tag(model_used) if model_used else "(unknown)"
