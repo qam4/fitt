@@ -200,6 +200,69 @@ Bottom line: LiteLLM remains the right choice for FITT's
 scale and topology. Revisit only if we hit a concrete
 LiteLLM limitation.
 
+## External services (for tools that need them)
+
+Not frameworks — data sources FITT tools might call. Listed
+here so the evaluation survives past whichever chat
+conversation surfaced the need.
+
+### Web search
+
+Triggered by the Phase 7+ `web_search` tool. The viable
+options under FITT's no-subscription constraint
+(Principle 5):
+
+- **SearXNG** — self-hosted meta-search. Docker container,
+  aggregates results from Google/Bing/DuckDuckGo/Brave/
+  others without upstream keys. MIT licensed. No query
+  logging leaves your machine. Adds one compose service.
+  The right long-term choice; matches FITT's local-first
+  principles cleanly.
+- **DuckDuckGo Instant Answers API** — free, no key,
+  `https://api.duckduckgo.com/?q=...&format=json`. Returns
+  structured "instant answers" for a subset of queries
+  (Wikipedia abstracts, conversions, disambiguation). Not
+  general search. Good as `web_search` v0 because it
+  requires zero infrastructure — just an HTTPS call like
+  `http_get`. Upgrade to SearXNG when the gaps show.
+- **Brave Search API** — free tier 2000 queries/month with
+  an API key. Good quality. Technically not a subscription
+  but closer to the line; keys can be revoked, quotas
+  apply. Reasonable fallback if SearXNG proves too heavy
+  operationally.
+- **Google / Bing APIs** — require billing; out of scope
+  per Principle 5.
+- **Scraping Google / Bing HTML directly** — violates ToS,
+  unreliable, and the model's own output layer knows this.
+  Don't.
+
+### Other current-facts APIs
+
+The "find me X" pattern applies across domains; each has
+open endpoints that `http_get` can already hit today if
+the model thinks to try them.
+
+- **Weather** — `wttr.in` (already used live 2026-05-10).
+  No key, ASCII or JSON.
+- **Stocks / crypto** — `api.coingecko.com` for crypto;
+  Yahoo Finance JSON endpoints for stocks. Both no-key.
+- **GitHub** — `api.github.com`, 60 req/hour unauth, 5000
+  req/hour with a user token.
+- **Hacker News** — `hacker-news.firebaseio.com/v0/`. No
+  key, very clean API.
+- **Public holidays** — `date.nager.at` per-country
+  endpoint.
+- **NASA APOD / space imagery** — `api.nasa.gov`, generous
+  free tier.
+- **Sports** — TheSportsDB has a free tier. Per-league
+  endpoints exist; evaluate per-need.
+
+For most of these, the right FITT pattern isn't new tools
+— it's the Phase 7+ current-facts nudge in the capability
+block teaching the model to reach for `http_get` against
+known-good URLs when asked about current X. A `web_search`
+tool is the catch-all for anything without a direct API.
+
 ## When to revisit this doc
 
 - A new project in the same space surfaces that looks
