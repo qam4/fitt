@@ -526,3 +526,265 @@ async def test_deny_list_does_not_prompt_on_ask_when_denied(
     # And no approval is pending.
     async with m._lock:
         assert m._pending == {}
+
+
+# --------------------------------------------------------------- trust session
+
+
+def _ctx_for(
+    reg: ProjectRegistry,
+    *,
+    client: str = "telegram",
+    session_key: str = "main",
+) -> ToolContext:
+    """Variant of ``_ctx`` that accepts a session_key, used by
+    the trust-session tests where the session boundary is what
+    we're exercising."""
+    return ToolContext(
+        client=client,
+        session_key=session_key,
+        projects=reg,
+        backend=None,
+    )
+
+
+async def test_trust_session_makes_future_calls_skip_prompt(
+    project_registry: ProjectRegistry,
+) -> None:
+    """The core fix. User taps 🔓 Trust session on the first
+    prompt; the second call to the same tool in the same
+    session must return trust_session immediately without ever
+    creating a pending approval.
+
+    Regression guard for the 2026-05-11 bug where the button
+    was rendered in Telegram, the user's click was correctly
+    routed to the gateway, and the gateway's trust_session()
+    was a no-op — so the next call re-prompted identically to
+    Approve."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+
+    # First call: user taps "Trust session".
+    async def resolver() -> None:
+        await asyncio.sleep(0.01)
+        pending = await m.list_pending()
+        await m.resolve_approval(pending[0].approval_id, "trust_session")
+
+    first, _ = await asyncio.gather(
+        m.check(reg.lookup("edit_file"), {"path": "a.py"}, _ctx_for(project_registry)),
+        resolver(),
+    )
+    assert first.execute is True
+    assert first.reason == "trust_session"
+
+    # Second call: same tool, same session. No resolver running
+    # — if the code path still enters _request_and_wait, this
+    # would hang until the test's approval_timeout_s.
+    second = await m.check(
+        reg.lookup("edit_file"),
+        {"path": "b.py"},
+        _ctx_for(project_registry),
+    )
+    assert second.execute is True
+    assert second.reason == "trust_session"
+    assert "previously trusted" in second.detail
+    # And no pending approval was ever created for the second call.
+    assert await m.list_pending() == []
+
+
+async def test_trust_does_not_leak_across_sessions(
+    project_registry: ProjectRegistry,
+) -> None:
+    """Session boundaries stay intact. Trusting a tool in
+    session A must NOT auto-approve it in session B — otherwise
+    the per-session model is a lie and a shared household hub
+    with multiple chats would cross-contaminate."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+
+    # Trust in session A.
+    m.trust_session("session-a", "edit_file")
+
+    # Session A: short-circuit, no prompt.
+    decision_a = await m.check(
+        reg.lookup("edit_file"),
+        {"path": "a.py"},
+        _ctx_for(project_registry, session_key="session-a"),
+    )
+    assert decision_a.reason == "trust_session"
+
+    # Session B: must NOT be trusted. We use a tiny timeout so
+    # the test fails fast if the short-circuit wrongly fired.
+    m_b = ApprovalMiddleware(reg, approval_timeout_s=0.05)
+    # Reuse the trust grant in the real middleware for session A
+    # only; prove session B prompts. (We build a fresh middleware
+    # for B so a test bug can't leak state between assertions.)
+    m_b.trust_session("session-a", "edit_file")
+    decision_b = await m_b.check(
+        reg.lookup("edit_file"),
+        {"path": "b.py"},
+        _ctx_for(project_registry, session_key="session-b"),
+    )
+    assert decision_b.reason == "timeout"  # prompted, nobody answered
+    assert decision_b.execute is False
+
+
+async def test_trust_is_per_tool_not_per_args(
+    project_registry: ProjectRegistry,
+) -> None:
+    """Trust scope is per-(session, tool), not per-arguments.
+    Documented behaviour matching MeshClaw / Claude Code /
+    Cursor: once you trust ``project_shell`` for a session, the
+    model can run any command through it (subject to the
+    deny list, which runs before any trust check).
+
+    Test guards the "per-tool" half of that contract — different
+    args in the same session don't re-prompt."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("project_shell", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+
+    # Trust once.
+    m.trust_session("main", "project_shell")
+
+    d1 = await m.check(
+        reg.lookup("project_shell"),
+        {"command": "ls"},
+        _ctx_for(project_registry),
+    )
+    d2 = await m.check(
+        reg.lookup("project_shell"),
+        {"command": "git status"},
+        _ctx_for(project_registry),
+    )
+    assert d1.reason == "trust_session"
+    assert d2.reason == "trust_session"
+
+
+async def test_trust_does_not_bypass_deny_list(
+    project_registry: ProjectRegistry,
+) -> None:
+    """The deny list is the safety floor; trust is a UX
+    convenience layered on top. Even a trusted tool can't run a
+    denied command.
+
+    Regression guard for a plausible refactor that moves the
+    trust check before the deny-list check. That would turn
+    Trust session into a full YOLO escape hatch for anything
+    the deny list is meant to catch."""
+    reg = ToolRegistry()
+    reg.register(
+        _mk_tool(
+            "project_shell",
+            ApprovalBucket.ASK,
+            shell_command_for=lambda args: str(args.get("command") or ""),
+        )
+    )
+    m = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+    m.trust_session("main", "project_shell")
+
+    decision = await m.check(
+        reg.lookup("project_shell"),
+        {"command": "rm -rf /"},
+        _ctx_for(project_registry),
+    )
+    assert decision.reason == "denied_deny_list"
+    assert decision.execute is False
+
+
+async def test_trust_survives_within_session_restart_not_across(
+    project_registry: ProjectRegistry,
+) -> None:
+    """Trust is in-memory per-middleware. A second
+    ``ApprovalMiddleware`` instance (simulating a gateway
+    restart) starts with no trust grants — the first call
+    re-prompts.
+
+    Documented behaviour: a restart is a fresh start. Persistent
+    trust graduates to config.yaml (``bucket=auto``), not to
+    in-memory state that magically survives reboots."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+
+    m1 = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+    m1.trust_session("main", "edit_file")
+    d1 = await m1.check(reg.lookup("edit_file"), {"path": "a.py"}, _ctx_for(project_registry))
+    assert d1.reason == "trust_session"
+
+    # "Restart": new middleware, same registry.
+    m2 = ApprovalMiddleware(reg, approval_timeout_s=0.05)
+    d2 = await m2.check(reg.lookup("edit_file"), {"path": "a.py"}, _ctx_for(project_registry))
+    assert d2.reason == "timeout"  # prompted, nobody answered
+
+
+async def test_clear_session_drops_trust(
+    project_registry: ProjectRegistry,
+) -> None:
+    """CLI session-delete / -archive paths call clear_session;
+    any trusted tools for that session get forgotten."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=0.05)
+
+    m.trust_session("retired", "edit_file")
+    m.clear_session("retired")
+
+    d = await m.check(
+        reg.lookup("edit_file"),
+        {"path": "a.py"},
+        _ctx_for(project_registry, session_key="retired"),
+    )
+    assert d.reason == "timeout"
+
+
+async def test_trust_in_session_does_not_affect_other_tools(
+    project_registry: ProjectRegistry,
+) -> None:
+    """Trusting edit_file doesn't silently trust project_shell
+    or any other tool. Per-tool scope is the whole point."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    reg.register(_mk_tool("write_file", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=0.05)
+
+    m.trust_session("main", "edit_file")
+
+    # edit_file: trusted.
+    d1 = await m.check(reg.lookup("edit_file"), {"path": "a.py"}, _ctx_for(project_registry))
+    assert d1.reason == "trust_session"
+
+    # write_file: still prompts.
+    d2 = await m.check(reg.lookup("write_file"), {"path": "b.py"}, _ctx_for(project_registry))
+    assert d2.reason == "timeout"
+
+
+async def test_trust_is_granted_by_decide_handler_path(
+    project_registry: ProjectRegistry,
+) -> None:
+    """End-to-end of the live path the Telegram bot uses:
+    user taps 🔓, decide endpoint calls resolve_approval with
+    ``trust_session``, which triggers the grant via
+    _request_and_wait's branch. Guards against a refactor that
+    only wires up direct trust_session() calls but forgets the
+    production code path."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("edit_file", ApprovalBucket.ASK))
+    m = ApprovalMiddleware(reg, approval_timeout_s=10.0)
+
+    async def tap_trust() -> None:
+        await asyncio.sleep(0.01)
+        pending = await m.list_pending()
+        await m.resolve_approval(pending[0].approval_id, "trust_session")
+
+    first, _ = await asyncio.gather(
+        m.check(reg.lookup("edit_file"), {"path": "a.py"}, _ctx_for(project_registry)),
+        tap_trust(),
+    )
+    assert first.reason == "trust_session"
+
+    # The grant must have been applied by the decide path.
+    second = await m.check(reg.lookup("edit_file"), {"path": "b.py"}, _ctx_for(project_registry))
+    assert second.reason == "trust_session"
+    assert "previously trusted" in second.detail

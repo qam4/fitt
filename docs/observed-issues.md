@@ -33,6 +33,49 @@ doc.
 
 ---
 
+## 🔓 Trust session button did nothing
+
+**First observed:** 2026-05-11. **Fixed:** 2026-05-11.
+**Tag:** bug (closed), high pain. Principle 8 gap.
+
+Every Telegram approval prompt rendered three buttons:
+✅ Approve, ❌ Reject, 🔓 Trust session. Tapping 🔓 correctly
+routed the click to the gateway's decide endpoint, which
+called `ApprovalMiddleware.trust_session(session_key,
+tool_name)` as designed. The method body was a documented
+no-op: a single `_log.debug("approval.trust_session.noop",
+...)` and nothing else — Task 8c, deferred at Phase 4 shipping
+time and never completed. The next tool call in the same
+session re-prompted identically to how Approve would have
+behaved.
+
+**Cost:** Every multi-step Telegram coding session paid
+N taps for N tool calls. Observed during live use on
+2026-05-11: three `edit_file` prompts for one turn's work,
+with the operator tapping "🔓 Trust session" on the first
+one and being confused when the second still asked. A
+classic Principle 8 gap — the UI promised session-level
+trust, the backend silently didn't deliver.
+
+**Fix:** `ApprovalMiddleware` gained
+`_trusted: dict[str, set[str]]` (session_key → trusted tool
+names). `trust_session()` writes to it. `check()` gained a
+short-circuit after the deny-list check and the early
+auto/block/yolo branches: if the session already trusts the
+tool, return `ApprovalDecision.trust_session(detail=
+"previously trusted for this session")` without creating a
+pending approval. `clear_session()` drops the session's
+trust set so CLI archive / delete paths stay clean. Trust
+is per-(session, tool); it does NOT bypass the deny list
+(which runs first); it does NOT survive a gateway restart
+(persistent trust graduates to config.yaml's
+`bucket=auto`). 8 tests cover the short-circuit path,
+cross-session isolation, deny-list precedence, per-tool
+scope, restart behaviour, `clear_session`, and the
+end-to-end decide-handler flow the Telegram bot uses.
+
+---
+
 ## FITT capability block leaks into coding-CLI clients (Aider)
 
 **First observed:** 2026-05-11.

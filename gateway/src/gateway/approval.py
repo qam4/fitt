@@ -47,12 +47,6 @@ Phase 4.5's event log, not here.
 Deferred
 --------
 
-* Deny-list check before bucket resolution (Task 12).
-* HMAC-chained audit entry per decision (Task 13).
-* Real session-trust state (Task 8c). Today the placeholders are
-  no-ops; once 8c ships, ``resolve_approval`` with
-  ``trust_session`` should grant the session and future calls to
-  the same tool return ``trust_session`` directly.
 * YOLO-window timers (Task 8d).
 """
 
@@ -145,6 +139,16 @@ class ApprovalMiddleware:
         self._pending: dict[str, PendingApproval] = {}
         self._lock = asyncio.Lock()
         self._timeout_s = approval_timeout_s
+        # Session-trust state: for each session_key, the set of
+        # tool names the user has tapped "Trust session" on.
+        # Populated by :meth:`trust_session`, consulted by
+        # :meth:`check` to skip re-prompting for the same tool in
+        # the same session. Cleared per-session via
+        # :meth:`clear_session`; dropped entirely on gateway
+        # restart (in-memory only, matching the posture of
+        # ``_pending``). See the "sticky approval" entry in
+        # docs/observed-issues.md for the motivation.
+        self._trusted: dict[str, set[str]] = {}
 
     # ------------------------------------------------ bucket dispatch
 
@@ -229,6 +233,23 @@ class ApprovalMiddleware:
                 )
             )
 
+        # Session-trust short-circuit. If the user has previously
+        # tapped "Trust session" for this tool in this session,
+        # the bucket resolves to ASK / TRUST_SESSION but we skip
+        # the out-of-band prompt and execute immediately. The
+        # deny-list check above still ran — trust is a convenience
+        # on top of policy, not a way around the safety floor.
+        if self._is_trusted(context.session_key, tool.name):
+            _log.info(
+                "approval.trust_session.hit",
+                extra={
+                    "tool": tool.name,
+                    "client": context.client,
+                    "session": context.session_key,
+                },
+            )
+            return ApprovalDecision.trust_session(detail="previously trusted for this session")
+
         # ASK / TRUST_SESSION — request human approval out of band.
         return await self._request_and_wait(tool, args, context, bucket)
 
@@ -267,7 +288,10 @@ class ApprovalMiddleware:
             if decision_str == "approve":
                 return ApprovalDecision.approved(detail="approved by user")
             if decision_str == "trust_session":
-                # Ship a grant once 8c lands; no-op today.
+                # Grant the session-level trust so future calls
+                # to the same tool in this session skip the
+                # prompt. Previously a no-op; see
+                # trust_session() docstring for history.
                 self.trust_session(context.session_key, tool.name)
                 return ApprovalDecision.trust_session(detail="trusted for this session")
             # Anything else — treat as reject.
@@ -360,21 +384,59 @@ class ApprovalMiddleware:
     # conditionally import different symbols as features land.
 
     def trust_session(self, session_key: str, tool_name: str) -> None:
-        """Placeholder for Task 8c session-trust grant.
+        """Record that ``tool_name`` is trusted for the remainder
+        of ``session_key`` — future ``ask`` / ``trust_session``
+        calls to the same tool in the same session skip the
+        out-of-band prompt and execute immediately.
 
-        Called after the user clicks "Trust session" on a prompt.
-        Today logs but doesn't persist state — future calls to
-        the same tool in the same session will still go through
-        the ask path. 8c makes it real.
-        """
-        _log.debug(
-            "approval.trust_session.noop",
+        Called by :meth:`_request_and_wait` when the user taps
+        "🔓 Trust session" on a Telegram approval prompt. Before
+        this landed, the method was a documented no-op and the
+        button did the same thing as Approve — one invocation
+        ran, the next one re-prompted. See the "🔓 Trust session
+        does nothing" entry in docs/observed-issues.md for the
+        history.
+
+        Trust scope is per-``(session_key, tool.name)``. It's not
+        per-arguments: trusting ``project_shell`` trusts every
+        command the model subsequently sends through it (still
+        subject to the deny list — that safety floor runs before
+        any trust check).
+
+        Lifetime: in-memory, same process as ``_pending``. A
+        gateway restart forgets all trust grants. Deliberate: a
+        restart is a fresh start, and the operator's muscle
+        memory shouldn't include "I trusted X last week, so X
+        is still trusted this week." Persistent trust would
+        graduate to config.yaml (``bucket=auto`` for the tool +
+        client pair), which is the right place for a long-lived
+        policy decision."""
+        self._trusted.setdefault(session_key, set()).add(tool_name)
+        _log.info(
+            "approval.trust_session.grant",
             extra={"session": session_key, "tool": tool_name},
         )
 
+    def _is_trusted(self, session_key: str, tool_name: str) -> bool:
+        """Internal helper used by :meth:`check`'s early return.
+        Public counterpart lives in tests; the production code
+        path only needs the boolean."""
+        return tool_name in self._trusted.get(session_key, set())
+
     def clear_session(self, session_key: str) -> None:
-        """Drop all session-level state for ``session_key``."""
-        _log.debug("approval.clear_session.noop", extra={"session": session_key})
+        """Drop all session-level state for ``session_key``.
+
+        Today that's just the session's trusted-tools set. Called
+        when a session is archived or deleted via the CLI; also a
+        useful test hook for resetting state between cases."""
+        removed = self._trusted.pop(session_key, None)
+        _log.info(
+            "approval.clear_session",
+            extra={
+                "session": session_key,
+                "trusted_tools_cleared": len(removed) if removed else 0,
+            },
+        )
 
 
 def _summarise_args(args: dict[str, Any], *, tool_name: str | None = None) -> str:
