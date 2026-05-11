@@ -458,6 +458,7 @@ async def _run_tool_loop(
     capability_gaps: Any = None,
     events: Any = None,
     push_channel_available: bool = True,
+    artifact_store: Any = None,
 ) -> Response:
     """Dispatch, execute tool calls, re-dispatch, repeat, then return.
 
@@ -494,6 +495,7 @@ async def _run_tool_loop(
             approval=approval,
             tool_ctx=tool_ctx,
             session_key=session_id,
+            artifact_store=artifact_store,
         )
 
     async def _on_detach(task: Any) -> None:
@@ -848,6 +850,7 @@ async def chat_completions(request: Request) -> Response:
             capability_gaps=getattr(request.app.state, "capability_gaps", None),
             events=getattr(request.app.state, "events", None),
             push_channel_available=_push_channel_available(request),
+            artifact_store=getattr(request.app.state, "artifact_store", None),
         )
 
     try:

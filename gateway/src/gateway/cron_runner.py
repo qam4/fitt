@@ -68,6 +68,7 @@ class CronRunner:
         cron_service: Any = None,
         local_shell: Any = None,
         lessons: Any = None,
+        artifact_store: Any = None,
     ) -> None:
         self._config = config
         self._tool_registry = tool_registry
@@ -81,6 +82,7 @@ class CronRunner:
         self._cron_service = cron_service
         self._local_shell = local_shell
         self._lessons = lessons
+        self._artifact_store = artifact_store
 
     # -------------------------------------------------- public API
 
@@ -303,6 +305,7 @@ class CronRunner:
             approval=approval_for_firing,
             tool_ctx=tool_ctx,
             session_key=session_key,
+            artifact_store=self._artifact_store,
         )
 
     def _default_alias(self) -> str:

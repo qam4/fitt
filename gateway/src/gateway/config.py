@@ -124,6 +124,17 @@ class MemoryConfig(BaseModel):
     # the decay layer.
     history_max_days: int = 90
 
+    # Tool-output artifact hoisting (Claude Code layer 0; see
+    # docs/hallucinations-and-poisoning.md proposed item 4).
+    # Any tool payload over ``tool_output_max_inline_bytes`` gets
+    # written to ``sessions/<key>/artifacts/<day>/<uuid>.txt`` and
+    # the in-context content becomes a preview + path pointer.
+    # ``tool_output_preview_bytes`` is the head we keep inline; it
+    # gets clamped to at most half the threshold so the preview
+    # never approaches the budget it was meant to duck under.
+    tool_output_max_inline_bytes: int = 8192
+    tool_output_preview_bytes: int = 2048
+
     @field_validator("identity_dir", "sessions_dir", mode="before")
     @classmethod
     def _expand(cls, v: object) -> object:

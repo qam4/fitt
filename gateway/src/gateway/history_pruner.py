@@ -148,6 +148,14 @@ class HistoryPruner:
         """Walk every session's history directory and delete
         files whose filename date is older than the cutoff.
 
+        Also walks each session's ``artifacts/<YYYY-MM-DD>/``
+        tree and drops over-age day directories in full. Tool-
+        output artifacts share the same retention window as
+        history by design: they were produced by tool calls
+        whose surrounding turns are aging out at the same
+        cadence, so keeping them around after the history is
+        gone leaves orphaned blobs nobody can re-contextualise.
+
         Non-parseable filenames (e.g. ``backup.md``) are left
         alone — operators place recovery artifacts in these
         directories and we don't want to eat them."""
@@ -161,25 +169,36 @@ class HistoryPruner:
             if not session_dir.is_dir():
                 continue
             history_dir = session_dir / "history"
-            if not history_dir.is_dir():
-                continue
-            for f in history_dir.iterdir():
-                if not f.is_file() or f.suffix != ".md":
-                    continue
-                try:
-                    file_day = date.fromisoformat(f.stem)
-                except ValueError:
-                    # Not a YYYY-MM-DD file; leave it alone.
-                    continue
-                if file_day < cutoff_day:
+            if history_dir.is_dir():
+                for f in history_dir.iterdir():
+                    if not f.is_file() or f.suffix != ".md":
+                        continue
                     try:
-                        f.unlink()
-                        removed += 1
-                    except OSError as e:
-                        _log.warning(
-                            "history.pruner.unlink_failed",
-                            extra={"file": str(f), "error": str(e)},
-                        )
+                        file_day = date.fromisoformat(f.stem)
+                    except ValueError:
+                        # Not a YYYY-MM-DD file; leave it alone.
+                        continue
+                    if file_day < cutoff_day:
+                        try:
+                            f.unlink()
+                            removed += 1
+                        except OSError as e:
+                            _log.warning(
+                                "history.pruner.unlink_failed",
+                                extra={"file": str(f), "error": str(e)},
+                            )
+            artifacts_dir = session_dir / "artifacts"
+            if artifacts_dir.is_dir():
+                for day_dir in artifacts_dir.iterdir():
+                    if not day_dir.is_dir():
+                        continue
+                    try:
+                        day = date.fromisoformat(day_dir.name)
+                    except ValueError:
+                        # Unrecognised dir name; leave alone.
+                        continue
+                    if day < cutoff_day:
+                        removed += _remove_tree(day_dir)
         return removed
 
     def _load_anchor(self) -> float:
@@ -212,3 +231,40 @@ class HistoryPruner:
 
 def default_history_anchor_path(fitt_home: Path) -> Path:
     return fitt_home / "history.pruner.anchor"
+
+
+def _remove_tree(path: Path) -> int:
+    """Recursively delete ``path`` and return the number of
+    files removed (directories don't count toward the removed
+    counter — we mirror the per-file semantics of the history
+    sweep so operators reading the event log see a meaningful
+    count).
+
+    Errors are logged and swallowed per-file so one unreadable
+    artifact doesn't block the rest of the day directory from
+    draining. Empty directories left behind after a partial
+    sweep get cleaned up on the next pass."""
+    removed = 0
+    for child in path.iterdir() if path.is_dir() else []:
+        if child.is_dir():
+            removed += _remove_tree(child)
+        elif child.is_file():
+            try:
+                child.unlink()
+                removed += 1
+            except OSError as e:
+                _log.warning(
+                    "history.pruner.unlink_failed",
+                    extra={"file": str(child), "error": str(e)},
+                )
+    try:
+        path.rmdir()
+    except OSError as e:
+        # Non-empty (due to unlink failures above) or otherwise
+        # stubborn. Leave it for the next pass rather than
+        # failing the sweep.
+        _log.warning(
+            "history.pruner.rmdir_failed",
+            extra={"dir": str(path), "error": str(e)},
+        )
+    return removed

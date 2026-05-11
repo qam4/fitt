@@ -295,6 +295,20 @@ def create_app(config: Config) -> FastAPI:
 
     app.state.events = EventLog(default_events_path(fitt_home()))
 
+    # Tool-output artifact store (hallucinations doc item 4):
+    # hoists over-threshold tool payloads to
+    # $FITT_HOME/sessions/<key>/artifacts/<day>/<uuid>.txt so
+    # they don't bloat the in-flight turn's context or linger
+    # verbatim in tomorrow's history. Read by the agent loop
+    # right before it builds the ``role: tool`` message.
+    from .tool_artifacts import ArtifactStore
+
+    app.state.artifact_store = ArtifactStore(
+        sessions_dir=config.memory.sessions_dir,
+        max_inline_bytes=config.memory.tool_output_max_inline_bytes,
+        preview_bytes=config.memory.tool_output_preview_bytes,
+    )
+
     # Cron service (Phase 4.5): persistent cron jobs backed by
     # $FITT_HOME/cron.json. The scheduler loop that actually
     # fires due jobs lands in Phase 4.5 Task 4; this binding is
@@ -375,6 +389,7 @@ def create_app(config: Config) -> FastAPI:
         cron_service=app.state.cron,
         local_shell=app.state.local_shell,
         lessons=app.state.lessons,
+        artifact_store=app.state.artifact_store,
     )
     app.state.cron_runner = cron_runner
     app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=cron_runner.fire)

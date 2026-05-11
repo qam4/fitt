@@ -217,3 +217,71 @@ async def test_empty_sessions_dir_is_no_op(tmp_path: Path) -> None:
 
 def test_default_history_anchor_path(tmp_path: Path) -> None:
     assert default_history_anchor_path(tmp_path) == tmp_path / "history.pruner.anchor"
+
+
+# --------------------------------------------------------------- artifacts
+
+
+async def test_tick_sweeps_old_artifact_day_directories(tmp_path: Path) -> None:
+    """Artifacts under ``sessions/<k>/artifacts/<YYYY-MM-DD>/``
+    share the same retention window as history files. An old
+    day directory gets removed (tree and all); a fresh one is
+    left alone.
+
+    This is the pairing with the tool-output hoisting layer: a
+    tool produced a big file 100 days ago, the history turn
+    that referenced it is aging out, the artifact should age
+    out with it."""
+    sessions = tmp_path / "sessions"
+    now_day = date(2026, 5, 8)
+    # Seed a session with both an old and a fresh day of
+    # artifacts. Seed a harmless history file so the sweep
+    # actually runs (removal count wouldn't be zero).
+    old_day = (now_day - timedelta(days=100)).isoformat()
+    fresh_day = (now_day - timedelta(days=5)).isoformat()
+    old_dir = sessions / "main" / "artifacts" / old_day
+    old_dir.mkdir(parents=True)
+    (old_dir / "read_file-abc.txt").write_text("old blob", encoding="utf-8")
+    (old_dir / "project_shell-def.txt").write_text("old log", encoding="utf-8")
+    fresh_dir = sessions / "main" / "artifacts" / fresh_day
+    fresh_dir.mkdir(parents=True)
+    (fresh_dir / "read_file-xyz.txt").write_text("keep me", encoding="utf-8")
+    _seed(sessions / "main" / "history", now_day - timedelta(days=10))
+
+    events = EventLog(tmp_path / "events.jsonl")
+    pruner = HistoryPruner(
+        sessions_dir=sessions,
+        events=events,
+        max_age_days=90,
+        anchor_path=tmp_path / "anchor",
+    )
+    removed = await pruner.tick(now=_ts(now_day))
+    # Two artifact files removed; history file is within
+    # retention so it doesn't contribute.
+    assert removed == 2
+    assert not old_dir.exists()
+    assert fresh_dir.exists()
+    assert (fresh_dir / "read_file-xyz.txt").exists()
+
+
+async def test_tick_ignores_unrecognised_artifact_dirs(tmp_path: Path) -> None:
+    """A directory whose name isn't ``YYYY-MM-DD`` gets left
+    alone — same posture as the history sweep's handling of
+    non-date filenames. Operators occasionally place recovery
+    artifacts in these dirs; we shouldn't eat them."""
+    sessions = tmp_path / "sessions"
+    now_day = date(2026, 5, 8)
+    weird_dir = sessions / "main" / "artifacts" / "manual-backup"
+    weird_dir.mkdir(parents=True)
+    (weird_dir / "note.txt").write_text("keep", encoding="utf-8")
+
+    events = EventLog(tmp_path / "events.jsonl")
+    pruner = HistoryPruner(
+        sessions_dir=sessions,
+        events=events,
+        max_age_days=90,
+        anchor_path=tmp_path / "anchor",
+    )
+    await pruner.tick(now=_ts(now_day))
+    assert weird_dir.exists()
+    assert (weird_dir / "note.txt").exists()

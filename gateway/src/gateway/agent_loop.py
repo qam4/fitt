@@ -50,6 +50,7 @@ from .claim_check import parse_claims, verify_claims
 from .errors import NoBackendAvailable, UnknownAlias, UnknownTool
 from .memory import PersistedToolCall
 from .router import AliasRouter
+from .tool_artifacts import ArtifactStore
 from .tools import ApprovalDecision, Tool, ToolContext, ToolRegistry, ToolResult
 
 _log = logging.getLogger(__name__)
@@ -555,6 +556,7 @@ async def run_agent_loop(
     tool_ctx: ToolContext,
     session_key: str,
     max_iterations: int = _MAX_TOOL_CALL_ITERATIONS,
+    artifact_store: ArtifactStore | None = None,
 ) -> AgentLoopResult:
     """Run the tool-use loop to a natural stop.
 
@@ -574,6 +576,12 @@ async def run_agent_loop(
       so tests (and cron firings) can supply test doubles.
     * ``session_key`` — used for audit + gap entries and logged
       on the per-tool info line.
+    * ``artifact_store`` — optional. When supplied, tool payloads
+      over the store's threshold are written to disk and the
+      model sees a preview + path pointer instead. The audit
+      log still receives the full error payload for forensics.
+      ``None`` disables hoisting, which is appropriate for
+      tests that want byte-exact tool-result assertions.
 
     Does NOT touch memory. Callers that want persistence (the
     chat endpoint, the cron runner) should call
@@ -679,7 +687,12 @@ async def run_agent_loop(
                 {
                     "role": "tool",
                     "tool_call_id": call_id,
-                    "content": result.payload,
+                    "content": _hoist_if_configured(
+                        payload=result.payload,
+                        artifact_store=artifact_store,
+                        session_key=session_key,
+                        tool_name=tool.name if tool else "(unknown)",
+                    ),
                 }
             )
             # Phase 5 — record the call for persistence.
@@ -803,3 +816,25 @@ def _status_and_summary_from_result(result: ToolResult) -> tuple[str, str]:
     if len(summary) > 300:
         summary = summary[:297] + "..."
     return status, summary
+
+
+def _hoist_if_configured(
+    *,
+    payload: str,
+    artifact_store: ArtifactStore | None,
+    session_key: str,
+    tool_name: str,
+) -> str:
+    """Delegate to :meth:`ArtifactStore.maybe_hoist` when a store
+    is configured, else pass the payload through unchanged.
+
+    Pulled into its own function so the call site in the tool
+    loop stays readable and so tests for the hoisting behaviour
+    can target this helper directly without spinning up the full
+    loop. The audit log still gets the original (unhoisted)
+    payload — that happens before this call and is the forensic
+    record we don't compress."""
+    if artifact_store is None:
+        return payload
+    hoist = artifact_store.maybe_hoist(payload, session_key=session_key, tool_name=tool_name)
+    return hoist.content

@@ -577,6 +577,24 @@ referenced below where relevant but the fix plans live there.
    `read_file` the artifact if it needs more. Kills the single
    biggest source of context bloat. Estimate: a day.
 
+   *Shipped 2026-05-11.* `gateway/src/gateway/tool_artifacts.py`
+   hoists over-threshold tool payloads to
+   `$FITT_HOME/sessions/<key>/artifacts/<YYYY-MM-DD>/<tool>-<uuid>.txt`
+   and the `role: tool` message the model sees becomes a
+   UTF-8-safe preview head (default 2 KB) plus a footer naming
+   the path and the full byte count. Thresholds live under
+   `memory.tool_output_max_inline_bytes` / `tool_output_preview_bytes`.
+   Audit log still receives the original payload; only the
+   in-context copy gets slimmed down. History pruner extended
+   to sweep `artifacts/<YYYY-MM-DD>/` directories on the same
+   retention window as history files. Wired into the chat
+   endpoint and cron runner via
+   `app.state.artifact_store`. 26 tests cover the threshold
+   boundary, UTF-8 preview correctness, IO-failure fallback,
+   concurrent-write distinct-paths, artifact-dir sweep, and an
+   end-to-end chat flow asserting the model sees the preview and
+   the full bytes land on disk.
+
 5. **Compaction (Claude Code layers 4 + 5).** When a session's
    history markdown passes a threshold (start at 40KB), summarize
    the older half into a `# Compacted <date>` section and keep
