@@ -188,18 +188,30 @@ Concrete process when picking a new `fitt-smart` backend.
 
 ### Step 1: Build the candidate list
 
-For NVIDIA NIM today (2026-05):
+**Go to the live provider catalog, not a cached search
+result.** The NIM / OpenRouter / Together / Groq catalogs
+churn fast enough that a month-old snapshot is unreliable.
+Web search can surface families and names to investigate —
+it shouldn't be the source of truth for what's currently
+available.
 
-1. Go to `build.nvidia.com/models`.
+For NVIDIA NIM today:
+
+1. Open `build.nvidia.com/models` in a browser. (Web-fetch
+   gives you only a shell of the page; the catalog list is
+   JS-rendered. Eyes on screen beats scraping here.)
 2. Filter by the model families that are known to support
    tool calling well: DeepSeek, Qwen (coder variants),
    Llama (3.3+ or 4), Mistral.
 3. Pull the model cards for the 3-5 that look most
    promising. Skim for: "function calling," "agentic
-   tool use," "OpenAI-compatible," "specially designed
-   format" (flag).
+   tool use," "OpenAI-compatible," "native function
+   calling," "specially designed format" (flag).
 4. Note the context window and architecture (dense /
    MoE-active-params).
+5. Cross-check against DeepSeek / Qwen / Meta's own release
+   blogs to confirm what was trained for tool use vs. what
+   just supports it nominally.
 
 ### Step 2: Cross-reference BFCL
 
@@ -285,39 +297,49 @@ unreliable for FITT's workload. Replace.
 
 ### Candidates under consideration (as of 2026-05-11)
 
-Applying Step 1 against NIM:
+Applying Step 1 against NIM. The original draft of this
+section listed `deepseek-v3.1-terminus` as a candidate; on
+2026-05-11 you checked build.nvidia.com directly and it
+wasn't there — DeepSeek-V4 (Flash and Pro) had replaced it.
+Lesson learned: web-search snapshots of NIM's catalog go
+stale fast; always confirm against the live catalog at
+decision time. Corrected candidate list below:
 
-| Model | Arch | Context | Function calling advertised | BFCL | Risk |
-|---|---|---|---|---|---|
-| `deepseek-ai/deepseek-v3.1-terminus` | MoE 685B, sparse | 128K | "Strict function calling" explicitly. | Not looked up. | Low. Vendor-signed strict claim; DeepSeek has a track record of tool-use quality. |
-| `qwen/qwen3-coder-480b-a35b-instruct` | MoE 480B/35B-active | 256K | "Supports function calling and tool choice." "Specially designed function call format." | Qwen claims Claude Sonnet 4-comparable on agentic. | Medium. Claims look good but "specially designed format" is exactly the phrase that bit us last time. |
-| `meta/llama-4-maverick-17b-128e` | MoE 17B/128E | varies | NIM VLM docs list function-calling-supported models incl. Llama 4 Maverick. | Not looked up. | Medium. Meta does tool-use post-training, but Llama 4 is recent and less proven than Llama 3.3. |
-| `meta/llama-3_3-70b-instruct` | Dense 70B | 128K | Long track record of OpenAI-compatible tool calls. | Solid on BFCL historically. | Low. The conservative dense default. |
+| Model | Arch | Context | Function calling advertised | Risk |
+|---|---|---|---|---|
+| `deepseek-ai/deepseek-v4-flash` | MoE 284B/13B-active | 1M | "Native function calling (128 parallel calls)." Pre-tuned adapters for Claude Code, OpenCode, OpenClaw. Blog tagline: "a million-token context that agents can actually use." | Low. MIT license. Explicit agentic post-training (the MoE-agentic distinction from Criterion 3). Lighter than V4-Pro so better Telegram latency. |
+| `deepseek-ai/deepseek-v4-pro` | MoE 1.6T/49B-active | 1M | Same V4 family; "Open-source SOTA in Agentic Coding benchmarks." | Low-to-medium. Same family win, but 1.6T total means slower and likely harder-rate-limited on NIM free tier. Save for heavy work if V4-Flash falls short. |
+| `qwen/qwen3-coder-480b-a35b-instruct` | MoE 480B/35B-active | 256K | "Supports function calling and tool choice." "Specially designed function call format." | Medium. Claims look good but "specially designed format" is exactly the phrase that bit us last time with the Qwen family. |
+| `meta/llama-3_3-70b-instruct` | Dense 70B | 128K | Long track record of OpenAI-compatible tool calls. | Low. Conservative dense default. Less sparkle on reasoning than the MoE candidates but more predictable format adherence. |
 
 ### Recommendation trail for this specific swap
 
-1. **First try: `deepseek-v3.1-terminus`.** Vendor-signed
-   "strict function calling" claim makes it the lowest-risk
-   shot at solving the problem outright. If the three test
-   prompts work, bind and done.
+1. **First try: `deepseek-v4-flash`.** Best match to FITT's
+   needs: MIT license, explicit agentic-tool-use training,
+   native function calling, 1M context, smaller enough to
+   stay fast on Telegram. If the three test prompts work,
+   bind and done.
 2. **Second try: `qwen3-coder-480b-a35b-instruct`.** Strong
-   agentic claims, but the "specially designed format" phrase
-   needs empirical verification. If test prompts work, bind.
-   If narration appears, it's the same class of failure as
-   qwen3-next and we skip.
-3. **Third try: `llama-3.3-70b-instruct`.** Conservative
+   agentic claims, but the "specially designed format"
+   phrasing needs empirical verification given the Qwen-
+   family lineage that just failed us. If prompts work,
+   bind. If narration appears, skip.
+3. **Third try: `deepseek-v4-pro`.** Same V4 agentic
+   benefits but bigger; reach for this only if Flash
+   struggles on harder reasoning tasks during the two-week
+   trial.
+4. **Fourth try: `llama-3.3-70b-instruct`.** Conservative
    fallback. Dense 70B with mature tool-calling, well-
-   characterised behaviour. Less sparkle on reasoning than
-   the two above but more predictable.
-4. **Stopping point:** one of the above works, or we escalate
+   characterised behaviour.
+5. **Stopping point:** one of the above works, or we escalate
    to "maybe the gateway code is the problem, not the model"
    (Problem B / `_persisted_args` bug per observed-issues).
 
 ### Why Qwen3-Coder was almost first but isn't
 
 Initial instinct: it's agentic-trained, it's got the best
-marketing around tool use among open models, it should be
-the default. But:
+marketing around tool use among open Qwen variants, it
+should be the default. But:
 
 - Same family (Qwen) as the model that just failed. Not
   proof it'll also fail — Qwen3-Coder has explicit agentic
@@ -328,14 +350,32 @@ the default. But:
   last time: a format that works inside Qwen's own agent
   harness but doesn't always emit clean OpenAI tool_calls
   through third-party wrappers.
-- DeepSeek-V3.1-Terminus has the stronger vendor claim
-  ("strict") and a different lineage. If we're debugging a
-  Qwen-specific problem, the cleanest test is a non-Qwen
-  model first.
+- DeepSeek-V4 has the stronger vendor claim ("native function
+  calling," MIT license) and a different lineage. If we're
+  debugging a Qwen-specific problem, the cleanest test is a
+  non-Qwen model first.
 
-If DeepSeek fails, Qwen3-Coder is the immediate next try,
+If V4-Flash fails, Qwen3-Coder is the immediate next try,
 and we learn whether the "specially designed format" was the
 issue or not.
+
+### Lesson logged: verify the catalog, don't trust search snapshots
+
+The original draft of this doc recommended
+`deepseek-v3.1-terminus` as the first candidate. That model
+appeared in web search results with a publication date from
+days-to-weeks ago. When we checked `build.nvidia.com` on
+2026-05-11, NIM had moved on: v3.1-terminus was gone,
+replaced by V4-Flash and V4-Pro.
+
+For the process described above, this means: **Step 1 must
+be a live check against `build.nvidia.com/models`, not a
+cached search result.** Same discipline applies to any
+hosted-model catalog (OpenRouter, Together.ai, Groq), which
+all churn fast enough that a month-old snapshot is
+unreliable. Web search can surface candidates to investigate,
+but the candidate list gets confirmed against the live page
+before testing.
 
 ## Where the eval harness fits
 
