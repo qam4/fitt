@@ -148,6 +148,11 @@ Read them before making structural changes.
   log of friction and small design problems from live use.
   When an entry starts to hurt enough, promote to a spec or
   roadmap entry.
+- [`docs/choosing-a-model.md`](./choosing-a-model.md) — process
+  for picking which model to bind a FITT alias to. Includes
+  the criteria (OpenAI-compatible tool_calls, BFCL scores,
+  architecture signal) and a worked example from the 2026-05
+  `fitt-smart` re-evaluation.
 - [`gateway/README.md`](../gateway/README.md) — config reference,
   HTTP API, CLI, troubleshooting.
 - [`FITT_ROADMAP.md`](../FITT_ROADMAP.md) — guiding principles,

@@ -16,6 +16,9 @@ Related docs:
   reliability issues below. Several entries here cross-reference
   its four-problem breakdown (A: hallucination, B: poisoning,
   C: self-deception, D: invisibility).
+- [`docs/choosing-a-model.md`](./choosing-a-model.md) — how to
+  pick which model to bind to a FITT alias. Some entries here
+  are downstream of an unfortunate model choice.
 - [`FITT_ROADMAP.md`](../FITT_ROADMAP.md) — direction and phase
   plan. When an entry here starts to hurt enough to shape a
   phase, promote it into a spec there.
