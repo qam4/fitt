@@ -33,6 +33,56 @@ doc.
 
 ---
 
+## Receipt cross-check regex captured "a" as a tool name
+
+**First observed:** 2026-05-12. **Rolled back:** 2026-05-12.
+**Tag:** bug (closed by removal), Principle-3 / own-doc
+violation.
+
+The `claim_check.py` module shipped 2026-05-11 as
+"minimum-viable receipt cross-checking" for Problem C. The
+live Telegram session on 2026-05-12 surfaced exactly the
+failure mode `docs/hallucinations-and-poisoning.md` had
+explicitly warned against: the regex captured `"a"` as a
+tool name from the chatty phrase *"using a secure,
+privacy-first toolset"*, firing a `tool_claim_mismatch`
+event on benign natural-language text.
+
+**Cost:** Every chatty Telegram reply that mentions
+"using", "via", or "I used" in passing was a false-positive
+candidate. One event per session-with-prose was typical.
+More insidious than the event noise: the signal trained the
+operator to ignore `tool_claim_mismatch`, which was meant to
+flag the actual Problem C failure mode.
+
+**Root cause:** I latched onto the word "receipt" in the
+hallucinations doc's item 3 and shipped a regex claim
+parser despite the same doc's explicit not-list ("regex
+matching on any specific hallucination shape") pointing
+straight at it. The "lexical-signal version" framing in the
+commit message was wallpaper, not a rationale.
+
+**Fix:** Removed `gateway/src/gateway/claim_check.py`,
+`gateway/tests/test_claim_check.py`,
+`agent_loop.py::record_claim_mismatch`, the chat + cron
+callers, the `tool_claim_mismatch` event kind, and every
+doc / spec / roadmap reference. The audit log at
+`$FITT_HOME/audit.jsonl` remains the real receipt layer;
+it's tamper-evident and authoritative. What's missing is a
+correct claim-extraction mechanism, and the only
+state-of-the-art candidate per the "Tool Receipts" paper
+(2026) is an LLM-based claim extractor — one extra LLM
+call per turn. Item 3 in the hallucinations doc is now
+deferred with eyes open.
+
+**Lesson for the agent:** if the backing doc lists the
+approach you're about to take on its explicit don't-do
+list, the right answer is to not do it, not to rebrand it
+as a minimum-viable starter. The doc exists to prevent
+exactly this failure mode.
+
+---
+
 ## 🔓 Trust session button did nothing
 
 **First observed:** 2026-05-11. **Fixed:** 2026-05-11.

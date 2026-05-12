@@ -596,6 +596,35 @@ referenced below where relevant but the fix plans live there.
    work. FITT's audit log is already a receipt log; we just
    aren't consulting it.
 
+   *Attempted then rolled back (2026-05-11 shipped, 2026-05-12
+   reverted).* We shipped `gateway/src/gateway/claim_check.py`
+   as the "lexical-signal version" — a regex parser that
+   matched "I executed the X tool" / "I called X" / verb claims
+   like "I edited" / "I ran". It violated this doc's own
+   explicit not-list ("regex matching on any specific
+   hallucination shape"). The 2026-05-12 live Telegram session
+   proved the prediction: the regex captured `"a"` as a tool
+   name from the chatty phrase *"using a secure, privacy-first
+   toolset"*, firing `tool_claim_mismatch` on benign natural-
+   language text. We removed the module, its tests, its
+   callers, and the `tool_claim_mismatch` event kind.
+
+   **What this leaves us with:** the audit log at
+   `$FITT_HOME/audit.jsonl` is still a receipt log — every
+   tool call ran this turn is in there, tamper-evident. What's
+   missing is a correct claim-extraction mechanism to compare
+   the model's prose against those receipts. The regex
+   approach is off the table; an LLM-based claim extractor
+   (run every assistant reply through a cheap model that
+   returns a structured list of claims) is the right Phase 2
+   shape per the "Tool Receipts" paper. Cost: one extra LLM
+   call per turn. Latency: 300-800ms depending on model.
+   Practicality: defer until compaction (item 5) and the eval
+   harness (item 6) are bedded in — neither is a prerequisite,
+   but both shift the operator's experience of Problem C more
+   than receipt cross-checking would have. Item 3 is now
+   deferred with eyes open.
+
 4. **Tool-output truncation with disk persistence (Claude Code
    layer 0).** Any tool result over a threshold (start at 8KB)
    gets written to `$FITT_HOME/sessions/<key>/artifacts/<uuid>.txt`

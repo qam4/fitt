@@ -105,8 +105,6 @@ One JSONL line per event. Schema:
   `project_shell`.
 - `tool_call_narrated` — `meta`: `preview` (200 chars).
   Emitted by `is_tool_use_expected_but_none`.
-- `tool_claim_mismatch` — `meta`: `claim_text`,
-  `claimed_tool`. Emitted by `claim_check`.
 - `gap_reported` — `meta`: `gap_text`, `suggestion`.
 - `turn_finished` — `meta`: `status` (`ok|upstream_error|
   tool_loop_exhausted`), `iterations`, `final_reply_len`.
@@ -171,7 +169,6 @@ an event; we're adding one `TurnLog.append(...)` alongside.
 - **`record_narrated_tool_call`** in `agent_loop.py`:
   adds a `tool_call_narrated` turn event alongside the
   existing event-log write.
-- **`record_claim_mismatch`**: same.
 - **`record_gap`**: same.
 - **`_run_tool_loop` in chat.py**: `record_turn_started` at
   entry, `record_turn_finished` at the single return point.
@@ -204,8 +201,8 @@ Format rules:
 - `meta` rendered key-sorted, `key=value` join. Dicts
   (like `args`) flatten into `key.subkey=value`; nested
   dicts deeper than two levels abbreviate to `{...}`.
-- Color: ok=green, warn=yellow (narrated, claim_mismatch,
-  gap, approval_timeout), error=red (upstream_error,
+- Color: ok=green, warn=yellow (narrated, gap,
+  approval_timeout), error=red (upstream_error,
   loop_exhausted).
 
 Implementation: a tail loop that reads new lines from the

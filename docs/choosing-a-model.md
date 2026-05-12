@@ -459,9 +459,6 @@ post-training, native OpenAI-compatible function calling
 - Sentinel / JSON-fence narration in raw history (grep
   `tool_call_narrated` in `events.jsonl`). Zero expected;
   nonzero means reconsider.
-- `tool_claim_mismatch` events — the receipt cross-check
-  that would catch Problem C if deepseek develops the
-  "yes I did it" hallucination pattern under long context.
 - Reasoning quality on multi-step tasks relative to the
   13B-active number. If V4-Flash stumbles on composing
   tool results, V4-Pro is the next step up (same family,

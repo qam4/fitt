@@ -25,7 +25,7 @@ dependency for everything else.
       `resolve_approval` + timeout branch of
       `_request_and_wait`.
 - [ ] Extend the existing `record_narrated_tool_call` /
-      `record_claim_mismatch` / `record_gap` in `agent_loop.py`
+      `record_gap` in `agent_loop.py`
       to also emit turn events.
 - [ ] Generate `turn_id` once per chat request in `chat.py`
       and on every cron firing in `cron_runner.py`; pass to
