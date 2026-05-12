@@ -292,7 +292,11 @@ async def test_multiple_tools_accumulate_in_same_bubble() -> None:
 # --------------------------------------------------------------- approvals
 
 
-async def test_approval_requested_posts_notifying_bubble() -> None:
+async def test_approval_requested_is_noop() -> None:
+    """The renderer no longer posts its own approval bubble —
+    that's :class:`~fitt_telegram_bot.approval.ApprovalPoller`'s
+    job, and letting both fire produced double-posts where a
+    tap on one 404'd the other (observed live 2026-05-13)."""
     bot = _FakeBot()
     r = _make_renderer(bot, _Clock())
     await r.handle_event(
@@ -306,62 +310,34 @@ async def test_approval_requested_posts_notifying_bubble() -> None:
             },
         }
     )
-    sends = bot.sends()
-    assert len(sends) == 1
-    assert sends[0].disable_notification is False  # notifies
-    assert "edit_file" in sends[0].text
-    assert sends[0].reply_markup == "kb:a1"
-    assert r.state.approval_bubbles["a1"] == sends[0].message_id
+    assert bot.calls == []
 
 
-async def test_approval_decided_edits_in_place() -> None:
+async def test_approval_decided_is_noop() -> None:
+    """No-op for the same reason as ``approval_requested``:
+    the poller's bubble is the single source of truth for
+    approval UX."""
     bot = _FakeBot()
     r = _make_renderer(bot, _Clock())
-    await r.handle_event(
-        {
-            "kind": "approval_requested",
-            "meta": {
-                "approval_id": "a1",
-                "tool_name": "edit_file",
-                "bucket": "ask",
-                "client": "telegram",
-            },
-        }
-    )
-    approval_bubble_id = r.state.approval_bubbles["a1"]
-
     await r.handle_event(
         {
             "kind": "approval_decided",
             "meta": {"approval_id": "a1", "decision": "approve", "duration_ms": 1500},
         }
     )
-    edits = bot.edits()
-    assert len(edits) == 1
-    assert edits[0].message_id == approval_bubble_id
-    assert "approved" in edits[0].text.lower()
-    assert edits[0].reply_markup is None  # buttons cleared
-
-
-async def test_approval_decided_unknown_id_is_silent_noop() -> None:
-    bot = _FakeBot()
-    r = _make_renderer(bot, _Clock())
-    await r.handle_event(
-        {
-            "kind": "approval_decided",
-            "meta": {"approval_id": "ghost", "decision": "approve", "duration_ms": 1},
-        }
-    )
     assert bot.calls == []
 
 
-async def test_approval_rejected_rendered_as_rejected() -> None:
+async def test_approval_events_dont_force_stream_bubble() -> None:
+    """A pure approval event (no tools planned) shouldn't
+    open a stream bubble — if nothing else happens, the
+    turn stays a plain chat turn."""
     bot = _FakeBot()
     r = _make_renderer(bot, _Clock())
     await r.handle_event(
         {
             "kind": "approval_requested",
-            "meta": {"approval_id": "a1", "tool_name": "x", "bucket": "ask", "client": "tg"},
+            "meta": {"approval_id": "a1", "tool_name": "edit_file", "bucket": "ask"},
         }
     )
     await r.handle_event(
@@ -370,7 +346,8 @@ async def test_approval_rejected_rendered_as_rejected() -> None:
             "meta": {"approval_id": "a1", "decision": "reject", "duration_ms": 500},
         }
     )
-    assert "rejected" in bot.edits()[-1].text.lower()
+    assert r.should_create_stream_bubble() is False
+    assert bot.calls == []
 
 
 # --------------------------------------------------------------- finish footer

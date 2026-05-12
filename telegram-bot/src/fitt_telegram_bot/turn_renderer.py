@@ -373,62 +373,34 @@ class TurnRenderer:
         await self._flush_stream_bubble_if_due(force=True)
 
     async def _on_approval_requested(self, event: dict[str, Any]) -> None:
-        meta = event.get("meta") or {}
-        approval_id = str(meta.get("approval_id", ""))
-        tool_name = str(meta.get("tool_name", "?"))
-        if not approval_id:
-            return
-        text = (
-            f"🔐 Approval needed\n\nTool: `{tool_name}`\n"
-            f"Tap a button to decide. Times out if you ignore it."
-        )
-        try:
-            msg = await self._bot.send_message(
-                chat_id=self.state.chat_id,
-                text=text,
-                reply_markup=self._build_keyboard(approval_id),
-                disable_notification=False,
-            )
-            self.state.approval_bubbles[approval_id] = msg.message_id
-        except Exception as exc:
-            _log.warning(
-                "turn_renderer.approval_post_failed",
-                extra={
-                    "turn_id": self.state.turn_id,
-                    "approval_id": approval_id,
-                    "error": str(exc),
-                },
-            )
+        """No-op. Approval bubbles are posted by
+        :class:`~fitt_telegram_bot.approval.ApprovalPoller`
+        which polls ``/v1/approvals/pending`` and carries
+        richer context (args summary, age, session).
+
+        The renderer used to post its own bubble from this
+        SSE event, producing back-to-back duplicates: user
+        taps one, the other 404s because the underlying
+        approval already resolved. Seen live 2026-05-13.
+        Leaving this as a no-op keeps the event wired (so
+        future rework can surface it differently — an
+        inline "waiting for approval" relabel on the task
+        card, say) without the double-post."""
+        return
 
     async def _on_approval_decided(self, event: dict[str, Any]) -> None:
-        meta = event.get("meta") or {}
-        approval_id = str(meta.get("approval_id", ""))
-        decision = str(meta.get("decision", "?"))
-        if not approval_id:
-            return
-        message_id = self.state.approval_bubbles.get(approval_id)
-        if message_id is None:
-            # We never posted a bubble for this approval —
-            # could be a decide from a different session, or
-            # this bot missed the approval_requested event.
-            return
-        outcome_label = _format_approval_outcome(decision)
-        try:
-            await self._bot.edit_message_text(
-                chat_id=self.state.chat_id,
-                message_id=message_id,
-                text=f"🔐 Approval {outcome_label}",
-                reply_markup=None,
-            )
-        except Exception as exc:
-            _log.warning(
-                "turn_renderer.approval_edit_failed",
-                extra={
-                    "turn_id": self.state.turn_id,
-                    "approval_id": approval_id,
-                    "error": str(exc),
-                },
-            )
+        """No-op. See :meth:`_on_approval_requested`.
+
+        The approval bubble's outcome edit is owned by
+        :class:`ApprovalPoller` / the bot's callback
+        handler, which edits the poller's bubble in place
+        when the user taps. The renderer's task card gets
+        its final state from the subsequent
+        ``tool_call_executed`` event (approved → tool runs
+        and fires executed with ok=True/False; rejected →
+        gateway treats as tool error and executed fires
+        with ok=False)."""
+        return
 
     async def _on_turn_finished(self, event: dict[str, Any]) -> None:
         meta = event.get("meta") or {}
