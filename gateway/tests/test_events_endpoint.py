@@ -1,11 +1,13 @@
-"""Tests for ``/v1/events``.
+"""Tests for ``/v1/events`` after the Phase 4.8c shape change.
 
 Covers:
 - Auth (401 without a Bearer token).
-- ``since`` filters entries strictly later.
+- Response shape ``{entries, next_since}``.
+- ``since`` is exclusive (the cursor a poller just saw doesn't
+  replay).
 - ``kind`` filters by event kind.
 - ``limit`` honours default + validation bounds.
-- Response shape matches what ``EventLog.read`` produces.
+- ``next_since`` is null at the tail and the newest ts otherwise.
 """
 
 from __future__ import annotations
@@ -33,7 +35,6 @@ def _auth() -> dict[str, str]:
 
 
 def _seed(client: TestClient, *, kinds_and_ts: list[tuple[str, float]]) -> None:
-    """Write the given events to the gateway's EventLog."""
     events = client.app.state.events
     for kind, ts in kinds_and_ts:
         events.append(
@@ -62,7 +63,7 @@ def test_events_requires_auth(client: TestClient) -> None:
 def test_events_empty_when_log_fresh(client: TestClient) -> None:
     r = client.get("/v1/events", headers=_auth())
     assert r.status_code == 200
-    assert r.json() == {"events": []}
+    assert r.json() == {"entries": [], "next_since": None}
 
 
 # --------------------------------------------------------------- shape
@@ -73,22 +74,27 @@ def test_events_returns_expected_shape(client: TestClient) -> None:
     r = client.get("/v1/events", headers=_auth())
     assert r.status_code == 200
     body = r.json()
-    assert "events" in body and len(body["events"]) == 1
-    entry = body["events"][0]
-    # Exact fields the bot's formatter needs — changing any of
-    # these is a wire-compat break the pusher won't handle
-    # gracefully.
+    assert set(body.keys()) == {"entries", "next_since"}
+    assert len(body["entries"]) == 1
+    entry = body["entries"][0]
+    # Exact fields the bot's formatter reads.
     assert set(entry.keys()) == {"ts", "kind", "session_key", "title", "body", "meta"}
     assert entry["ts"] == 100.0
     assert entry["kind"] == "cron_fired"
     assert entry["session_key"] == "main"
     assert entry["meta"] == {"from": "test"}
+    # Only one entry, below the default limit of 100, so the
+    # caller has reached the tail.
+    assert body["next_since"] is None
 
 
 # --------------------------------------------------------------- filters
 
 
-def test_events_since_filters_older(client: TestClient) -> None:
+def test_events_since_is_exclusive(client: TestClient) -> None:
+    """A poller passing back the ts it just saw should NOT
+    receive that entry again. Matches the documented
+    exclusive-cursor semantic."""
     _seed(
         client,
         kinds_and_ts=[
@@ -97,9 +103,9 @@ def test_events_since_filters_older(client: TestClient) -> None:
             ("agent_message", 300.0),
         ],
     )
-    r = client.get("/v1/events?since=150", headers=_auth())
-    kinds = [e["kind"] for e in r.json()["events"]]
-    assert kinds == ["cron_completed", "agent_message"]
+    r = client.get("/v1/events?since=200", headers=_auth())
+    kinds = [e["kind"] for e in r.json()["entries"]]
+    assert kinds == ["agent_message"]
 
 
 def test_events_kind_filter(client: TestClient) -> None:
@@ -112,7 +118,7 @@ def test_events_kind_filter(client: TestClient) -> None:
         ],
     )
     r = client.get("/v1/events?kind=cron_fired", headers=_auth())
-    tss = [e["ts"] for e in r.json()["events"]]
+    tss = [e["ts"] for e in r.json()["entries"]]
     assert tss == [100.0, 300.0]
 
 
@@ -126,7 +132,7 @@ def test_events_since_and_kind_combined(client: TestClient) -> None:
         ],
     )
     r = client.get("/v1/events?since=150&kind=cron_fired", headers=_auth())
-    tss = [e["ts"] for e in r.json()["events"]]
+    tss = [e["ts"] for e in r.json()["entries"]]
     assert tss == [300.0]
 
 
@@ -134,16 +140,27 @@ def test_events_since_and_kind_combined(client: TestClient) -> None:
 
 
 def test_events_limit_keeps_most_recent(client: TestClient) -> None:
-    """``limit=N`` keeps the most recent N events, matching
-    ``EventLog.read``'s behaviour. A falling-behind poller that
-    catches up with a bounded request sees the newest slice."""
     _seed(
         client,
         kinds_and_ts=[(f"kind_{i}", float(i)) for i in range(10)],
     )
     r = client.get("/v1/events?limit=3", headers=_auth())
-    kinds = [e["kind"] for e in r.json()["events"]]
+    body = r.json()
+    kinds = [e["kind"] for e in body["entries"]]
     assert kinds == ["kind_7", "kind_8", "kind_9"]
+    # Filled the limit, so next_since is the last-seen ts.
+    assert body["next_since"] == 9.0
+
+
+def test_events_next_since_null_at_tail(client: TestClient) -> None:
+    """When the response contains fewer than ``limit`` entries,
+    the caller has reached the tail and ``next_since`` is
+    null."""
+    _seed(client, kinds_and_ts=[("k", 1.0), ("k", 2.0)])
+    r = client.get("/v1/events?limit=100", headers=_auth())
+    body = r.json()
+    assert len(body["entries"]) == 2
+    assert body["next_since"] is None
 
 
 def test_events_limit_rejects_zero(client: TestClient) -> None:

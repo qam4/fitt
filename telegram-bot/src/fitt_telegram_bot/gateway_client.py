@@ -104,10 +104,18 @@ class GatewayClient:
     ) -> list[dict[str, Any]]:
         """GET /v1/events[?since=...][&limit=...].
 
-        Returns the ``events`` array from the response, newest
+        Returns the ``entries`` array from the response, newest
         last (file order), or an empty list on any error. The
         event pusher calls this every second; same
         transient-failure posture as ``list_pending_approvals``.
+
+        Response shape (Phase 4.8c):
+        ``{"entries": [...], "next_since": <float>|null}``.
+        We use ``since`` as an exclusive cursor: pass back the
+        last-seen ``ts`` and the gateway drops entries with
+        ``ts <= since``. ``next_since`` is available but the
+        pusher tracks its own cursor so we don't currently
+        read it.
         """
         params: dict[str, str] = {"limit": str(limit)}
         if since is not None:
@@ -126,10 +134,10 @@ class GatewayClient:
                     extra={"error": str(e)},
                 )
                 return []
-        events = r.json().get("events", [])
-        if not isinstance(events, list):
+        entries = r.json().get("entries", [])
+        if not isinstance(entries, list):
             return []
-        return events
+        return entries
 
     async def decide_approval(self, approval_id: str, decision: str) -> tuple[bool, str | None]:
         """POST /v1/approvals/{id}/decide with {decision: ...}.

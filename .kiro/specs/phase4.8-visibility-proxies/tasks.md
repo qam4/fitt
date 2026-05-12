@@ -64,30 +64,35 @@ endpoint landing first. No tech-debt "bot-imports-gateway-
 in-process" shortcut — the bot talks HTTP like any other
 consumer.
 
-- [ ] Extend (or create) `gateway/src/gateway/events_endpoint.py`
+- [x] Extend (or create) `gateway/src/gateway/events_endpoint.py`
       / rename to a broader name. Add routes for:
       - `GET /v1/events`
       - `GET /v1/audit`
       - `GET /v1/capability-gaps`
       - `GET /v1/sessions/{id}/turns` (paged JSON read)
       - `GET /v1/sessions/{id}/turns/stream` (SSE live)
-- [ ] Pagination via `since=<ts>` / `limit=<n>`. Response
+- [x] Pagination via `since=<ts>` / `limit=<n>`. Response
       shape `{entries, next_since}`.
-- [ ] SSE endpoint: on connect, optionally replay since a
+- [x] SSE endpoint: on connect, optionally replay since a
       caller-supplied `since`; then stream new events via
       a `TurnLog` subscriber (in-process fanout to the HTTP
       handler's queue). Heartbeat every 15s to keep the
       connection alive and detect dead clients.
-- [ ] Auth via existing `AuthMiddleware`; no per-endpoint
+- [x] Auth via existing `AuthMiddleware`; no per-endpoint
       ACL in this phase.
-- [ ] `TestClient` tests: happy path, 401 on bad token,
+- [x] `TestClient` tests: happy path, 401 on bad token,
       `since` filtering correct, `limit` bounded,
       `next_since=null` at tail, SSE delivers appended
       events, SSE replays from `since` on connect, SSE
       disconnects cleanly when the client hangs up.
-- [ ] Per-session filter for `/v1/sessions/{id}/turns`
+      (Live-delivery path covered via the 4.8a integration
+      test + ``TurnLog.subscribe`` contract tests;
+      ``httpx.ASGITransport`` buffers streaming responses
+      end-to-end, known upstream limitation. SSE HTTP
+      envelope + frame shape covered at endpoint layer.)
+- [x] Per-session filter for `/v1/sessions/{id}/turns`
       returns only that session's events.
-- [ ] Document the endpoints in `README.md` or a new
+- [x] Document the endpoints in `README.md` or a new
       `docs/http-api.md`.
 
 **Exit criteria:** a curl against each endpoint returns

@@ -319,7 +319,7 @@ async def wait_for_event(
     while asyncio.get_event_loop().time() < deadline:
         r = await client.get("/v1/events", params={"since": since} if since else {})
         r.raise_for_status()
-        events = r.json().get("events", [])
+        events = r.json().get("entries", [])
         for e in events:
             if e["kind"] == kind:
                 return e
@@ -342,7 +342,7 @@ async def fetch_events(
         params["kind"] = kind
     r = await client.get("/v1/events", params=params)
     r.raise_for_status()
-    return list(r.json().get("events", []))
+    return list(r.json().get("entries", []))
 
 
 # --------------------------------------------------------------- fixtures

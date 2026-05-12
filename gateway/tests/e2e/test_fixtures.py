@@ -49,7 +49,7 @@ async def test_fixtures_compose(
     # /v1/events requires auth (which we have via the fixture).
     r = await e2e_client.get("/v1/events", params={"limit": 10})
     assert r.status_code == 200, r.text
-    assert "events" in r.json()
+    assert "entries" in r.json()
 
     # One chat round-trip through the stub.
     stubbed_llm.load([stub_reply("hi there")])
