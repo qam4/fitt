@@ -136,13 +136,16 @@ commit message was wallpaper, not a rationale.
 `agent_loop.py::record_claim_mismatch`, the chat + cron
 callers, the `tool_claim_mismatch` event kind, and every
 doc / spec / roadmap reference. The audit log at
-`$FITT_HOME/audit.jsonl` remains the real receipt layer;
-it's tamper-evident and authoritative. What's missing is a
-correct claim-extraction mechanism, and the only
-state-of-the-art candidate per the "Tool Receipts" paper
-(2026) is an LLM-based claim extractor — one extra LLM
-call per turn. Item 3 in the hallucinations doc is now
-deferred with eyes open.
+`$FITT_HOME/audit.jsonl` remains the real receipt layer —
+tamper-evident and authoritative. An operator checking
+`fitt inbox` / `fitt audit tail` when something feels off
+is the only reliable cross-check we have. There is no
+Phase 2 in the queue; an "LLM-based claim extractor"
+parses the same prose the regex did, just more
+expensively, so it's the same anti-pattern. When the
+user-facing experience of Problem C hurts enough to
+revisit, the right conversation is with fresh eyes, not
+a plan stashed here.
 
 **Lesson for the agent:** if the backing doc lists the
 approach you're about to take on its explicit don't-do

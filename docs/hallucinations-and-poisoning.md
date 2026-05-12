@@ -596,34 +596,53 @@ referenced below where relevant but the fix plans live there.
    work. FITT's audit log is already a receipt log; we just
    aren't consulting it.
 
-   *Attempted then rolled back (2026-05-11 shipped, 2026-05-12
-   reverted).* We shipped `gateway/src/gateway/claim_check.py`
-   as the "lexical-signal version" — a regex parser that
-   matched "I executed the X tool" / "I called X" / verb claims
-   like "I edited" / "I ran". It violated this doc's own
-   explicit not-list ("regex matching on any specific
-   hallucination shape"). The 2026-05-12 live Telegram session
-   proved the prediction: the regex captured `"a"` as a tool
-   name from the chatty phrase *"using a secure, privacy-first
-   toolset"*, firing `tool_claim_mismatch` on benign natural-
-   language text. We removed the module, its tests, its
-   callers, and the `tool_claim_mismatch` event kind.
+   *[Superseded. Original framing retained for historical
+   context; see the "Attempted then rolled back" note below
+   for what this item actually became.]*
 
-   **What this leaves us with:** the audit log at
-   `$FITT_HOME/audit.jsonl` is still a receipt log — every
-   tool call ran this turn is in there, tamper-evident. What's
-   missing is a correct claim-extraction mechanism to compare
-   the model's prose against those receipts. The regex
-   approach is off the table; an LLM-based claim extractor
-   (run every assistant reply through a cheap model that
-   returns a structured list of claims) is the right Phase 2
-   shape per the "Tool Receipts" paper. Cost: one extra LLM
-   call per turn. Latency: 300-800ms depending on model.
-   Practicality: defer until compaction (item 5) and the eval
-   harness (item 6) are bedded in — neither is a prerequisite,
-   but both shift the operator's experience of Problem C more
-   than receipt cross-checking would have. Item 3 is now
-   deferred with eyes open.
+   *Attempted then rolled back; no viable path forward as a
+   live runtime signal (2026-05-11 shipped, 2026-05-12
+   reverted).* We shipped `gateway/src/gateway/claim_check.py`
+   as a regex parser matching "I executed the X tool" / "I
+   called X" / verb claims like "I edited" / "I ran". It
+   violated this doc's own explicit not-list ("regex matching
+   on any specific hallucination shape"). The 2026-05-12 live
+   Telegram session proved the prediction: the regex captured
+   `"a"` as a tool name from the chatty phrase *"using a
+   secure, privacy-first toolset"*, firing `tool_claim_mismatch`
+   on benign natural-language text. We removed the module, its
+   tests, its callers, and the `tool_claim_mismatch` event
+   kind.
+
+   **Why there's no Phase 2.** The original doc (and this
+   revision's earlier draft) held out for an "LLM-based claim
+   extractor" as the real shape. Same anti-pattern, higher
+   compute cost. The API response doesn't tell us what the
+   model claimed — there's no structured `claims: [...]`
+   field, only the prose. Any extractor has to parse the
+   prose, whether with regex, with a second LLM call, or with
+   a neural classifier. All three are the ground-truth
+   violation we committed not to do again. The "Tool Receipts"
+   paper works because its runtime owns both sides (model
+   output *and* claim structure); we own only the receipts
+   half. Extracting the other half from prose is the same
+   failure mode in different dress.
+
+   **What we do have, in place of a cross-checker.** The
+   audit log at `$FITT_HOME/audit.jsonl` is the receipt
+   layer — tamper-evident record of every tool call this turn
+   actually ran. The agent-loop loads tool outcomes into the
+   same turn's context via the structured
+   `tool_calls_for_memory` so the model sees ground truth
+   within the turn. What's not automated is "did the
+   assistant's final reply match what ran?" — and the honest
+   answer is: an operator checking `fitt inbox` or
+   `fitt audit tail` when something feels off is the only
+   reliable cross-check we have. Item 3 is deferred with
+   no shape we'd re-approach; when the user-facing
+   experience of Problem C hurts enough to warrant revisiting,
+   the right discussion is with fresh eyes, not a Phase 2
+   plan stashed here.
 
 4. **Tool-output truncation with disk persistence (Claude Code
    layer 0).** Any tool result over a threshold (start at 8KB)
