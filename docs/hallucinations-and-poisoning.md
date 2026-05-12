@@ -1,6 +1,48 @@
 # Hallucinations and Context Poisoning
 
 **Status:** Draft, 2026-05-11. Survey + proposal for FITT.
+Revised 2026-05-12 after two live-signal rollbacks.
+
+## The rule: verifiable facts only
+
+Before anything else in this document: **FITT does not try to
+parse the model's prose to decide whether the model is
+hallucinating.** Not with regex, not with a second LLM call,
+not with a classifier. Any signal that asks "does this reply
+mean the model thinks it did X?" is inference on fuzzy text
+and it will false-positive on benign writing. That lesson got
+re-learned twice in one day on 2026-05-12: the regex claim
+parser captured `"a"` as a tool name from *"using a secure
+toolset"*, and the shape-level narration signal fired on every
+chit-chat turn in Telegram. Both runtime detectors were
+removed. See `docs/observed-issues.md` for the anatomy.
+
+Instead, FITT acts on **verifiable facts the runtime owns**:
+
+- Did a tool call actually run this turn? (audit log)
+- What did it return? (structured `role: tool` message,
+  large payloads on disk as artifacts)
+- Did the model emit a real OpenAI `tool_calls` structure or
+  just text? (API response shape)
+- Did the model repeat the same failing call this turn?
+  (iteration counter + args comparison)
+- Can this alias tool-call at all? (boot probe + eval
+  harness, each with a prompt whose expected outcome is
+  pinned by the test author)
+- Did the bearer token's `client:` tag agree with
+  `X-FITT-Client`? (two strings to compare)
+- Is a shell command on the deny list? (finite substring list)
+
+Each of those is a boolean or small integer the runtime knows
+deterministically. When we want visibility into "did the model
+lie?", we put the facts in front of the operator via
+`fitt inbox`, `fitt audit tail`, the per-turn event stream
+(Phase 4.8), and the Telegram `/inbox` command, and let the
+operator judge. Human in the loop on judgment calls; runtime
+on facts.
+
+Everything else in this document — what we shipped, what
+we deferred, what we rolled back — follows from that rule.
 
 ## Why this document exists
 
