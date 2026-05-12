@@ -690,25 +690,25 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects
 **Key work, in dependency order:**
 
 - **Per-turn event stream + pub/sub hook.** Structured event emission alongside today's `events.jsonl` for everything that happens inside a tool-using turn: `turn_started`, `llm_call_started` / `completed` (with model, latency, token counts, cost), `tool_call_planned` (name + args), `approval_requested` / `decided`, `tool_call_executed` (result summary, exit code for shell, duration), `gap_reported`, `turn_finished`. Per-session-per-day JSONL at `$FITT_HOME/sessions/<session>/turns/<YYYY-MM-DD>.jsonl`, same shape as `history/<YYYY-MM-DD>.md`. `TurnLog` also exposes `subscribe(callback)` for in-process live consumers (the Telegram renderer). The backend for every later surface; both the tailers and the renderer read from the same source.
-- **Telegram live-turn renderer.** Subscribes to `TurnLog` in-process. One Telegram message per completed action: tool calls post as "🔵 Reading X…" and edit to "✅ Read X (Nms)" silently; approvals post as notifying messages with inline ✅/❌/🔓 keyboards, editing in place to the decision; the final reply is a new message (today's streaming path, unchanged) that notifies naturally. Short chat turns skip action bubbles. Timeline ordering is correct by construction because every bubble is a new message at its action's timestamp — fixes the 2026-05-12 "approval floats between messages after decision" bug.
+- **Telegram live-turn renderer.** Subscribes to `TurnLog` over the SSE endpoint (4.8c). MeshClaw-inspired three-bubble shape per turn: one growing stream bubble with task-card-style tool-call status lines and narration text (silent edits throughout), zero or more notifying approval bubbles that edit-in-place to their outcome, and a tiny notifying finish footer ("✓ Finished in 9s"). Phone notifies exactly on blocking approvals and at turn end. Short chat turns skip the growing bubble entirely and preserve today's single-message behaviour. Timeline ordering is correct by construction — every bubble's send timestamp is at or after its related content. Fixes the 2026-05-12 "approval floats between messages" bug.
 - **`fitt watch` CLI.** Tails the active session's `turns/<YYYY-MM-DD>.jsonl` with a concise renderer: one line per event, color-coded, tool calls expanded inline. Replaces "grep seven files" with one command the author actually runs. Works under `docker compose exec gateway fitt watch`.
-- **HTTP read endpoints.** `GET /v1/events?since=<ts>&kind=<k>&session=<s>`, `GET /v1/audit?since=<ts>`, `GET /v1/capability-gaps`, `GET /v1/sessions/<id>/turns`. JSON responses, bearer auth (same tokens as chat). Lets curl, scripts, and the future dashboard all read from one API. Opens the door for non-FITT clients (Raycast, Alfred, custom widgets) without exposing `$FITT_HOME` over SSH.
-- **Static HTML viewer at `GET /v1/events/view`.** Single self-contained HTML page with HTMX auto-refresh (every 5s) hitting `/v1/events`. No templates, no build step, no framework — enough to open `http://<tailnet-ip>:8080/v1/events/view` on a phone browser and watch events land. The 80% of the dashboard for 10% of the work. Explicit stepping-stone: when the real dashboard lands, this endpoint either stays as a fallback or redirects.
+- **HTTP read endpoints.** `GET /v1/events?since=<ts>&kind=<k>&session=<s>`, `GET /v1/audit?since=<ts>`, `GET /v1/capability-gaps`, `GET /v1/sessions/<id>/turns`, `GET /v1/sessions/<id>/turns/stream` (SSE). JSON responses, bearer auth (same tokens as chat). The SSE stream is what the Telegram live-turn renderer subscribes to; the paged JSON endpoints are what curl, scripts, and the future dashboard read. Opens the door for non-FITT clients (Raycast, Alfred, custom widgets) without exposing `$FITT_HOME` over SSH.
 
 **Deferred to post-v1:**
 
 - **Telegram `/inbox` historical browser.** Originally sub-phase 4.8e as a paged reader over `events.jsonl`; reshaped around the live renderer instead. Add back if scrolling past turns on the phone becomes an actual daily friction.
+- **HTML viewer / barebone dashboard.** Originally sub-phase 4.8e. Deferred to Phase 7+ as part of the real admin dashboard — the daily phone surface is Telegram (live-turn renderer) and splitting a stepping-stone HTML viewer from the eventual editable dashboard would mean maintaining two viewers for the same data.
 
 **Scope boundaries:**
 
-- No writes from HTTP / HTML viewer. Read-only surface. Writes still go through chat / CLI.
+- No writes from HTTP. Read-only surface. Writes still go through chat / CLI.
 - No authentication beyond the bearer token that already exists. No per-event ACLs.
 - No rotation knob for `turns/<date>.jsonl` in this phase. Same posture as `events.jsonl` and `audit.jsonl` — append-only, history pruner handles retention via the shared `memory.history_max_days` setting.
-- No dashboard. The real `$FITT_HOME` admin UI with edit capability, config diffing, session browser, and live turn view is Phase 7+. This phase is the "can I see what happened in the last 10 minutes" floor.
+- No dashboard. The real `$FITT_HOME` admin UI with edit capability, config diffing, session browser, and live turn view is Phase 7+. This phase is the "can I see what FITT is doing right now, on my phone" floor.
 
 **Prerequisites:** Phase 4 (event log), Phase 4.5 (events.jsonl persistence), Phase 4.7 (tool-call events with enough structure to render).
 
-*Full spec: `.kiro/specs/phase4.8-visibility-proxies/` (promoted 2026-05-11; reshaped 2026-05-12 around a Telegram live-turn renderer as the high-impact mobile piece). Five sub-phases: 4.8a backend + pub/sub hook → 4.8b Telegram live-turn renderer → 4.8c `fitt watch` CLI → 4.8d HTTP endpoints → 4.8e HTML viewer. Total ~6½ days focused work; sub-phases ship piecemeal.*
+*Full spec: `.kiro/specs/phase4.8-visibility-proxies/` (promoted 2026-05-11; reshaped 2026-05-12 around a MeshClaw-inspired growing-bubble Telegram live-turn renderer after reading MeshClaw's Slack gateway source). Four sub-phases: 4.8a backend + subscribe hook → 4.8c HTTP endpoints + SSE → 4.8b Telegram live-turn renderer → 4.8d `fitt watch` CLI. HTML viewer (former 4.8e) deferred to Phase 7+ as part of the real admin dashboard. Total ~6 days focused work; sub-phases ship piecemeal.*
 
 ---
 

@@ -105,49 +105,92 @@ that can reach `$FITT_HOME`.
 ### U3. Telegram live-turn renderer
 
 As a FITT user with a phone in hand, I want Telegram to show
-me what FITT is doing as a turn unfolds — one message per
-completed action — so a 30-second multi-step turn stops being
-a silent progress-less wait.
+me what FITT is doing as a turn unfolds, notify on blocking
+approvals, and notify when the turn is done — so a 30-second
+multi-step turn stops being a silent progress-less wait.
+
+Design lifted from MeshClaw's Slack gateway after reading
+its source 2026-05-13 (see
+`src/mesh_claw/slack/handler.py::handle_message`). Three
+bubble types per turn (fewer on short-chat turns). Telegram-
+adapted because Telegram edits-don't-notify where Slack
+thread activity does.
+
+**Bubble shape per turn:**
+
+1. **Growing stream bubble.** Single message per turn,
+   silent edits throughout. Contains every tool-call status
+   line accumulated as task-card-style entries ("🔵 Reading
+   README.md…" → "✅ Read README.md (12ms)"), plus model
+   narration text streamed in as the model produces it, plus
+   the final reply text streamed in via the existing chat
+   streaming path. Never recreated, never replaced — a
+   growing chronological record of what happened, posted at
+   turn-start time.
+2. **Approval bubbles (zero or more).** Each
+   `approval_requested` posts a new notifying message with
+   the inline ✅ / ❌ / 🔓 keyboard. On decision, the
+   message edits in place to show the outcome ("🔐 edit_file
+   → ✅ Approved", "→ ❌ Rejected", "→ ✅ Approved for
+   session"). The message stays at its posted timestamp in
+   the timeline forever. Phone buzzes exactly once per
+   approval — the blocking moment you need to know about.
+3. **Finish footer.** One notifying message posted at
+   turn-finished time. Minimal content — "✓ Finished in 9s"
+   or "🚫 Rejected" for the turn-cancelled case. Phone
+   buzzes exactly once, signaling the turn is done. The
+   final reply text itself lives in the growing stream
+   bubble, not in the footer; the footer is a ping-the-phone
+   mechanism, not where the answer lives.
 
 **Acceptance:**
 
-- **3.1** For each `tool_call_planned` / `tool_call_executed`
-  pair, the bot posts one message that edits from its
-  in-flight form ("🔵 Reading README.md…") to its completed
-  form ("✅ Read README.md (12ms)") when the tool finishes.
-  One message per tool call. Posted silently
-  (`disable_notification=true`) so the phone doesn't buzz on
-  every intermediate action.
-- **3.2** For each `approval_requested`, the bot posts a
-  NEW message with the inline-keyboard approval UI
-  (✅ / ❌ / 🔓). Posted with default notification (pings
-  the phone). On decision the buttons clear and the message
-  edits in place to show the outcome ("✅ Approved",
-  "❌ Rejected", "✅ Approved for session"). The record of
-  what was approved stays visible in scrollback.
-- **3.3** When the turn's final assistant reply is ready,
-  the bot posts it as a NEW message. Pings the phone.
-  Tokens stream in via batched edits at roughly 1 edit per
-  second for Telegram's rate limit.
-- **3.4** Short chat turns (zero tool calls, zero approvals)
-  skip the action bubbles entirely — the final reply is the
-  only bubble. Preserves today's behaviour for casual replies
-  like "thanks" / "you're welcome" so scrollback stays
-  quiet.
+- **3.1** Each `tool_call_planned` / `tool_call_executed`
+  pair renders as one task-card line in the growing bubble.
+  Planned = "🔵 Reading X…"; executed = "✅ Read X
+  (Nms)" (success) or "❌ Read X — error summary" (failure).
+  Edits are silent (no phone notification).
+- **3.2** Each `approval_requested` posts a new notifying
+  bubble with the approval UI. On decision the buttons
+  clear and the message edits to the outcome. Phone
+  notifies on post; no further notifications after edits.
+- **3.3** `turn_finished` posts a tiny notifying footer
+  message. Short-form timing: "✓ Finished in Ns", or
+  "🚫 Rejected" for the turn-cancelled case. Phone
+  notifies once. The final reply text itself lives in the
+  growing bubble (streamed in by the existing chat
+  streaming path).
+- **3.4** Short chat turns (zero tool calls, zero
+  approvals) skip the growing bubble machinery entirely —
+  the existing chat streaming behaviour (the model reply
+  as a single message posted as a new bubble) stays
+  unchanged. No finish footer posted either; the reply
+  message IS the turn-finished notification. Preserves
+  today's behaviour for casual replies like "thanks" /
+  "you're welcome" so scrollback stays quiet.
 - **3.5** Errors stay visible. A failed tool call locks at
-  its ❌ form with a short error snippet ("❌ Read
-  registry.py — file not found"); subsequent tool calls are
-  their own new bubbles below it.
-- **3.6** Timeline ordering is correct by construction. Every
-  bubble is a new message at its action's actual timestamp,
-  so the final reply is always the latest bubble in the
-  timeline. The 2026-05-12 "approval form sits between
-  messages after decision" bug goes away because we no longer
-  edit a placeholder with an earlier send-timestamp.
-- **3.7** The bot subscribes to the per-turn event stream
-  (U1) via an in-process pub/sub hook on :class:`TurnLog`
-  for v1. The JSONL persistence is the source of truth; the
-  subscriber is a stateless formatter over live events.
+  its ❌ form in the growing bubble with a short error
+  snippet. The turn continues; later tool calls append
+  after it.
+- **3.6** Timeline ordering is correct by construction.
+  The growing bubble is at turn-start timestamp. Approval
+  bubbles are at their individual post timestamps. Finish
+  footer is at turn-finished timestamp. Telegram orders by
+  send time, so scrollback reads top-to-bottom in the
+  actual chronology. The 2026-05-12 "approval floats
+  between messages after decision" bug goes away because
+  no bubble has a send time earlier than its related
+  content.
+- **3.7** No in-bubble "waiting for approval" breadcrumb
+  inside the growing stream. MeshClaw considered and
+  rejected this in favour of scrollback cleanliness; the
+  approval bubble itself is the record of what was
+  approved. Revisit only if scrollback interleave turns
+  out to be an actual daily confusion.
+- **3.8** The bot subscribes to the per-turn event stream
+  (U1) via the SSE endpoint in 4.8c. The JSONL
+  persistence is the source of truth; the subscriber is a
+  stateless formatter over live events.
 
 ### U4. HTTP read endpoints
 
@@ -175,24 +218,19 @@ CLI reads so clients stop having to know the on-disk format.
 
 ### U5. Static HTML viewer
 
-As an operator on a phone browser, I want a self-contained
-HTML page that polls the events endpoint so I can watch events
-land without a native client.
-
-**Acceptance:**
-
-- **5.1** `GET /v1/events/view` returns one HTML page with an
-  inline `<script>` that HTMX-polls `GET /v1/events` every 5
-  seconds and appends new rows to the top of a list.
-- **5.2** No build step, no templates, no framework. Single
-  file embedded in the gateway; lives as an adjacent Python
-  string or file.
-- **5.3** Bearer auth via a `?token=<token>` query parameter
-  (HTTP-Basic would be fine too; we take the simpler path).
-  Tokens stay the existing ones from `secrets.yaml`.
-- **5.4** Explicit stepping-stone framing: when the real Phase
-  7+ dashboard lands, this endpoint either stays as a
-  fallback or redirects.
+*Deferred to Phase 7+ as part of the real admin dashboard.*
+Originally scoped as a read-only barebone dashboard
+(`GET /v1/events/view` returning a single self-contained
+HTML page with HTMX auto-refresh). Decided 2026-05-13 to
+not ship a stepping-stone dashboard — the real dashboard
+in Phase 7+ will cover the same phone-browser surface
+with config editing and session browsing that the
+barebone version can't touch, and the daily phone
+experience is Telegram (U3), not a browser tab. Keeping
+the one-URL viewer would have been a half-day of work but
+would have meant maintaining a "mini-dashboard" in the
+same tree as the "real dashboard" once Phase 7+ ships.
+Dropping v0 avoids that split.
 
 ## Scope boundaries
 
@@ -259,14 +297,16 @@ Sub-phase decomposition (see design.md):
 
 - **4.8a**: backend + persistence + schema + emission sites
   + in-process pub/sub hook.
-- **4.8b**: Telegram live-turn renderer (was "`/inbox`
-  command"; reshaped into the live renderer per U3).
-- **4.8c**: `fitt watch` CLI.
-- **4.8d**: HTTP read endpoints.
-- **4.8e**: static HTML viewer.
+- **4.8c**: HTTP read endpoints + SSE stream for turns.
+  Promoted before 4.8b because the bot consumes the stream
+  over HTTP, not in-process.
+- **4.8b**: Telegram live-turn renderer (subscribes to the
+  SSE endpoint).
+- **4.8d**: `fitt watch` CLI (developer / debugging tool).
 
-Order is 4.8a first (dependency for everything). Then
-4.8b — the high-impact mobile piece — before the operator
-surfaces (CLI, HTTP, HTML), so the live-turn experience
-lands as early as possible. Each sub-phase is still
-independently useful and testable.
+HTML viewer (former 4.8e) deferred to Phase 7+ as part of
+the real admin dashboard.
+
+Order is 4.8a first (dependency for everything), then 4.8c,
+then 4.8b, then 4.8d. Each sub-phase is still independently
+useful and testable.
