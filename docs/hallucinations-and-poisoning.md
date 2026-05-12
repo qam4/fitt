@@ -699,6 +699,33 @@ referenced below where relevant but the fix plans live there.
    their current alias is failing the channel. Cost: a couple of
    days; feeds the eval harness.
 
+   *Shipped 2026-05-11 as a live-chat signal; pulled from live
+   chat 2026-05-12; kept in eval/probe.* The original framing
+   above already flagged the missing precondition: *"the user's
+   original message triggered tool-calling expectations."* The
+   live implementation dropped it because the cheap signals for
+   "user asked for an action" (regex on intent, keyword
+   heuristics, `tool_choice=required`) are either the pattern
+   we swore off or too narrow to ever fire. Live Telegram use
+   on 2026-05-12 confirmed the consequence: every chit-chat
+   turn ("thanks", "who are you") tripped `tool_call_narrated`
+   because the Telegram bot always loads FITT's tool registry,
+   which we then read as "tools were offered." The signal fired
+   100% on ordinary conversation.
+
+   `is_tool_use_expected_but_none` stays as the pass/fail
+   classifier for :mod:`gateway.alias_probe` and
+   :mod:`gateway.alias_eval`, where the expected outcome is
+   pinned by the test author — the precondition holds by
+   construction. `record_narrated_tool_call` (the live-chat /
+   cron wrapper), the JSON-fence detector
+   `detect_narrated_tool_call`, and the `tool_call_narrated`
+   event kind were removed. The legitimate shape signal is
+   now a **test-harness signal**, not a runtime signal. If we
+   ever find a cheap-and-correct way to know the user's intent,
+   we can re-introduce a runtime signal; until then, the lesson
+   repeats: ground truth only, no intent-guessing.
+
 What's explicitly **not** on the list:
 
 - Regex matching on `TOOL_NAME:/BEGIN_ARG:/END_ARG`.
@@ -707,12 +734,12 @@ What's explicitly **not** on the list:
 - Regex matching on any specific hallucination shape.
 - Skip-persistence logic gated on those regexes.
 
-We already shipped the ```` ```json ```` detector in Phase 4
-(`detect_narrated_tool_call` in `capabilities.py`) and used it for
-the `tool_call_narrated` event. That was a mistake with the same
-shape as the sentinel one we almost repeated. It should be removed
-and replaced by (7), the shape-level signal. Do that as part of
-the next phase rather than thrashing now.
+The ```` ```json ```` detector (`detect_narrated_tool_call` in
+`capabilities.py`) and the live-chat narration wrapper
+(`record_narrated_tool_call` in `agent_loop.py`) were both
+removed on 2026-05-12 after the live Telegram session made
+their false-positive rate impossible to ignore. The
+eval-harness-only shape check remains; see item 7 above.
 
 ## Related FITT principles this survey reinforces
 

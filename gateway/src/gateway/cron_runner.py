@@ -29,7 +29,7 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any
 
-from .agent_loop import record_narrated_tool_call, run_agent_loop
+from .agent_loop import run_agent_loop
 from .capabilities import build_capability_block
 from .cron import CronJob
 from .events import EventLog
@@ -137,26 +137,6 @@ class CronRunner:
                     "iterations": result.iterations,
                     "silent": job.silent,
                 },
-            )
-            # Narration detector: if the turn looked like it
-            # should have called a tool but didn't (shape-based
-            # check, model-independent), emit a
-            # ``tool_call_narrated`` event so the operator sees
-            # the failure in fitt inbox / events.jsonl rather
-            # than it being invisibly swallowed into the
-            # cron_completed body. Catches JSON-fence narration,
-            # TOOL_NAME: sentinels, capability false-negatives,
-            # and anything else the model invents. See
-            # :func:`gateway.capabilities.is_tool_use_expected_but_none`
-            # for the full rationale.
-            record_narrated_tool_call(
-                self._events,
-                result.assistant_text,
-                session_key=session_key,
-                alias=alias,
-                iterations=result.iterations,
-                tools_were_offered=True,
-                had_real_tool_calls=bool(result.tool_calls_for_memory),
             )
             # Persist the turn so the model remembers what
             # happened on this firing when the same cron fires

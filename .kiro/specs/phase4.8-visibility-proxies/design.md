@@ -103,8 +103,6 @@ One JSONL line per event. Schema:
   `ok`, `duration_ms`, `result_summary` (≤300 chars),
   `artifact_path` (if hoisted). Exit code surfaced for
   `project_shell`.
-- `tool_call_narrated` — `meta`: `preview` (200 chars).
-  Emitted by `is_tool_use_expected_but_none`.
 - `gap_reported` — `meta`: `gap_text`, `suggestion`.
 - `turn_finished` — `meta`: `status` (`ok|upstream_error|
   tool_loop_exhausted`), `iterations`, `final_reply_len`.
@@ -166,9 +164,6 @@ an event; we're adding one `TurnLog.append(...)` alongside.
   `record_approval_requested`.
 - **`ApprovalMiddleware.resolve_approval` / timeout branch**:
   `record_approval_decided`.
-- **`record_narrated_tool_call`** in `agent_loop.py`:
-  adds a `tool_call_narrated` turn event alongside the
-  existing event-log write.
 - **`record_gap`**: same.
 - **`_run_tool_loop` in chat.py**: `record_turn_started` at
   entry, `record_turn_finished` at the single return point.

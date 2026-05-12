@@ -33,6 +33,75 @@ doc.
 
 ---
 
+## Narration shape-check fired on every chit-chat turn
+
+**First observed:** 2026-05-12. **Rolled back:** 2026-05-12.
+**Tag:** design (closed by removal), sibling of the claim-check
+rollback landed the same day.
+
+`is_tool_use_expected_but_none` is a shape-level classifier:
+tools were offered + clean finish + no `tool_calls` + reply
+over 40 chars → "model declined to call a tool when one was
+expected." Shipped 2026-05-11 as a runtime signal emitted by
+`record_narrated_tool_call` from the chat tool-loop and cron
+firings. The doc
+`docs/hallucinations-and-poisoning.md` framed the original
+signal with the precondition *"the user's original message
+triggered tool-calling expectations"*; the implementation
+dropped that precondition because no cheap honest signal
+exists for user intent.
+
+Live Telegram session 2026-05-12 produced three
+`tool_call_narrated` events in one short conversation:
+
+- `"I'm ready to help! Could you clarify..."` (no prior
+  context)
+- `"You're welcome! Let me know..."` (reply to "Thanks")
+- `"I'm FITT, your personal AI assistant..."` (reply to
+  "Who are you")
+
+All three were correct model behaviour. None of them
+involved a user asking for an action. The signal fired at
+100% on ordinary chit-chat because the Telegram bot
+always loads FITT's tool registry into the request, which
+the shape check reads as "tools were offered."
+
+**Cost:** The same as claim_check: noisy events train the
+operator to ignore the signal, which was meant to surface
+genuine tool-call failures. Every Telegram conversation
+with casual messages was a false-positive generator.
+
+**Root cause (lesson):** The doc's precondition was the
+load-bearing part. Shipping a shape signal without it was
+the same anti-pattern as shipping a regex for hallucination
+detection: trying to infer user intent on the cheap.
+
+**Fix:** Removed `record_narrated_tool_call` from
+`agent_loop.py`, the `detect_narrated_tool_call` detector +
+`NarratedToolCall` dataclass + `_NARRATED_TOOL_RE` regex from
+`capabilities.py`, the callers in `chat.py` and
+`cron_runner.py`, the `tool_call_narrated` event kind from
+the CLI color map, the e2e lifecycle test, and the narration
+assertions from `test_cron_runner.py`. Every doc / spec /
+roadmap reference to the runtime event kind updated.
+
+**What's still real:** `is_tool_use_expected_but_none` stays
+as a pure classifier used by `gateway.alias_probe` (boot-time
+canary) and `gateway.alias_eval` (on-demand harness). Those
+two contexts supply the expected-outcome precondition by
+construction — the test author wrote the case. That's where
+the signal belongs.
+
+**Rule for future signals:** base decisions on ground truth,
+not on flimsy inference of intent. If the cheap signal
+requires regex on content, keyword heuristics, or the shape
+of the model's reply to decide whether the user wanted an
+action, don't ship it in live chat. Put it in the eval
+harness where the precondition is pinned, or don't ship it
+at all.
+
+---
+
 ## Receipt cross-check regex captured "a" as a tool name
 
 **First observed:** 2026-05-12. **Rolled back:** 2026-05-12.

@@ -62,9 +62,8 @@ failure modes we live with stop being invisible.
   cost), `tool_call_planned` (name + args), `approval_requested`,
   `approval_decided` (or `approval_timed_out`),
   `tool_call_executed` (result summary, exit code for shell,
-  duration), `tool_call_narrated` (Problem A hit),
-  `gap_reported`, `turn_finished`. Schema pinned in the
-  spec's design.md.
+  duration), `gap_reported`, `turn_finished`. Schema pinned
+  in the spec's design.md.
 - **1.3** Events emit from the existing call sites in
   `agent_loop.py`, `chat.py`, `cron_runner.py`,
   `approval.py` — no new instrumentation layer; this is

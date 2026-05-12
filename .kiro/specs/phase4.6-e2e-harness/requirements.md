@@ -1,5 +1,14 @@
 # Phase 4.6 — End-to-end test harness: Requirements
 
+> **2026-05-12 update.** U1.2 (narration lifecycle) was retired
+> when the live-chat narration detector was pulled. The shape
+> check now runs only in `gateway.alias_probe` and
+> `gateway.alias_eval`, where the expected tool is pinned by
+> the test author — a precondition live chat can't supply
+> without intent-guessing. See `docs/observed-issues.md` for
+> the failure mode. The U1.2 text below is preserved for
+> historical context; the test file no longer exists.
+
 ## Context
 
 Phase 4.5's debug cycle (2026-05-07) surfaced a class of bugs that

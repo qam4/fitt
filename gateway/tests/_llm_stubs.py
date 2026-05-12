@@ -9,8 +9,8 @@ Why stub instead of hit a real model:
 
 1. **Deterministic.** Tests pin code behaviour, not model
    behaviour. "When the model narrates JSON in content,
-   cron_runner emits a tool_call_narrated event" is our
-   invariant — whether the model *does* narrate is
+   the alias probe classifies the alias as unreliable"
+   is our invariant — whether the model *does* narrate is
    ``llm-checker toolcheck``'s job, not pytest's.
 2. **Fast.** A stubbed dispatch returns in microseconds; a
    real one takes seconds. A test suite that runs in 60s gets
@@ -194,9 +194,11 @@ def stub_narrated_tool_call(
 
     The agent loop treats this as a natural stop (no calls to
     execute, reply complete). The narration ends up as the
-    user-facing reply. :func:`gateway.capabilities.detect_narrated_tool_call`
-    is the detector that flags this to operators via the
-    ``tool_call_narrated`` event.
+    user-facing reply. The boot-time :mod:`alias_probe` and
+    the on-demand :mod:`alias_eval` harness detect this shape
+    and fail the alias; live chat no longer does shape checks
+    (we can't know the user's intent cheaply). See
+    ``docs/observed-issues.md`` for the 2026-05-12 rollback.
 
     Use this stub to pin our behaviour when weak models fail
     the tool-call channel."""

@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .audit import new_entry as new_audit_entry
-from .capabilities import detect_narrated_tool_call, is_tool_use_expected_but_none, parse_gap
+from .capabilities import parse_gap
 from .errors import NoBackendAvailable, UnknownAlias, UnknownTool
 from .memory import PersistedToolCall
 from .router import AliasRouter
@@ -367,99 +367,6 @@ def record_gap(
 
 
 # --------------------------------------------------------------- narrated tool calls
-
-
-def record_narrated_tool_call(
-    events: Any,
-    assistant_text: str,
-    *,
-    session_key: str,
-    alias: str,
-    iterations: int,
-    tools_were_offered: bool,
-    finish_reason: str | None = "stop",
-    had_real_tool_calls: bool = False,
-) -> None:
-    """Emit a ``tool_call_narrated`` event when the turn LOOKED
-    like it should have produced a tool call but didn't.
-
-    Uses :func:`capabilities.is_tool_use_expected_but_none` as
-    the decision gate — model-independent shape check, no
-    regex on specific narration patterns. Catches JSON-fence
-    narration, TOOL_NAME: sentinel narration, capability false-
-    negatives ("I can't do that" when the tool is listed),
-    stubborn-training-data replies, and anything next month's
-    model invents in place of real ``tool_calls``.
-
-    The event kind stays ``tool_call_narrated`` for back-compat
-    with ``fitt inbox`` filters and existing consumers, even
-    though the semantic is now broader than JSON-fence narration.
-
-    As a best-effort niceness: if the reply happens to contain
-    a JSON-fenced tool-call-shaped payload, extract the tool
-    name + fence body for the event's title and body so the
-    operator gets a concrete preview. When no fence matches,
-    fall back to a generic title and a truncated reply snippet.
-
-    Swallows all errors — observability should never break the
-    turn that succeeded modulo the narration.
-    """
-    if events is None:
-        return
-    try:
-        should_emit = is_tool_use_expected_but_none(
-            assistant_text,
-            tools_were_offered=tools_were_offered,
-            finish_reason=finish_reason,
-            had_real_tool_calls=had_real_tool_calls,
-        )
-    except Exception as exc:
-        _log.debug(
-            "capabilities.shape_check_failed",
-            extra={"error": str(exc)},
-        )
-        return
-    if not should_emit:
-        return
-    # Best-effort regex match to pick out a concrete tool name
-    # and fence body for the event. Falls back to a generic
-    # title when no fence matches (which is the whole point of
-    # the new shape check: catch narration regardless of shape).
-    narrated_name = ""
-    event_body = assistant_text[:500]
-    try:
-        narrated = detect_narrated_tool_call(assistant_text)
-        if narrated is not None:
-            narrated_name = narrated.tool_name
-            event_body = narrated.raw_fence
-    except Exception:
-        pass
-    title = (
-        f"model narrated {narrated_name} call as text"
-        if narrated_name
-        else "model declined to call a tool when one was expected"
-    )
-    try:
-        # Local import mirrors the pattern used by the cron
-        # runner and detach worker — keeps the agent-loop module
-        # event-log-agnostic so tests can supply a simple mock.
-        from .events import new_entry as new_event
-
-        events.append(
-            new_event(
-                kind="tool_call_narrated",
-                session_key=session_key,
-                title=title,
-                body=event_body,
-                meta={
-                    "alias": alias,
-                    "tool_name": narrated_name,
-                    "iterations": iterations,
-                },
-            )
-        )
-    except Exception as exc:
-        _log.warning("capabilities.narrated_emit_failed", extra={"error": str(exc)})
 
 
 # --------------------------------------------------------------- the loop

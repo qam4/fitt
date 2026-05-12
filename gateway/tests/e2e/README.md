@@ -14,9 +14,6 @@ See `.kiro/specs/phase4.6-e2e-harness/` for the full spec
 - **test_fixtures.py** — sanity check that the fixtures compose.
 - **test_cron_lifecycle.py** (U1.1) — happy-path cron firing
   end-to-end. Pins the `cron_fired` duplicate-push bug.
-- **test_narration_lifecycle.py** (U1.2) — JSON-fenced tool
-  call in `content` emits `tool_call_narrated` through the
-  full pipeline.
 - **test_default_alias_lifecycle.py** (U1.3) — "models are
   configuration" contract: no silent `fitt-smart` upgrade.
 - **test_detach_lifecycle.py** (U1.4) — synchronous placeholder
@@ -24,6 +21,11 @@ See `.kiro/specs/phase4.6-e2e-harness/` for the full spec
 - **test_session_poisoning_lifecycle.py** (U1.5) —
   strict-xfail that flips green when Phase 5's structured
   tool-call persistence lands.
+
+U1.2 (the narration lifecycle) was removed 2026-05-12
+alongside the live-chat narration detector. The shape check
+now only runs in `alias_probe` and `alias_eval` where the
+expected tool is baked into the test case.
 
 ## Why `httpx.AsyncClient(ASGITransport)` and not `TestClient`
 

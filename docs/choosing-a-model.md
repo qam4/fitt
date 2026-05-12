@@ -456,9 +456,13 @@ post-training, native OpenAI-compatible function calling
 
 **What to watch for before declaring the swap durable:**
 
-- Sentinel / JSON-fence narration in raw history (grep
-  `tool_call_narrated` in `events.jsonl`). Zero expected;
-  nonzero means reconsider.
+- Sentinel / JSON-fence narration detected by the boot-time
+  :mod:`gateway.alias_probe` and the on-demand
+  `fitt eval alias <name>` harness. If either reports the
+  alias as `narrated`, reconsider the binding. (We no longer
+  fire a runtime `tool_call_narrated` event — live chat has
+  no cheap way to know the user's intent, and the 2026-05-12
+  rollback is documented in `observed-issues.md`.)
 - Reasoning quality on multi-step tasks relative to the
   13B-active number. If V4-Flash stumbles on composing
   tool results, V4-Pro is the next step up (same family,

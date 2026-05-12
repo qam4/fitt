@@ -1420,7 +1420,7 @@ def _kind_colour(kind: str) -> str:
         return "red"
     if kind in ("cron_completed", "late_tool_result", "agent_message"):
         return "green"
-    if kind in ("cron_fired", "approval_requested", "tool_call_narrated"):
+    if kind in ("cron_fired", "approval_requested"):
         return "yellow"
     return "cyan"
 
