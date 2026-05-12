@@ -639,6 +639,26 @@ referenced below where relevant but the fix plans live there.
    itself the first time it catches a model swap that breaks
    tool-use.
 
+   *Shipped 2026-05-11.* `gateway/src/gateway/alias_eval.py`
+   provides `EvalCase` / `CaseResult` / `EvalReport` dataclasses,
+   `run_eval_case` / `run_eval_suite` runners, and
+   `render_report_markdown` / `write_report` persistence. Reuses
+   the shape-level classification primitives from `alias_probe`
+   (`extract_tool_calls`, `assistant_message_from_response`,
+   `response_to_dict`) so the harness and the probe agree on
+   what "narration" means. The starter suite of 5 cases covers
+   baseline tool call, different-tool-different-args,
+   two-tool disambiguation, negative-case-small-talk, and
+   list_capabilities-with-no-args. `fitt eval alias <name>`
+   runs the suite with an optional `--min-pass-rate` CI gate;
+   `fitt eval all` loops across every configured alias. Reports
+   land at `$FITT_HOME/eval/<alias>-<timestamp>.md` (audit
+   trail) and `$FITT_HOME/eval/<alias>-latest.md` (rolling
+   per-alias). 15 tests cover per-case classification
+   (pass / wrong_tool / narrated / truncated / transport_error
+   / no_tool_expected_but_called), suite aggregation,
+   report rendering, and rolling-vs-timestamped persistence.
+
 7. **Shape-level narration signal (replaces the doomed regex).** A
    turn-level heuristic: model emitted `finish_reason=stop`, no
    `tool_calls`, reply is over N characters, AND the user's

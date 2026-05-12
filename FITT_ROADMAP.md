@@ -705,7 +705,7 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects
 
 **Prerequisites:** Phase 4 (event log), Phase 4.5 (events.jsonl persistence), Phase 4.7 (tool-call events with enough structure to render).
 
-*Full spec: `.kiro/specs/phase4.8-visibility-proxies/` (to be written when this phase starts).*
+*Full spec: `.kiro/specs/phase4.8-visibility-proxies/` (promoted 2026-05-11). Five sub-phases (4.8a backend + 4.8b CLI watch + 4.8c HTTP endpoints + 4.8d HTML viewer + 4.8e Telegram /inbox), each independently useful. Total ~5 days focused work; sub-phases ship piecemeal.*
 
 ---
 

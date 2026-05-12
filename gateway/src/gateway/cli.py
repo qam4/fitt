@@ -1518,5 +1518,140 @@ def learn_path_cmd() -> None:
     _console.print(str(store.path))
 
 
+# --------------------------------------------------------------- eval
+
+
+@main.group("eval")
+def eval_group() -> None:
+    """Run the alias eval harness.
+
+    Dispatches a curated set of tool-use prompts against an
+    alias and scores whether the model emits the expected
+    tool_calls. Richer coverage than the boot-time
+    ``alias_probe`` single canary. Reports land in
+    ``$FITT_HOME/eval/`` as markdown.
+
+    Use before swapping a model (sanity-check the new binding
+    without committing it) and after (make sure the behaviour
+    didn't drift). See docs/choosing-a-model.md for when to
+    re-run."""
+
+
+@eval_group.command("alias")
+@click.argument("alias")
+@click.option(
+    "--timeout",
+    "timeout_s",
+    type=float,
+    default=15.0,
+    help="Per-case dispatch timeout in seconds (default: 15).",
+)
+@click.option(
+    "--min-pass-rate",
+    type=float,
+    default=None,
+    help=(
+        "If set, exit with code 1 when the pass rate falls "
+        "below this fraction (0.0-1.0). Useful for CI / "
+        "pre-swap gates."
+    ),
+)
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def eval_alias_cmd(
+    alias: str,
+    timeout_s: float,
+    min_pass_rate: float | None,
+    config_file: Path | None,
+) -> None:
+    """Run the default eval suite against one alias.
+
+    Writes a markdown report to ``$FITT_HOME/eval/<alias>-<ts>.md``
+    and a rolling ``<alias>-latest.md`` that gets overwritten on
+    every run. Prints a one-line summary to stdout."""
+    import asyncio
+
+    from .alias_eval import run_eval_suite, write_report
+    from .config import fitt_home
+    from .router import AliasRouter
+
+    cfg = load_config(
+        config_file or default_config_path(),
+        default_secrets_path(),
+    )
+    if alias not in cfg.aliases:
+        _console.print(
+            f"[red]unknown alias[/red] {alias!r}. Configured aliases: {sorted(cfg.aliases)}"
+        )
+        sys.exit(2)
+
+    router = AliasRouter(cfg)
+    report = asyncio.run(run_eval_suite(alias, router, timeout_s=timeout_s))
+    ts_path, latest_path = write_report(report, fitt_home())
+
+    colour = "green" if report.passed == report.total else "yellow"
+    _console.print(
+        f"[{colour}]{report.passed}/{report.total} passed[/{colour}] "
+        f"({report.pass_rate * 100:.0f}%) — "
+        f"model=`{report.model_id or 'unknown'}`, "
+        f"latest={latest_path}, audit={ts_path}"
+    )
+
+    if min_pass_rate is not None and report.pass_rate < min_pass_rate:
+        _console.print(
+            f"[red]pass rate below threshold[/red] "
+            f"{report.pass_rate * 100:.0f}% < "
+            f"{min_pass_rate * 100:.0f}%"
+        )
+        sys.exit(1)
+
+
+@eval_group.command("all")
+@click.option(
+    "--timeout",
+    "timeout_s",
+    type=float,
+    default=15.0,
+    help="Per-case dispatch timeout in seconds (default: 15).",
+)
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def eval_all_cmd(timeout_s: float, config_file: Path | None) -> None:
+    """Run the default suite against every configured alias.
+
+    Sequential across aliases (same rate-limit posture as the
+    per-alias run). One summary line per alias; reports land
+    in the same ``$FITT_HOME/eval/`` directory as the
+    per-alias command."""
+    import asyncio
+
+    from .alias_eval import run_eval_suite, write_report
+    from .config import fitt_home
+    from .router import AliasRouter
+
+    cfg = load_config(
+        config_file or default_config_path(),
+        default_secrets_path(),
+    )
+    router = AliasRouter(cfg)
+    any_failed = False
+
+    async def _run_all() -> None:
+        nonlocal any_failed
+        for alias in cfg.alias_names():
+            report = await run_eval_suite(alias, router, timeout_s=timeout_s)
+            write_report(report, fitt_home())
+            colour = "green" if report.passed == report.total else "yellow"
+            if report.passed != report.total:
+                any_failed = True
+            _console.print(
+                f"[{colour}]{alias}: {report.passed}/{report.total} "
+                f"passed[/{colour}] ({report.pass_rate * 100:.0f}%) — "
+                f"model=`{report.model_id or 'unknown'}`"
+            )
+
+    asyncio.run(_run_all())
+    if any_failed:
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()
