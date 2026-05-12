@@ -744,6 +744,14 @@ async def _run_tool_loop(
         "X-FITT-Alias": parsed.model,
         "X-FITT-Session": session_id,
     }
+    # Phase 4.8b: surface the turn_id so the Telegram bot can
+    # route chat reply-token deltas into the matching
+    # TurnRenderer when this turn has a growing bubble. Only
+    # set for tool-loop turns (``_run_tool_loop`` is where
+    # ``tool_ctx.turn_id`` exists); plain-chat turns don't
+    # carry one.
+    if getattr(tool_ctx, "turn_id", None):
+        headers["X-FITT-Turn-Id"] = str(tool_ctx.turn_id)
     if result.fallback_used:
         headers["X-FITT-Fallback"] = "1"
 

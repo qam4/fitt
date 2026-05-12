@@ -43,6 +43,8 @@ from .event_pusher import EventPusher
 from .gateway_client import GatewayClient
 from .handlers import IncomingUpdate, Services
 from .prefs import PrefsStore
+from .turn_renderer import TurnRenderer
+from .turn_stream import TurnStreamMultiplexer
 
 _log = logging.getLogger(__name__)
 
@@ -96,7 +98,7 @@ def build_application(bot_config: TelegramBotConfig) -> Application[Any, Any, An
     app.add_handler(CommandHandler("model", _wrap_command(_on_model)))
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, _on_photo_ptb))
     app.add_handler(MessageHandler(filters.VOICE & ~filters.COMMAND, _wrap_command(_on_voice)))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _wrap_command(_on_text)))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text_ptb))
 
     # Approval UI: inline-keyboard callback handler + background
     # poller. The poller is started via post_init so it runs
@@ -152,6 +154,20 @@ def _make_post_init(
         app.bot_data["event_pusher_task"] = pusher_task
         _log.info("telegram.event_pusher.scheduled")
 
+        # Phase 4.8b: per-turn SSE subscriber. Opens live
+        # connections to the gateway's
+        # ``/v1/sessions/<id>/turns/stream`` endpoint and
+        # drives the growing-bubble + approval-bubble +
+        # finish-footer Telegram UX via per-turn
+        # :class:`TurnRenderer` instances.
+        mux = TurnStreamMultiplexer(
+            base_url=bot_config.gateway_url,
+            bearer_token=bot_config.bearer_token,
+            renderer_factory=_make_renderer_factory(app),
+        )
+        app.bot_data["turn_stream_mux"] = mux
+        _log.info("telegram.turn_stream.ready")
+
     return _post_init
 
 
@@ -168,6 +184,81 @@ async def _on_post_shutdown(app: Application[Any, Any, Any, Any, Any, Any]) -> N
                 await asyncio.wait_for(task, timeout=2.0)
             except (TimeoutError, asyncio.CancelledError):
                 task.cancel()
+    # Phase 4.8b: stop the turn-stream multiplexer separately
+    # — it owns its own cancellation / drain logic rather
+    # than the stop() / task-join pattern the pollers use.
+    mux = app.bot_data.get("turn_stream_mux")
+    if mux is not None:
+        await mux.stop()
+
+
+def _make_renderer_factory(
+    app: Application[Any, Any, Any, Any, Any, Any],
+) -> Callable[[str, str], TurnRenderer]:
+    """Build a :type:`~.turn_stream.RendererFactory` bound to
+    this PTB app.
+
+    Closure captures ``app`` so each new :class:`TurnRenderer`
+    gets a live handle to the PTB bot for posting + editing
+    messages, and a keyboard builder that produces the same
+    callback-data shape as the existing
+    :class:`ApprovalPoller` flow — so approval taps in the
+    renderer-posted bubbles resolve through the same
+    :func:`_on_approval_callback` handler.
+
+    ``chat_id`` is pulled off the multiplexer's session→chat
+    map, which the chat handler populates via ``ensure``
+    right before dispatching a chat request."""
+
+    def _factory(session_id: str, turn_id: str) -> TurnRenderer:
+        mux = app.bot_data.get("turn_stream_mux")
+        chat_id: int | None = None
+        if mux is not None:
+            chat_id = mux.chat_id_for(session_id)
+        if chat_id is None:
+            # No chat_id recorded — a turn landed on the SSE
+            # before any chat was sent from the bot (cron
+            # firings for the same session, or a developer
+            # kicking a turn via curl). Drop the renderer's
+            # bubbles on the floor by pointing at a bogus
+            # chat_id 0 and letting PTB's send_message fail
+            # with a logged warning. Not pretty but
+            # correct: we don't know where to put them.
+            chat_id = 0
+        return TurnRenderer(
+            bot=app.bot,
+            chat_id=chat_id,
+            turn_id=turn_id,
+            build_approval_keyboard=_approval_keyboard,
+        )
+
+    return _factory
+
+
+def _approval_keyboard(approval_id: str) -> InlineKeyboardMarkup:
+    """Produce the approval inline keyboard. Matches the shape
+    ``ApprovalPoller`` / :func:`_make_on_prompt` build so the
+    existing :func:`_on_approval_callback` handler resolves
+    taps on renderer-posted bubbles too — same callback-data
+    format, same decide POST."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Approve", callback_data=build_callback_data("approve", approval_id)
+                ),
+                InlineKeyboardButton(
+                    "❌ Reject", callback_data=build_callback_data("reject", approval_id)
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔓 Trust session",
+                    callback_data=build_callback_data("trust_session", approval_id),
+                )
+            ],
+        ]
+    )
 
 
 def _make_on_event(
@@ -404,6 +495,46 @@ async def _on_model(bot: Any, update: IncomingUpdate, services: Services) -> Non
 
 async def _on_text(bot: Any, update: IncomingUpdate, services: Services) -> None:
     await handlers.handle_text(bot, update, services)
+
+
+async def _on_text_ptb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Text-handler wrapper that primes the Phase 4.8b turn
+    stream for this chat's session BEFORE dispatching to the
+    pure handler. ``mux.ensure`` is idempotent — called on
+    every message, opens an SSE connection on first use,
+    refreshes the session→chat_id binding on each call."""
+    services = cast(Services, context.bot_data["services"])
+    if update.effective_user is None or update.effective_chat is None:
+        return
+    if not handlers.is_allowed(services, update.effective_user.id):
+        await handlers.drop_unauthorised(
+            IncomingUpdate(
+                user_id=update.effective_user.id,
+                chat_id=update.effective_chat.id,
+            )
+        )
+        return
+    parsed = _normalise(update)
+    if parsed is None:
+        return
+    mux: TurnStreamMultiplexer | None = context.bot_data.get("turn_stream_mux")
+    if mux is not None:
+        prefs = services.prefs.get(parsed.chat_id)
+        try:
+            await mux.ensure(prefs.session_id, parsed.chat_id)
+        except Exception as exc:
+            # SSE subscription failures shouldn't stop the
+            # user from getting a chat reply — the growing-
+            # bubble UX degrades gracefully to the legacy
+            # single-message reply path.
+            _log.warning(
+                "telegram.turn_stream.ensure_failed",
+                extra={
+                    "session_id": prefs.session_id,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+    await _on_text(context.bot, parsed, services)
 
 
 async def _on_voice(bot: Any, update: IncomingUpdate, services: Services) -> None:

@@ -108,44 +108,46 @@ turn (silent edits), notifying approval bubbles (edit-in-
 place to outcome), plus a tiny notifying finish footer.
 Depends on 4.8c landing first.
 
-- [ ] Create
+- [x] Create
       `telegram-bot/src/fitt_telegram_bot/turn_renderer.py`
       with `TurnRenderState` dataclass and the event-to-
       Telegram-action state machine per design.md § "Telegram
       live-turn renderer".
-- [ ] SSE subscriber in the bot: long-lived
+- [x] SSE subscriber in the bot: long-lived
       `httpx.AsyncClient.stream` connection to
       `GET /v1/sessions/*/turns/stream` with
       reconnect-with-backoff on disconnect.
-- [ ] `tool_call_planned` → append "🔵 …" line to the
+- [x] `tool_call_planned` → append "🔵 …" line to the
       growing stream bubble's text; lazy-post the bubble on
       the first append, silent notification flag.
-- [ ] `tool_call_executed` → find the matching in-flight
+- [x] `tool_call_executed` → find the matching in-flight
       line in the stream bubble's text and rewrite it to
       "✅ Read X (Nms)" (success) or "❌ Read X — error"
       (failure). Silent edit.
-- [ ] `llm_call_completed` / narration-token events → append
+- [x] `llm_call_completed` / narration-token events → append
       the narration to the stream bubble, rate-limited at
-      ~1 edit per second.
-- [ ] `approval_requested` → post a NEW notifying message
+      ~1 edit per second. (Reply tokens only; narration
+      events aren't rendered as bubbles in v1 per the
+      renderer's short-chat-detection rules.)
+- [x] `approval_requested` → post a NEW notifying message
       with ✅ / ❌ / 🔓 inline keyboard; record
       `approval_bubbles[approval_id]`.
-- [ ] `approval_decided` → edit the approval message in
-      place to the outcome ("🔐 edit_file → ✅ Approved"
+- [x] `approval_decided` → edit the approval message in
+      place to show the outcome ("🔐 edit_file → ✅ Approved"
       etc.); buttons clear.
-- [ ] `turn_finished` → post a NEW notifying finish footer
+- [x] `turn_finished` → post a NEW notifying finish footer
       message ("✓ Finished in Ns" / "🚫 Rejected" / "⏱️
       Timed out"); drop the `TurnRenderState`.
-- [ ] Short-chat turn detection: if no `tool_call_planned`
+- [x] Short-chat turn detection: if no `tool_call_planned`
       or `approval_requested` fires between `turn_started`
       and `turn_finished`, the stream bubble and finish
       footer are both skipped — the existing chat streaming
       path posts the reply as today's single message. No
       scrollback pollution for "thanks" / "you're welcome".
-- [ ] Rate-limit coalescing for stream bubble edits: track
+- [x] Rate-limit coalescing for stream bubble edits: track
       `last_stream_edit_ts`; events within 1s buffer and
       flush on the next allowable edit window.
-- [ ] State-machine unit tests with a stubbed Telegram
+- [x] State-machine unit tests with a stubbed Telegram
       client. Cover: simple 1-tool turn, multi-tool turn,
       turn with approval, approval rejection, tool error,
       short chat turn.
@@ -153,13 +155,12 @@ Depends on 4.8c landing first.
       message's Telegram timestamp is strictly later than
       the approval bubble's timestamp. Pins the 2026-05-12
       bug.
-- [ ] SSE reconnect test: transient network drop triggers
+- [x] SSE reconnect test: transient network drop triggers
       backoff-reconnect; in-flight turn's state survives or
-      is cleanly dropped on a fresh connect (decide: we
-      probably drop it and rely on the gateway-side JSONL
-      being the source of truth; a future admin dashboard
-      can reconstruct from disk).
-- [ ] Failure-mode tests: Telegram API error on post/edit
+      is cleanly dropped on a fresh connect (dropped, per
+      design.md — the JSONL is the source of truth; a
+      future admin dashboard can reconstruct from disk).
+- [x] Failure-mode tests: Telegram API error on post/edit
       logs a warning and the turn continues.
 
 **Exit criteria:** a multi-step Telegram turn renders as the
