@@ -102,24 +102,52 @@ that can reach `$FITT_HOME`.
 - **2.4** Output is Kiro-style concise: one line per event,
   never wraps into multi-line banners for common shapes.
 
-### U3. Telegram `/inbox` command
+### U3. Telegram live-turn renderer
 
-As a FITT user with a phone in hand, I want a bot command
-that shows recent events so I can see what FITT has been
-doing without switching to a shell.
+As a FITT user with a phone in hand, I want Telegram to show
+me what FITT is doing as a turn unfolds — one message per
+completed action — so a 30-second multi-step turn stops being
+a silent progress-less wait.
 
 **Acceptance:**
 
-- **3.1** A `/inbox` command in the bot returns the last N
-  events (default 20) across sessions, paged via the bot's
-  existing pagination helpers.
-- **3.2** Same data as `fitt inbox` (cross-session). Events
-  render with the Phase 4.5 formatters that already exist
-  for the push channel; we're reusing, not reformatting.
-- **3.3** `/inbox` respects per-client auth — only tokens
-  tagged `telegram` can call it.
-- **3.4** Filter flags: `/inbox cron`, `/inbox errors`,
-  `/inbox session=<id>` narrow the view.
+- **3.1** For each `tool_call_planned` / `tool_call_executed`
+  pair, the bot posts one message that edits from its
+  in-flight form ("🔵 Reading README.md…") to its completed
+  form ("✅ Read README.md (12ms)") when the tool finishes.
+  One message per tool call. Posted silently
+  (`disable_notification=true`) so the phone doesn't buzz on
+  every intermediate action.
+- **3.2** For each `approval_requested`, the bot posts a
+  NEW message with the inline-keyboard approval UI
+  (✅ / ❌ / 🔓). Posted with default notification (pings
+  the phone). On decision the buttons clear and the message
+  edits in place to show the outcome ("✅ Approved",
+  "❌ Rejected", "✅ Approved for session"). The record of
+  what was approved stays visible in scrollback.
+- **3.3** When the turn's final assistant reply is ready,
+  the bot posts it as a NEW message. Pings the phone.
+  Tokens stream in via batched edits at roughly 1 edit per
+  second for Telegram's rate limit.
+- **3.4** Short chat turns (zero tool calls, zero approvals)
+  skip the action bubbles entirely — the final reply is the
+  only bubble. Preserves today's behaviour for casual replies
+  like "thanks" / "you're welcome" so scrollback stays
+  quiet.
+- **3.5** Errors stay visible. A failed tool call locks at
+  its ❌ form with a short error snippet ("❌ Read
+  registry.py — file not found"); subsequent tool calls are
+  their own new bubbles below it.
+- **3.6** Timeline ordering is correct by construction. Every
+  bubble is a new message at its action's actual timestamp,
+  so the final reply is always the latest bubble in the
+  timeline. The 2026-05-12 "approval form sits between
+  messages after decision" bug goes away because we no longer
+  edit a placeholder with an earlier send-timestamp.
+- **3.7** The bot subscribes to the per-turn event stream
+  (U1) via an in-process pub/sub hook on :class:`TurnLog`
+  for v1. The JSONL persistence is the source of truth; the
+  subscriber is a stateless formatter over live events.
 
 ### U4. HTTP read endpoints
 
@@ -198,6 +226,23 @@ land without a native client.
 - **Markdown rendering of events in the HTML viewer.** Plain
   text with a monospace font is what you want when you're
   trying to read three tool-call-argument dicts fast.
+- **Growing-bubble Telegram renderer (single message per
+  turn, status lines accumulate, recreate-on-approval to
+  trigger notification).** Considered and rejected in favour
+  of one-message-per-action. Growing-bubble's scrollback-
+  density benefit doesn't hold up under scrutiny — the same
+  content is the same content regardless of wrapper. One-
+  per-action is simpler to implement, has correct timeline
+  ordering by construction (no recreate-and-resend), and
+  gives each bubble a single clear role. If real use later
+  shows one-per-action produces too many bubbles to read,
+  revisit.
+- **`/inbox` historical browser** (bot-side paged view of
+  `events.jsonl`). Deferred to post-v1 because the live
+  renderer (U3) covers the "see what just happened" case
+  that matters more. An operator who wants to scroll past
+  turns from their phone can re-request with a specific
+  session or time range via a future `/inbox` follow-up.
 
 ## Prerequisites
 
@@ -212,12 +257,16 @@ land without a native client.
 
 Sub-phase decomposition (see design.md):
 
-- **4.8a**: backend + persistence + schema + emission sites.
-- **4.8b**: `fitt watch` CLI.
-- **4.8c**: HTTP read endpoints.
-- **4.8d**: static HTML viewer.
-- **4.8e**: Telegram `/inbox` command.
+- **4.8a**: backend + persistence + schema + emission sites
+  + in-process pub/sub hook.
+- **4.8b**: Telegram live-turn renderer (was "`/inbox`
+  command"; reshaped into the live renderer per U3).
+- **4.8c**: `fitt watch` CLI.
+- **4.8d**: HTTP read endpoints.
+- **4.8e**: static HTML viewer.
 
-Each sub-phase lands independently and is usable on its own.
-Order is 4.8a first (dependency for everything), then any
-order for the rest.
+Order is 4.8a first (dependency for everything). Then
+4.8b — the high-impact mobile piece — before the operator
+surfaces (CLI, HTTP, HTML), so the live-turn experience
+lands as early as possible. Each sub-phase is still
+independently useful and testable.

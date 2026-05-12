@@ -1,17 +1,22 @@
 # Phase 4.8 — Visibility Proxies: Tasks
 
-Five sub-phases. Each one lands independently; 4.8a is the
-dependency for everything else.
+Five sub-phases. 4.8a is the dependency for everything else.
+Order after 4.8a is 4.8b (Telegram live-turn renderer) first
+for high-impact mobile reach, then operator surfaces (CLI,
+HTTP, HTML) in any order.
 
-## Sub-phase 4.8a — Per-turn event stream backend
+## Sub-phase 4.8a — Per-turn event stream backend + pub/sub
 
-- [ ] Create `gateway/src/gateway/turns.py` with
+- [x] Create `gateway/src/gateway/turns.py` with
       `TurnEvent` dataclass, `TurnLog` class (append, read,
-      path helpers). Mirror the shape of
-      `gateway/src/gateway/events.py`.
-- [ ] Pin the event-kind schemas in a module constant + a
-      set of typed `new_*_event` constructors (one per kind
-      from design.md § "Event-kind schemas").
+      file_path, new_event). Per-session-per-day layout at
+      `sessions/<k>/turns/<YYYY-MM-DD>.jsonl`.
+      *Shipped commit `0d974c8`.*
+- [x] Pin the event-kind schemas (`TURN_EVENT_KINDS`).
+      *Shipped in `turns.py`.*
+- [ ] Add `TurnLog.subscribe(callback)` and fire registered
+      callbacks after each successful append. Raising
+      callbacks get logged, never break persistence.
 - [ ] Add `turn_id: str | None = None` to `ToolContext`.
 - [ ] Wire `record_turn_started` / `record_turn_finished` in
       `chat.py` around the tool-loop entry.
@@ -30,24 +35,66 @@ dependency for everything else.
       and on every cron firing in `cron_runner.py`; pass to
       the tool context.
 - [ ] Handle IO failures as non-fatal warnings per P3.
-- [ ] Hook the history pruner to walk `turns.jsonl` (mtime-
-      based if per-file, date-based if we decide on per-day
-      rotation — see open question 1).
-- [ ] Config knobs under `memory:` (or decided location) for
-      retention.
-- [ ] Unit tests for `TurnLog` mirroring `test_events.py`.
-      Include the hypothesis property test for P1 (one line
-      per append, valid JSON).
+- [ ] Hook the history pruner to walk
+      `turns/<YYYY-MM-DD>.jsonl` via the same date-parsing
+      code that already sweeps history and artifact dirs.
+- [ ] Unit tests for the pub/sub hook: one append → one
+      callback per subscriber; raising callback logged and
+      others still fire; no subscribers = no-op.
 - [ ] Integration test: full agent-loop turn with stubbed
-      LLM produces the expected event sequence.
-- [ ] IO-failure test: unwritable `turns.jsonl` logs a
-      warning and the turn completes anyway.
+      LLM produces the expected event sequence in both the
+      JSONL file AND the subscriber callback list.
+- [ ] IO-failure test: unwritable `turns/<date>.jsonl` logs a
+      warning and the turn completes anyway (already
+      covered in the shipped primitive tests; extend when
+      emission sites exist).
 
 **Exit criteria:** a tool-using turn in Telegram writes a
-valid `turns.jsonl` with all the expected event kinds in
-order. `ruff` / `mypy` / `pytest` clean.
+valid `turns/<date>.jsonl` with all the expected event kinds
+in order; a registered in-process subscriber observes the
+same events in the same order. `ruff` / `mypy` / `pytest`
+clean.
 
-## Sub-phase 4.8b — `fitt watch` CLI renderer
+## Sub-phase 4.8b — Telegram live-turn renderer
+
+- [ ] Create
+      `telegram-bot/src/fitt_telegram_bot/turn_renderer.py`
+      with `TurnRenderState` dataclass and the event-to-
+      Telegram-action state machine per design.md § "Telegram
+      live-turn renderer".
+- [ ] Subscribe to the gateway's `TurnLog` at bot boot.
+- [ ] `tool_call_planned` → post silent message "🔵 …";
+      record `tool_bubbles[call_id]`.
+- [ ] `tool_call_executed` → edit in place to "✅ (Nms)" or
+      "❌ — error"; lock message.
+- [ ] `approval_requested` → post notifying message with
+      ✅ / ❌ / 🔓 inline keyboard; record
+      `approval_bubbles[approval_id]`.
+- [ ] `approval_decided` → edit in place to outcome; buttons
+      clear.
+- [ ] `turn_finished` → drop the `TurnRenderState`; the
+      final reply was (or will be) posted by the existing
+      chat streaming path.
+- [ ] Short-chat turn detection: if no tool or approval
+      events fire between `turn_started` and
+      `turn_finished`, no action bubbles are posted.
+- [ ] State-machine unit tests with a stubbed Telegram
+      client. Cover: simple 1-tool turn, multi-tool turn,
+      turn with approval, approval rejection, tool error,
+      short chat turn.
+- [ ] Timeline-ordering regression test: the final reply
+      message's Telegram timestamp is strictly later than
+      the approval bubble's timestamp. Pins the 2026-05-12
+      bug.
+- [ ] Failure-mode tests: Telegram API error on post/edit
+      logs a warning and the turn continues.
+
+**Exit criteria:** a multi-step Telegram turn renders as the
+documented per-action bubble sequence; the 2026-05-12
+"approval floats in the wrong place" bug is demonstrably
+fixed. `ruff` / `mypy` / `pytest` clean.
+
+## Sub-phase 4.8c — `fitt watch` CLI renderer
 
 - [ ] Create `gateway/src/gateway/cli_watch.py` with the
       renderer and tail loop.
@@ -57,14 +104,16 @@ order. `ruff` / `mypy` / `pytest` clean.
       truncation.
 - [ ] Color via `rich` (already a dependency); ok=green,
       warn=yellow, error=red per design.md.
-- [ ] Tail loop uses `TurnLog.read(since=<last_ts>)` with
-      two-second sleep between polls.
+- [ ] Tail loop uses `TurnLog.read(session_key, since=...)`
+      with a two-second sleep between polls; at midnight,
+      switches to the next day's file via a `date.today()`
+      check.
 - [ ] `fitt watch <session>` and `fitt watch
       --session-active` (latest-by-turn).
 - [ ] Works under `docker compose exec gateway fitt watch
       ...` — test that path.
 - [ ] Output-format unit tests with synthetic
-      `turns.jsonl` files.
+      `turns/<date>.jsonl` files.
 - [ ] Tail-behavior test with a file being appended by a
       background task.
 
@@ -72,7 +121,7 @@ order. `ruff` / `mypy` / `pytest` clean.
 events line-by-line, updates within 2s of a new event
 landing. Clean exit on Ctrl-C.
 
-## Sub-phase 4.8c — HTTP read endpoints
+## Sub-phase 4.8d — HTTP read endpoints
 
 - [ ] Extend (or create) `gateway/src/gateway/events_endpoint.py`
       / rename to a broader name. Add routes for:
@@ -96,7 +145,7 @@ landing. Clean exit on Ctrl-C.
 well-formed JSON and matches the CLI's output for the same
 filter. Tests clean.
 
-## Sub-phase 4.8d — Static HTML viewer
+## Sub-phase 4.8e — Static HTML viewer
 
 - [ ] Create `gateway/src/gateway/viewer.py` with the HTML
       page as a module string. HTMX from CDN.
@@ -118,34 +167,28 @@ filter. Tests clean.
 phone, see events landing every 5 seconds. Survives a
 crafted event with `<script>` in its body.
 
-## Sub-phase 4.8e — Telegram `/inbox` command
+## Deferred: Telegram `/inbox` historical browser
 
-- [ ] Add a `/inbox` command handler in
-      `telegram-bot/src/fitt_telegram_bot/handlers.py`.
-- [ ] Calls `GET /v1/events` via the bot's HTTP client with
-      its service token.
-- [ ] Reuses the Phase 4.5 push-channel event formatters —
-      no duplicate formatting logic.
-- [ ] Pagination: 10 events per message, inline keyboard
-      for navigation.
-- [ ] Filter args: `/inbox cron`, `/inbox errors`,
-      `/inbox session=<id>`.
-- [ ] Unit tests for the handler with a stubbed bot and
-      HTTP client.
-- [ ] Integration test: post `/inbox`, assert a message
-      with recent events.
+Originally sub-phase 4.8e. Deferred to post-v1 because the
+live renderer (4.8b) covers the "see what FITT just did"
+case that matters more. Revisit if scrolling past turns on
+the phone becomes an actual daily friction. Scope if we
+do return to it:
 
-**Exit criteria:** `/inbox` on the phone returns recent
-events paged at 10 per screen. Filter flags narrow the
-view. Ctrl-Z via operator testing.
+- `/inbox` command with optional filter flags (`cron`,
+  `errors`, `session=<id>`).
+- Paged view: 10 events per message, inline keyboard for
+  navigation.
+- Reads from `GET /v1/events` (landed in 4.8d) using the
+  bot's service token.
 
 ## Cross-cutting
 
-- [ ] Update `FITT_ROADMAP.md` Phase 4.8 entry to reference
-      this spec directory once it exists.
+- [x] Update `FITT_ROADMAP.md` Phase 4.8 entry to reference
+      this spec directory. *Shipped.*
 - [ ] Log the shipping of each sub-phase in
       `docs/observed-issues.md` as its pain points surface
       fixes.
-- [ ] Decide on (and document) the open questions from
-      design.md § "Open questions" before committing each
-      sub-phase.
+- [x] Resolve the open questions from design.md §
+      "Open questions" → "Decisions". *Shipped commit
+      `ecddead`.*

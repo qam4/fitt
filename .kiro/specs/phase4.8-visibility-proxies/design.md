@@ -3,27 +3,36 @@
 ## Architecture overview
 
 Five surfaces over one new backend. The backend — a per-turn
-event stream persisted to JSONL — is the shape everything
-else consumes. The surfaces are thin renderers:
+event stream persisted to JSONL, with an in-process pub/sub
+hook for live subscribers — is the shape everything else
+consumes. The surfaces are thin renderers:
 
 ```
-                          ┌─ fitt watch (CLI)
-                          │
-turns.jsonl  →  TurnLog  ─┼─ GET /v1/sessions/<id>/turns  (HTTP JSON)
- writer + reader          │                              ↓
-                          ├─ GET /v1/events/view          (HTML viewer)
-                          │
-events.jsonl reader  ────┤
-audit.jsonl reader   ────┼─ GET /v1/events / /v1/audit / /v1/capability-gaps
-capability_gaps log  ────┤
-                          │
-                          └─ Telegram /inbox command
+                              ┌─ fitt watch (CLI)            (tails JSONL)
+                              │
+turns/<YYYY-MM-DD>.jsonl      ├─ GET /v1/sessions/<id>/turns (HTTP JSON, paged)
+  ▲                           │
+  │ append()                  ├─ GET /v1/events/view          (HTML viewer)
+  │                           │
+TurnLog  ─── subscribers ─────┤
+  │                           │
+  │                           └─ Telegram live-turn renderer (in-process hook)
+  │
+events.jsonl / audit.jsonl / capability_gaps  ── HTTP read endpoints
 ```
 
-The four existing logs (`events.jsonl`, `audit.jsonl`,
-`capability_gaps.log`, per-session `history/*.md`) already
-exist; the CLI already reads them. Phase 4.8 adds the HTTP
-surface over these AND the new per-turn stream.
+Two paths out of `TurnLog`:
+
+1. **JSONL file**, for everyone who can wait (`fitt watch`,
+   the HTTP endpoint, the HTML viewer, the future admin
+   dashboard). Readers poll or tail the file.
+2. **In-process pub/sub hook**, for subscribers that need
+   events as they happen (the Telegram live-turn renderer).
+   `append()` fires registered callbacks synchronously
+   immediately after the write flushes. Callbacks are
+   expected to return quickly; slow callbacks get wrapped
+   in `asyncio.create_task` at registration time so they
+   never block the agent loop.
 
 ## Modules and responsibilities
 
@@ -32,10 +41,10 @@ New files:
 - **`gateway/src/gateway/turns.py`** — per-turn event log
   primitive. `TurnEvent` dataclass (kind, timestamp, session,
   meta), `TurnLog(path)` with `append()` and `read()`, default
-  path helper. Mirrors `gateway.events.EventLog` closely; the
-  two primitives are deliberately similar because they have
-  the same file posture (append-only JSONL, mtime-based
-  liveness, no in-memory cache).
+  path helper. Also exposes `subscribe(callback)` and fires
+  every subscriber on `append()` after the write flushes.
+  Mirrors `gateway.events.EventLog` closely on the JSONL side;
+  adds the pub/sub hook for live consumers.
 - **`gateway/src/gateway/events_endpoint.py`** — already
   exists as a module name. Verify scope and extend if
   necessary; if it currently covers only events push, add the
@@ -44,8 +53,14 @@ New files:
   embedded as a module constant. Serves from
   `events_endpoint.py`'s router.
 - **`gateway/src/gateway/cli_watch.py`** — renderer for
-  `fitt watch`. Tails `turns.jsonl`, formats each event
-  line-by-line.
+  `fitt watch`. Tails `turns/<date>.jsonl`, formats each
+  event line-by-line.
+- **`telegram-bot/src/fitt_telegram_bot/turn_renderer.py`** —
+  the live-turn renderer. Subscribes to the gateway's
+  `TurnLog` via the in-process hook, maintains per-turn state
+  (`{tool_call_id → telegram_message_id, approval_id →
+  telegram_message_id, final_reply_message_id}`), posts /
+  edits / locks Telegram messages as events arrive.
 
 Extensions to existing files:
 
@@ -253,16 +268,124 @@ self-contained HTML page.
 The page uses JavaScript minimally — HTMX covers the polling;
 a tiny function keeps a running high-watermark `last_ts`.
 
-## Telegram `/inbox`
+## Telegram live-turn renderer
 
-Wired via the bot's existing command handler framework. One
-new handler function in `handlers.py`. Talks to
-`GET /v1/events` (same endpoint humans would hit) with the
-bot's service token. Formats via the existing event-push
-formatters that already render to Telegram HTML.
+Wired via the bot's existing command handler framework plus a
+new in-process subscriber on the gateway's `TurnLog`. One new
+module (`telegram-bot/src/fitt_telegram_bot/turn_renderer.py`)
+holds the state machine; existing bot plumbing (`bot.py`,
+`handlers.py`) stays thin.
 
-Pagination: 10 events per message, navigation via inline
-keyboard (`⬅️ Older` / `➡️ Newer`).
+### Subscription model
+
+For v1, the gateway and the bot run in the same container; the
+bot imports `gateway.turns.TurnLog` and calls `subscribe()` at
+boot. When the gateway and bot get split into separate
+containers (v2 onward), the bot switches to a streaming HTTP
+endpoint (`GET /v1/sessions/<k>/turns/stream`) that pushes the
+same events over SSE. Both code paths converge on the same
+event-handling state machine — only the transport changes.
+
+The v1 in-process hook is:
+
+```python
+# gateway/turns.py
+class TurnLog:
+    def subscribe(self, callback: TurnEventCallback) -> None:
+        """Register a callback fired after each successful
+        append. Callbacks run synchronously under the writer's
+        lock; slow callbacks should wrap their work in an
+        asyncio.create_task to avoid stalling the agent loop.
+        Raises on append in a subscriber are caught and logged;
+        one misbehaving subscriber can't break persistence.
+        """
+```
+
+### Per-turn state machine
+
+On `turn_started`, the renderer creates an in-memory
+`TurnRenderState`:
+
+```python
+@dataclass
+class TurnRenderState:
+    turn_id: str
+    chat_id: int
+    tool_bubbles: dict[str, int] = field(default_factory=dict)
+    # tool_call_id → telegram message_id
+    approval_bubbles: dict[str, int] = field(default_factory=dict)
+    # approval_id → telegram message_id
+    final_reply_message_id: int | None = None
+    last_edit_ts: float = 0.0  # for rate-limit coalescing
+```
+
+Event handlers map:
+
+- `tool_call_planned` → post silent message "🔵 Reading X…";
+  store `tool_bubbles[call_id] = message_id`.
+- `tool_call_executed` → edit that message in place to
+  "✅ Read X (Nms)" (or "❌ Read X — error" on failure).
+- `approval_requested` → post notifying message with inline
+  keyboard; store `approval_bubbles[approval_id] =
+  message_id`.
+- `approval_decided` → edit that message in place; buttons
+  clear; text updates to outcome.
+- The **final reply** arrives via the existing chat streaming
+  path, not through `turns.jsonl`. When `turn_finished` fires,
+  the renderer knows the chat handler is about to post the
+  real reply as a new message; the renderer's job is done.
+  (No code in the renderer actually posts the final reply;
+  it already lands via `chat.py`'s streaming response.)
+- `turn_finished` → drop the `TurnRenderState`; scrollback
+  carries the history.
+
+### Rate limiting
+
+Telegram's edit-message rate cap is ~1 edit per second per
+chat. For tool bubbles there's only ever one edit per
+bubble (in-flight → done), so no coalescing needed. The
+final reply streams tokens via the existing chat path; that
+path already batches edits to stay under the rate limit. The
+only risk is a fast-burst turn where many `tool_call_planned`
+events land in one second — each produces a new message, not
+an edit, so Telegram's "messages per second" limit (30/sec in
+one chat) applies, and we stay far below it in practice.
+
+### Short-chat-turn detection
+
+A turn where no tool call and no approval ever fires skips
+the action bubbles entirely. The renderer's `turn_started`
+handler creates the state but posts nothing; the first time
+an actual event fires (tool/approval), it posts. When
+`turn_finished` lands with an empty state, nothing was
+posted, and today's one-bubble chat-reply shape is
+preserved. Matches requirement U3.4.
+
+### Failure modes
+
+- **Telegram API error on message post/edit:** log a warning,
+  mark the bubble as "failed to render," keep the turn going.
+  Losing a status bubble doesn't invalidate the turn.
+- **Bot process restart mid-turn:** the in-memory state is
+  lost. The agent loop completes; the final reply still lands
+  via the chat handler. Historical events are recoverable
+  from the on-disk JSONL. No attempt to reconstruct partial
+  renderings on restart.
+- **Slow subscriber:** the `subscribe` contract says "wrap
+  slow work in create_task." If a subscriber is still
+  synchronous and slow, the agent loop's `append()` call
+  blocks until it returns. One minute of live-turn tests at
+  4.8a time will surface this; the existing `asyncio.Lock`
+  in `TurnLog.append` serialises writes so the worst case
+  is "the loop blocks briefly" not "the gateway deadlocks."
+
+## Deferred: `/inbox` historical browser
+
+The original `/inbox` design (paged browser over
+`events.jsonl`) ships post-v1 if it's still wanted after the
+live renderer is in use. Principle 9: live with the live
+renderer first; if scrolling past turns on the phone becomes
+a real need, add it as a targeted follow-up.
 
 ## Config
 
@@ -310,42 +433,56 @@ them the first time a turn runs under 4.8a-or-later.
 
 Per sub-phase:
 
-### 4.8a (backend)
+### 4.8a (backend + pub/sub)
 
 - Unit tests for `TurnLog.append` / `read` mirror
   `test_events.py` structure. Property-test round trips
   (hypothesis, marked `# Phase 4.8, Property P1`).
 - Unit tests for emission helpers — assert event shape and
   that IO failures become warnings, not exceptions.
+- Unit tests for the pub/sub hook: a registered callback
+  fires once per append; a raising callback gets its error
+  logged and doesn't break the append or other subscribers.
 - Integration test: full agent-loop turn with a stubbed LLM
   and tool; assert the expected event sequence lands in
-  `turns.jsonl`.
+  `turns/<date>.jsonl` AND reaches subscribers in the same
+  order.
 
-### 4.8b (`fitt watch`)
+### 4.8b (Telegram live-turn renderer)
 
-- Output-format tests against synthetic `turns.jsonl` files.
+- State-machine unit tests with a stubbed Telegram client:
+  tool-call planned + executed → one silent bubble edited
+  once; approval lifecycle → one notifying bubble edited
+  to outcome; short-chat turn → no action bubbles.
+- Rendering tests for message text: icon choices, duration
+  formatting, error-case text.
+- Timeline-ordering regression test: under the new renderer,
+  given a turn with an approval in the middle, the final
+  reply message's timestamp is strictly later than the
+  approval's timestamp. Pins the 2026-05-12 Telegram bug.
+- Failure-mode tests: Telegram API error on post/edit logs
+  a warning and the turn continues; mid-turn restart
+  doesn't leave a broken state.
+
+### 4.8c (`fitt watch`)
+
+- Output-format tests against synthetic `turns/<date>.jsonl`
+  files.
 - Tail-behavior tests with a file being appended by a
   background task.
 
-### 4.8c (HTTP)
+### 4.8d (HTTP)
 
 - Endpoint tests using `TestClient`. Auth required; pagination
   correct; `since` filters correctly.
 - `/v1/sessions/<id>/turns` returns only the requested session.
 
-### 4.8d (HTML viewer)
+### 4.8e (HTML viewer)
 
 - Smoke: endpoint returns 200, HTML contains the list
   container, script block, expected token-query-param read.
 - Check for obvious XSS: event `meta` gets HTML-escaped by the
   template.
-
-### 4.8e (Telegram `/inbox`)
-
-- Handler unit tests with a stubbed bot and a test HTTP
-  client.
-- Integration test: post `/inbox`, see a message with
-  recent events.
 
 ## Migration
 
@@ -354,13 +491,17 @@ them the first time a turn runs under 4.8a-or-later.
 
 ## Sub-phase decomposition
 
-- **4.8a** — `turns.py`, emission helpers, wiring into chat +
-  cron. ~2 days.
-- **4.8b** — `fitt watch` CLI. ~1 day.
-- **4.8c** — HTTP read endpoints for events/audit/caps/turns.
+- **4.8a** — `turns.py` primitive (shipped 2026-05-12 as
+  commit `0d974c8`), emission helpers wired into chat +
+  cron, pub/sub hook on `TurnLog`. ~1½ days remaining
+  (primitive done; helpers + wiring + hook still open).
+- **4.8b** — Telegram live-turn renderer. High-impact
+  mobile piece, lands after 4.8a. ~1½ days.
+- **4.8c** — `fitt watch` CLI. ~1 day.
+- **4.8d** — HTTP read endpoints for events/audit/caps/turns.
   ~1 day.
-- **4.8d** — Static HTML viewer. ~half-day.
-- **4.8e** — Telegram `/inbox`. ~half-day.
+- **4.8e** — Static HTML viewer. ~½ day.
 
-Total: ~5 days focused work. Each sub-phase is independently
-useful and independently testable.
+Total: ~6½ days focused work (revised up from ~5d after
+adding the Telegram live renderer). Each sub-phase is
+independently useful and independently testable.
