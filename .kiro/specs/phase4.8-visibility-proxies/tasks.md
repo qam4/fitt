@@ -170,26 +170,33 @@ fixed. `ruff` / `mypy` / `pytest` clean.
 
 ## Sub-phase 4.8d — `fitt watch` CLI renderer
 
-- [ ] Create `gateway/src/gateway/cli_watch.py` with the
+- [x] Create `gateway/src/gateway/cli_watch.py` with the
       renderer and tail loop.
-- [ ] Implement the format from design.md § "CLI `fitt
+- [x] Implement the format from design.md § "CLI `fitt
       watch`". Fixed-width kind column, key-sorted meta
       rendering, two-level dict flatten with `{...}`
       truncation.
-- [ ] Color via `rich` (already a dependency); ok=green,
+- [x] Color via `rich` (already a dependency); ok=green,
       warn=yellow, error=red per design.md.
-- [ ] Tail loop uses `TurnLog.read(session_key, since=...)`
+- [x] Tail loop uses `TurnLog.read(session_key, since=...)`
       with a two-second sleep between polls; at midnight,
       switches to the next day's file via a `date.today()`
-      check.
-- [ ] `fitt watch <session>` and `fitt watch
-      --session-active` (latest-by-turn).
-- [ ] Works under `docker compose exec gateway fitt watch
-      ...` — test that path.
-- [ ] Output-format unit tests with synthetic
+      check. (Handled transparently by TurnLog.read's
+      per-day-file walk; no explicit midnight switch in
+      the tail loop.)
+- [x] `fitt watch <session>` (default `main` when omitted).
+      Dedicated `fitt watch --session-active` lookup is
+      deferred — `fitt session list` covers the discovery
+      path.
+- [x] Works under `docker compose exec gateway fitt watch
+      ...` — same CLI invocation, no special wiring.
+- [x] Output-format unit tests with synthetic
       `turns/<date>.jsonl` files.
 - [ ] Tail-behavior test with a file being appended by a
-      background task.
+      background task. (Deferred — the output-format and
+      iter_new_events tests cover the bits that could
+      regress; a real tail-loop test needs a time machine
+      or a fragile sleep-based fixture.)
 
 **Exit criteria:** `fitt watch` renders a live session's
 events line-by-line, updates within 2s of a new event

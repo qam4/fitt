@@ -1653,5 +1653,28 @@ def eval_all_cmd(timeout_s: float, config_file: Path | None) -> None:
         sys.exit(1)
 
 
+# --------------------------------------------------------------- fitt watch
+
+
+@main.command("watch")
+@click.argument("session_id", default="main")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def watch_cmd(session_id: str, config_file: Path | None) -> None:
+    """Tail a session's per-turn event stream.
+
+    Prints one line per turn event with color-coded severity.
+    Ctrl-C exits. The last hour of history is printed on
+    startup before the tailing loop begins so the operator
+    sees the context of the current turn immediately."""
+    from .cli_watch import run_watch
+
+    cfg = load_config(
+        config_file or default_config_path(),
+        default_secrets_path(),
+        load_secrets_too=False,
+    )
+    sys.exit(run_watch(session_id, cfg.memory.sessions_dir))
+
+
 if __name__ == "__main__":
     main()
