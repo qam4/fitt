@@ -214,10 +214,20 @@ async def execute_tool_call(
     registry: ToolRegistry,
     approval: Any,
     tool_ctx: ToolContext,
+    iteration: int = 0,
 ) -> tuple[str, ToolResult, ApprovalDecision, Tool | None]:
     """Resolve one tool call. Any failure surface — unknown tool,
     bad args, approval reject — is expressed as a ToolResult with
-    is_error=True so the loop can continue."""
+    is_error=True so the loop can continue.
+
+    Phase 4.8: emits ``tool_call_planned`` and
+    ``tool_call_executed`` turn events via the helpers when
+    ``tool_ctx.turns`` is set. No-op when it isn't, so the
+    existing test contracts that don't wire a TurnLog still
+    pass.
+    """
+    from .turn_events import record_tool_call_executed, record_tool_call_planned
+
     call_id = str(call.get("id") or "")
     function = call.get("function") or {}
     name = function.get("name") if isinstance(function, dict) else None
@@ -253,25 +263,63 @@ async def execute_tool_call(
     else:
         args = {}
 
+    # Phase 4.8: emit tool_call_planned before dispatch so the
+    # renderer shows the in-flight "🔵 Reading X…" bubble while
+    # the tool actually runs.
+    turns = getattr(tool_ctx, "turns", None)
+    turn_id = getattr(tool_ctx, "turn_id", None)
+    record_tool_call_planned(
+        turns,
+        turn_id,
+        tool_ctx.session_key,
+        tool_name=name,
+        args=args,
+        call_id=call_id,
+        iteration=iteration,
+    )
+
     try:
         tool = registry.lookup(name)
     except UnknownTool:
+        result = ToolResult.error(
+            f"tool {name!r} is not registered; this is likely a "
+            f"hallucinated call. Try again using only the tools "
+            f"listed in the capabilities block."
+        )
+        record_tool_call_executed(
+            turns,
+            turn_id,
+            tool_ctx.session_key,
+            tool_name=name,
+            call_id=call_id,
+            ok=False,
+            duration_ms=0,
+            result_summary=result.payload,
+        )
         return (
             call_id,
-            ToolResult.error(
-                f"tool {name!r} is not registered; this is likely a "
-                f"hallucinated call. Try again using only the tools "
-                f"listed in the capabilities block."
-            ),
+            result,
             ApprovalDecision.rejected(detail="unknown tool"),
             None,
         )
 
+    started = time.perf_counter()
     decision = await approval.check(tool, args, tool_ctx)
     if not decision.execute:
+        result = ToolResult.error(decision.detail or f"tool {name!r} not executed")
+        record_tool_call_executed(
+            turns,
+            turn_id,
+            tool_ctx.session_key,
+            tool_name=name,
+            call_id=call_id,
+            ok=False,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            result_summary=result.payload,
+        )
         return (
             call_id,
-            ToolResult.error(decision.detail or f"tool {name!r} not executed"),
+            result,
             decision,
             tool,
         )
@@ -284,6 +332,16 @@ async def execute_tool_call(
             extra={"tool": name, "error": str(exc)},
         )
         result = ToolResult.error(f"tool {name!r} raised {type(exc).__name__}: {exc}")
+    record_tool_call_executed(
+        turns,
+        turn_id,
+        tool_ctx.session_key,
+        tool_name=name,
+        call_id=call_id,
+        ok=not result.is_error,
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        result_summary=result.payload if not result.is_error else result.payload[:300],
+    )
     return call_id, result, decision, tool
 
 
@@ -438,9 +496,24 @@ async def run_agent_loop(
     tool_calls_for_memory: list[PersistedToolCall] = []
 
     iterations = 0
+    turns = getattr(tool_ctx, "turns", None)
+    turn_id = getattr(tool_ctx, "turn_id", None)
+
     for iteration in range(max_iterations):
         iterations = iteration + 1
         working_body["messages"] = working_messages
+        # Phase 4.8: emit llm_call_started before dispatch so the
+        # renderer knows "thinking" is in flight.
+        from .turn_events import record_llm_call_completed, record_llm_call_started
+
+        record_llm_call_started(
+            turns,
+            turn_id,
+            session_key,
+            alias=alias,
+            iteration=iteration,
+        )
+        dispatch_started = time.perf_counter()
         try:
             dispatch = await alias_router.dispatch(alias, working_body)
         except (UnknownAlias, NoBackendAvailable):
@@ -466,6 +539,31 @@ async def run_agent_loop(
         out_tok_total += out_tok
 
         tool_calls = extract_tool_calls(response_obj)
+        # Phase 4.8: emit llm_call_completed with the dispatch
+        # outcome.
+        _finish_reason: str | None = None
+        _dumped = response_to_dict(response_obj)
+        if _dumped:
+            _choices = _dumped.get("choices")
+            if isinstance(_choices, list) and _choices:
+                _choice0 = _choices[0]
+                if isinstance(_choice0, dict):
+                    _fr = _choice0.get("finish_reason")
+                    if isinstance(_fr, str):
+                        _finish_reason = _fr
+        record_llm_call_completed(
+            turns,
+            turn_id,
+            session_key,
+            model=model_used.id if model_used else "(unknown)",
+            latency_ms=int((time.perf_counter() - dispatch_started) * 1000),
+            in_tokens=in_tok,
+            out_tokens=out_tok,
+            finish_reason=_finish_reason,
+            tool_calls_count=len(tool_calls),
+            cost_usd=None,
+        )
+
         if not tool_calls:
             break  # natural stop — model produced a final reply
 
@@ -480,6 +578,7 @@ async def run_agent_loop(
                 registry=tool_registry,
                 approval=approval,
                 tool_ctx=tool_ctx,
+                iteration=iteration,
             )
             duration_ms = int((time.perf_counter() - tool_started) * 1000)
             _log.info(

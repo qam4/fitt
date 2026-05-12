@@ -266,6 +266,21 @@ class ApprovalMiddleware:
         or times out. Called only for ``ask`` / ``trust_session``.
         """
         approval = await self.request_approval(tool, args, context)
+        # Phase 4.8: emit approval_requested turn event so the
+        # Telegram renderer and other live consumers can show
+        # the pending approval immediately.
+        from .turn_events import record_approval_decided, record_approval_requested
+
+        record_approval_requested(
+            getattr(context, "turns", None),
+            getattr(context, "turn_id", None),
+            context.session_key,
+            approval_id=approval.approval_id,
+            tool_name=tool.name,
+            bucket=bucket.value,
+            client=context.client,
+        )
+        approval_started = monotonic()
         try:
             decision_str = await asyncio.wait_for(approval.future, timeout=self._timeout_s)
         except TimeoutError:
@@ -274,6 +289,14 @@ class ApprovalMiddleware:
             # an edit-message that says "expired").
             async with self._lock:
                 self._pending.pop(approval.approval_id, None)
+            record_approval_decided(
+                getattr(context, "turns", None),
+                getattr(context, "turn_id", None),
+                context.session_key,
+                approval_id=approval.approval_id,
+                decision="timeout",
+                duration_ms=int((monotonic() - approval_started) * 1000),
+            )
             return ApprovalDecision.timeout(
                 detail=(
                     f"Tool {tool.name!r} approval timed out after "
@@ -285,7 +308,16 @@ class ApprovalMiddleware:
         else:
             # Resolved explicitly by a call to resolve_approval.
             # _pending was cleared there.
+            duration_ms = int((monotonic() - approval_started) * 1000)
             if decision_str == "approve":
+                record_approval_decided(
+                    getattr(context, "turns", None),
+                    getattr(context, "turn_id", None),
+                    context.session_key,
+                    approval_id=approval.approval_id,
+                    decision="approve",
+                    duration_ms=duration_ms,
+                )
                 return ApprovalDecision.approved(detail="approved by user")
             if decision_str == "trust_session":
                 # Grant the session-level trust so future calls
@@ -293,8 +325,24 @@ class ApprovalMiddleware:
                 # prompt. Previously a no-op; see
                 # trust_session() docstring for history.
                 self.trust_session(context.session_key, tool.name)
+                record_approval_decided(
+                    getattr(context, "turns", None),
+                    getattr(context, "turn_id", None),
+                    context.session_key,
+                    approval_id=approval.approval_id,
+                    decision="trust_session",
+                    duration_ms=duration_ms,
+                )
                 return ApprovalDecision.trust_session(detail="trusted for this session")
             # Anything else — treat as reject.
+            record_approval_decided(
+                getattr(context, "turns", None),
+                getattr(context, "turn_id", None),
+                context.session_key,
+                approval_id=approval.approval_id,
+                decision="reject",
+                duration_ms=duration_ms,
+            )
             return ApprovalDecision.rejected(detail=f"rejected by user: {decision_str!r}")
 
     async def request_approval(

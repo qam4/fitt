@@ -482,6 +482,21 @@ async def _run_tool_loop(
     body_extras = {k: v for k, v in request_body.items() if k != "messages"}
     original_messages: list[dict[str, Any]] = list(request_body.get("messages") or [])
 
+    # Phase 4.8: emit turn_started now that we've committed to
+    # running the tool loop for this request. Emission is a
+    # no-op when tool_ctx.turns or turn_id is None (tests, or
+    # early-phase callers that haven't wired TurnLog yet).
+    from .turn_events import record_turn_started
+
+    record_turn_started(
+        getattr(tool_ctx, "turns", None),
+        getattr(tool_ctx, "turn_id", None),
+        session_id,
+        alias=parsed.model,
+        client=tool_ctx.client,
+        user_msg_len=len(user_message_for_memory or ""),
+    )
+
     detach_threshold = tool_registry.policy.approval_detach_threshold_secs
 
     def _build_loop_coro():  # type: ignore[no-untyped-def]
@@ -606,7 +621,22 @@ async def _run_tool_loop(
     # and upstream_error below) ------------------------------------
     result = outcome
 
+    # Phase 4.8: emit turn_finished before every return in this
+    # block so the renderer's finish footer always lands.
+    from .turn_events import record_turn_finished
+
+    _turns = getattr(tool_ctx, "turns", None)
+    _turn_id = getattr(tool_ctx, "turn_id", None)
+
     if result.status == "upstream_error" and result.error is not None:
+        record_turn_finished(
+            _turns,
+            _turn_id,
+            session_id,
+            status="upstream_error",
+            iterations=result.iterations,
+            final_reply_len=0,
+        )
         return _translate_upstream_error(result.error)
 
     if result.status == "tool_loop_exhausted":
@@ -628,6 +658,14 @@ async def _run_tool_loop(
             status="tool_loop_exhausted",
             fallback=result.fallback_used,
         )
+        record_turn_finished(
+            _turns,
+            _turn_id,
+            session_id,
+            status="tool_loop_exhausted",
+            iterations=result.iterations,
+            final_reply_len=0,
+        )
         return JSONResponse(
             status_code=504,
             content={
@@ -645,6 +683,14 @@ async def _run_tool_loop(
     model_used = result.model_used
     assistant_text = result.assistant_text
     response_obj = result.response_obj
+    record_turn_finished(
+        _turns,
+        _turn_id,
+        session_id,
+        status="ok",
+        iterations=result.iterations,
+        final_reply_len=len(assistant_text or ""),
+    )
 
     cost = (
         estimate_cost(model_used, result.in_tokens, result.out_tokens)
@@ -814,6 +860,11 @@ async def chat_completions(request: Request) -> Response:
         request_body = _inject_fitt_tools(request_body, tool_registry)
         request_body = dict(request_body)
         request_body["stream"] = False
+        # Phase 4.8: generate a stable turn_id for the whole
+        # request so turn events carry a matching handle.
+        import uuid as _uuid
+
+        turn_id = str(_uuid.uuid4())
         tool_ctx_base = ToolContext(
             client=getattr(request.state, "client", "unknown"),
             session_key=session_id,
@@ -825,6 +876,8 @@ async def chat_completions(request: Request) -> Response:
             events=getattr(request.app.state, "events", None),
             local_shell=getattr(request.app.state, "local_shell", None),
             lessons=getattr(request.app.state, "lessons", None),
+            turns=getattr(request.app.state, "turns", None),
+            turn_id=turn_id,
         )
         return await _run_tool_loop(
             parsed=parsed,

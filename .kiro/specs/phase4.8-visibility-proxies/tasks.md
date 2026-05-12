@@ -24,30 +24,30 @@ SSE handler uses to fan events out; it's not bypassed.
 - [x] Turn-event emission helpers in
       `gateway/src/gateway/turn_events.py` (record_*
       wrappers per event kind). *Shipped commit `30f182a`.*
-- [ ] Add `turn_id: str | None = None` to `ToolContext`.
-- [ ] Wire `record_turn_started` / `record_turn_finished` in
+- [x] Add `turn_id: str | None = None` to `ToolContext`.
+- [x] Wire `record_turn_started` / `record_turn_finished` in
       `chat.py` around the tool-loop entry.
-- [ ] Wire `record_llm_call_started` / `record_llm_call_completed`
+- [x] Wire `record_llm_call_started` / `record_llm_call_completed`
       in `agent_loop.py` around the dispatch call.
-- [ ] Wire `record_tool_call_planned` in `execute_tool_call`
+- [x] Wire `record_tool_call_planned` in `execute_tool_call`
       at entry; `record_tool_call_executed` at return.
-- [ ] Wire `record_approval_requested` in
+- [x] Wire `record_approval_requested` in
       `ApprovalMiddleware.request_approval`.
-- [ ] Wire `record_approval_decided` in
+- [x] Wire `record_approval_decided` in
       `resolve_approval` + timeout branch of
       `_request_and_wait`.
 - [ ] Extend the existing `record_gap` in `agent_loop.py` to
       also emit turn events via `record_gap_event`.
-- [ ] Generate `turn_id` once per chat request in `chat.py`
+- [x] Generate `turn_id` once per chat request in `chat.py`
       and on every cron firing in `cron_runner.py`; pass to
       the tool context.
-- [ ] TurnLog lifecycle in `app.py`: construct at boot,
+- [x] TurnLog lifecycle in `app.py`: construct at boot,
       attach to `app.state.turns`, inject into ToolContext
       at request/fire time.
-- [ ] Hook the history pruner to walk
+- [x] Hook the history pruner to walk
       `turns/<YYYY-MM-DD>.jsonl` via the same date-parsing
       code that already sweeps history and artifact dirs.
-- [ ] Integration test: full agent-loop turn with stubbed
+- [x] Integration test: full agent-loop turn with stubbed
       LLM produces the expected event sequence in both the
       JSONL file AND the subscriber callback list.
 

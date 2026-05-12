@@ -285,3 +285,55 @@ async def test_tick_ignores_unrecognised_artifact_dirs(tmp_path: Path) -> None:
     await pruner.tick(now=_ts(now_day))
     assert weird_dir.exists()
     assert (weird_dir / "note.txt").exists()
+
+
+# --------------------------------------------------------------- turns
+
+
+async def test_tick_sweeps_old_turn_event_files(tmp_path: Path) -> None:
+    """Per-turn event logs under
+    ``sessions/<k>/turns/<YYYY-MM-DD>.jsonl`` age out on the
+    same 90-day window as history files. Rationale: when a
+    turn's conversation history is gone, the fine-grained
+    per-iteration trace that belonged to it is rubble too."""
+    sessions = tmp_path / "sessions"
+    now_day = date(2026, 5, 8)
+    turns_dir = sessions / "main" / "turns"
+    turns_dir.mkdir(parents=True)
+    old_path = turns_dir / f"{(now_day - timedelta(days=100)).isoformat()}.jsonl"
+    old_path.write_text('{"kind": "turn_started"}\n', encoding="utf-8")
+    fresh_path = turns_dir / f"{(now_day - timedelta(days=10)).isoformat()}.jsonl"
+    fresh_path.write_text('{"kind": "turn_started"}\n', encoding="utf-8")
+
+    events = EventLog(tmp_path / "events.jsonl")
+    pruner = HistoryPruner(
+        sessions_dir=sessions,
+        events=events,
+        max_age_days=90,
+        anchor_path=tmp_path / "anchor",
+    )
+    removed = await pruner.tick(now=_ts(now_day))
+    assert removed == 1
+    assert not old_path.exists()
+    assert fresh_path.exists()
+
+
+async def test_tick_preserves_non_date_turn_filenames(tmp_path: Path) -> None:
+    """Same posture as the history sweep: non-``YYYY-MM-DD``
+    filenames under ``turns/`` are left alone."""
+    sessions = tmp_path / "sessions"
+    now_day = date(2026, 5, 8)
+    turns_dir = sessions / "main" / "turns"
+    turns_dir.mkdir(parents=True)
+    weird = turns_dir / "backup.jsonl"
+    weird.write_text('{"note": "operator saved this"}\n', encoding="utf-8")
+
+    events = EventLog(tmp_path / "events.jsonl")
+    pruner = HistoryPruner(
+        sessions_dir=sessions,
+        events=events,
+        max_age_days=90,
+        anchor_path=tmp_path / "anchor",
+    )
+    await pruner.tick(now=_ts(now_day))
+    assert weird.exists()

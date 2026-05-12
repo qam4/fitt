@@ -69,6 +69,7 @@ class CronRunner:
         local_shell: Any = None,
         lessons: Any = None,
         artifact_store: Any = None,
+        turns: Any = None,
     ) -> None:
         self._config = config
         self._tool_registry = tool_registry
@@ -83,6 +84,7 @@ class CronRunner:
         self._local_shell = local_shell
         self._lessons = lessons
         self._artifact_store = artifact_store
+        self._turns = turns
 
     # -------------------------------------------------- public API
 
@@ -98,6 +100,13 @@ class CronRunner:
         session_key = f"cron:{job.id}:{int(time.time())}"
         alias = job.agent_alias or self._default_alias()
 
+        # Phase 4.8: turn_id is generated once per firing, used
+        # by both the turn_started event below and the
+        # ToolContext constructed inside _run.
+        import uuid as _uuid
+
+        turn_id = str(_uuid.uuid4())
+
         # --- cron_fired ---
         self._emit(
             kind="cron_fired",
@@ -107,10 +116,32 @@ class CronRunner:
             meta={"cron_id": job.id, "alias": alias},
         )
 
+        # Phase 4.8: turn_started / turn_finished around the
+        # actual agent-loop work so the per-turn event stream
+        # reflects cron firings alongside chat requests.
+        from .turn_events import record_turn_finished, record_turn_started
+
+        record_turn_started(
+            self._turns,
+            turn_id,
+            session_key,
+            alias=alias,
+            client=job.created_by_client or "cron",
+            user_msg_len=len(job.message or ""),
+        )
+
         try:
-            result = await self._run(job, session_key, alias)
+            result = await self._run(job, session_key, alias, turn_id=turn_id)
         except Exception as exc:  # pragma: no cover - defensive
             _log.exception("cron.run_failed", extra={"cron_id": job.id})
+            record_turn_finished(
+                self._turns,
+                turn_id,
+                session_key,
+                status="upstream_error",
+                iterations=0,
+                final_reply_len=0,
+            )
             self._emit(
                 kind="cron_failed",
                 session_key=session_key,
@@ -123,6 +154,14 @@ class CronRunner:
 
         # Map agent-loop status to an event kind.
         if result.status == "ok":
+            record_turn_finished(
+                self._turns,
+                turn_id,
+                session_key,
+                status="ok",
+                iterations=result.iterations,
+                final_reply_len=len(result.assistant_text or ""),
+            )
             self._emit(
                 kind="cron_completed",
                 session_key=session_key,
@@ -158,6 +197,14 @@ class CronRunner:
             return
 
         if result.status == "tool_loop_exhausted":
+            record_turn_finished(
+                self._turns,
+                turn_id,
+                session_key,
+                status="tool_loop_exhausted",
+                iterations=result.iterations,
+                final_reply_len=0,
+            )
             self._emit(
                 kind="cron_failed",
                 session_key=session_key,
@@ -173,6 +220,14 @@ class CronRunner:
             raise RuntimeError("tool_loop_exhausted")
 
         # upstream_error
+        record_turn_finished(
+            self._turns,
+            turn_id,
+            session_key,
+            status="upstream_error",
+            iterations=result.iterations,
+            final_reply_len=0,
+        )
         err_detail = (
             f"{type(result.error).__name__}: {result.error}"
             if result.error is not None
@@ -194,7 +249,14 @@ class CronRunner:
 
     # -------------------------------------------------- internals
 
-    async def _run(self, job: CronJob, session_key: str, alias: str):  # type: ignore[no-untyped-def]
+    async def _run(
+        self,
+        job: CronJob,
+        session_key: str,
+        alias: str,
+        *,
+        turn_id: str,
+    ) -> Any:
         """Build the initial message list and invoke the loop.
 
         Kept small on purpose — cron firings mirror chat requests
@@ -243,6 +305,10 @@ class CronRunner:
         if job.approval_mode == "auto":
             approval_for_firing = _AutoApproveWrapper(self._approval)
 
+        # Phase 4.8: turn_id is generated in fire() and passed
+        # in as a kwarg so both turn_started and every turn event
+        # inside the loop share the same handle.
+
         tool_ctx = ToolContext(
             client=job.created_by_client or "cron",
             session_key=session_key,
@@ -254,6 +320,8 @@ class CronRunner:
             events=self._events,
             local_shell=self._local_shell,
             lessons=self._lessons,
+            turns=self._turns,
+            turn_id=turn_id,
         )
 
         alias_router = AliasRouter(self._config)

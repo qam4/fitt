@@ -156,6 +156,15 @@ class HistoryPruner:
         cadence, so keeping them around after the history is
         gone leaves orphaned blobs nobody can re-contextualise.
 
+        Phase 4.8 adds a third sweep:
+        ``sessions/<k>/turns/<YYYY-MM-DD>.jsonl``. Per-turn
+        event streams ride the same 90-day retention — when
+        a turn's conversation history is gone, the
+        fine-grained per-iteration trace that belonged to it
+        is rubble too. Same date-parsing rules as the history
+        sweep: non-``YYYY-MM-DD.jsonl`` filenames are left
+        alone.
+
         Non-parseable filenames (e.g. ``backup.md``) are left
         alone — operators place recovery artifacts in these
         directories and we don't want to eat them."""
@@ -199,6 +208,25 @@ class HistoryPruner:
                         continue
                     if day < cutoff_day:
                         removed += _remove_tree(day_dir)
+            turns_dir = session_dir / "turns"
+            if turns_dir.is_dir():
+                for f in turns_dir.iterdir():
+                    if not f.is_file() or f.suffix != ".jsonl":
+                        continue
+                    try:
+                        file_day = date.fromisoformat(f.stem)
+                    except ValueError:
+                        # Not a YYYY-MM-DD file; leave it alone.
+                        continue
+                    if file_day < cutoff_day:
+                        try:
+                            f.unlink()
+                            removed += 1
+                        except OSError as e:
+                            _log.warning(
+                                "history.pruner.unlink_failed",
+                                extra={"file": str(f), "error": str(e)},
+                            )
         return removed
 
     def _load_anchor(self) -> float:

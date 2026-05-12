@@ -247,9 +247,23 @@ class ToolContext:
     learn tools; those tools fail with a readable error when
     it's missing."""
 
-    # Future additions (Task 13+):
-    #   audit:   AuditLog           -- write one entry per call
-    #   gaps:    CapabilityGapLog   -- record "I need a tool to X"
+    turns: Any = None
+    """The :class:`~gateway.turns.TurnLog` that records
+    per-turn events (Phase 4.8). ``None`` disables turn-event
+    emission — the emission helpers short-circuit on a
+    ``None`` turns argument, so tests that don't exercise
+    the event stream don't need to wire it. Typed ``Any``
+    for the same import-cycle reason as other fields above."""
+
+    turn_id: str | None = None
+    """Stable identifier for the turn this tool invocation
+    belongs to (Phase 4.8). Generated once per chat request
+    in :mod:`gateway.chat` or per cron firing in
+    :mod:`gateway.cron_runner`. Turn events emitted during
+    the turn carry this id so renderers can group them.
+    ``None`` disables turn-event emission — callers that
+    haven't threaded a turn id through can leave the field
+    default and the emission helpers do nothing."""
 
 
 # --------------------------------------------------------------- decisions

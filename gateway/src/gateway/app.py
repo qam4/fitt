@@ -309,6 +309,16 @@ def create_app(config: Config) -> FastAPI:
         preview_bytes=config.memory.tool_output_preview_bytes,
     )
 
+    # Per-turn event stream (Phase 4.8): fine-grained per-turn
+    # detail — every LLM dispatch, every tool call, every
+    # approval. Backs `fitt watch`, the HTTP /turns endpoints,
+    # and the Telegram live-turn renderer (via 4.8c's SSE
+    # bridge). JSONL at sessions/<key>/turns/<YYYY-MM-DD>.jsonl,
+    # same retention as history.
+    from .turns import TurnLog
+
+    app.state.turns = TurnLog(sessions_dir=config.memory.sessions_dir)
+
     # Cron service (Phase 4.5): persistent cron jobs backed by
     # $FITT_HOME/cron.json. The scheduler loop that actually
     # fires due jobs lands in Phase 4.5 Task 4; this binding is
@@ -390,6 +400,7 @@ def create_app(config: Config) -> FastAPI:
         local_shell=app.state.local_shell,
         lessons=app.state.lessons,
         artifact_store=app.state.artifact_store,
+        turns=app.state.turns,
     )
     app.state.cron_runner = cron_runner
     app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=cron_runner.fire)
