@@ -5,12 +5,29 @@ description: Build, test, and verification commands before committing FITT chang
 
 # Build & Test Commands
 
+CI runs lint + typecheck + tests for **both** Python packages
+(`gateway/` and `telegram-bot/`) on every push. Run each set
+locally before committing or CI will go red.
+
 Run from `gateway/`:
 
 1. Test: `uv run pytest -q`
 2. Type check: `uv run mypy src`
 3. Format: `uv run ruff format src tests`
 4. Lint: `uv run ruff check src tests --fix`
+
+Run from `telegram-bot/` (same four commands):
+
+1. Test: `uv run pytest -q`
+2. Type check: `uv run mypy src`
+3. Format: `uv run ruff format src tests`
+4. Lint: `uv run ruff check src tests --fix`
+
+Even when your change is scoped to one package, re-run both
+sets. `ruff format` can flag files in the other package that
+were already drifting (CI caught this 2026-05-11: five
+gateway-only commits in a row went red on a stray blank line
+in `telegram-bot/tests/test_events_push.py`).
 
 For the `fitt` CLI end-to-end, `uv run fitt config check` against a
 test config.

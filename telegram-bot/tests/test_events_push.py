@@ -156,7 +156,6 @@ def test_empty_body_and_empty_title_produce_empty_string_for_unknown_kind() -> N
     assert out == "late_unknown"
 
 
-
 # --------------------------------------------------------------- tool_executed (Phase 4.7)
 
 
