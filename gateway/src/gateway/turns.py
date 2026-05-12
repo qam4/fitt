@@ -34,9 +34,16 @@ the Telegram push channel — operators read them passively.
 `turns/*.jsonl` is per-session and developer-facing. Many
 entries per turn — every LLM call, every tool plan, every
 iteration, every finish. Turns stay on disk for 90 days via
-the same pruner but nobody's subscribing — they get read on
-demand by `fitt watch` / the HTTP endpoint when something
-feels off.
+the same pruner. Two consumers:
+
+- **Tailers** (`fitt watch`, the per-turn HTTP endpoint, the
+  HTML viewer) read the JSONL file on demand or by polling.
+- **Live subscribers** (the Telegram live-turn renderer, any
+  future in-process consumer) register a callback via
+  :meth:`TurnLog.subscribe` and get fired on every
+  successful append. The JSONL is still the source of truth;
+  subscribers are a convenience so the bot doesn't have to
+  poll a file from inside the same process.
 
 The two logs intentionally overlap a little. A
 `tool_executed` lands in both: `events.jsonl` gets the
@@ -114,13 +121,25 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from time import time
-from typing import Any
+from typing import Any, TypeAlias
 
 _log = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------- subscriber hook
+
+
+TurnEventCallback: TypeAlias = Callable[["TurnEvent"], None]
+"""Signature for in-process live subscribers. Registered via
+:meth:`TurnLog.subscribe`. Fired synchronously on every
+successful :meth:`TurnLog.append`, under the writer's lock.
+Slow work must be offloaded (``asyncio.create_task`` or a
+background thread) or the agent loop will stall."""
 
 
 # --------------------------------------------------------------- event kinds
@@ -218,6 +237,43 @@ class TurnLog:
     def __init__(self, sessions_dir: Path) -> None:
         self._sessions_dir = sessions_dir
         self._lock = threading.Lock()
+        self._subscribers: list[TurnEventCallback] = []
+
+    # ------------------------------------------------ subscribe
+
+    def subscribe(self, callback: TurnEventCallback) -> None:
+        """Register a callback fired after each successful
+        :meth:`append`.
+
+        Callbacks run synchronously inside ``append`` while
+        the writer holds the lock, immediately after the
+        JSONL write flushes. A raising callback gets its
+        exception logged and swallowed so one misbehaving
+        subscriber can't break persistence or starve other
+        subscribers.
+
+        If a callback needs to do async work (Telegram API
+        calls, HTTP requests, disk IO beyond the turn log),
+        it must wrap that work in ``asyncio.create_task`` or
+        a background thread. A synchronous slow callback will
+        block the agent loop's ``append`` call and eventually
+        the whole chat turn.
+
+        The one-writer / many-subscribers model matches the
+        rest of FITT's observability surfaces: the JSONL is
+        the source of truth, subscribers are optional
+        convenience readers. Consumers who want a durable
+        record should read the file, not rely on having
+        registered a subscriber (a subscriber registered
+        after the gateway started up missed earlier events).
+
+        No unregister method by design. The gateway has
+        exactly one subscriber per consumer type at boot,
+        and tearing down subscribers mid-life isn't a
+        documented use case. Add one if a real reason
+        appears.
+        """
+        self._subscribers.append(callback)
 
     # ------------------------------------------------ path helpers
 
@@ -239,11 +295,20 @@ class TurnLog:
         can proceed without an exception. Lost visibility is
         worse than a stopped FITT.
 
+        After a successful write, fires every callback
+        registered via :meth:`subscribe` in registration
+        order. A raising callback gets its exception logged
+        and swallowed; the next subscriber still runs.
+        Subscribers never observe entries whose underlying
+        JSONL write failed — the file is the source of
+        truth.
+
         Returns the entry so test helpers can chain assertions
         on the appended value, mirroring
         :meth:`gateway.events.EventLog.append`."""
         day = datetime.fromtimestamp(entry.ts, tz=UTC).date()
         path = self.file_path(entry.session_key, day)
+        wrote = False
         with self._lock:
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -251,6 +316,7 @@ class TurnLog:
                 with path.open("a", encoding="utf-8") as f:
                     f.write(line)
                     f.flush()
+                wrote = True
             except OSError as exc:
                 _log.warning(
                     "turns.append_failed",
@@ -261,6 +327,19 @@ class TurnLog:
                         "error": str(exc),
                     },
                 )
+            if wrote:
+                for callback in self._subscribers:
+                    try:
+                        callback(entry)
+                    except Exception as exc:
+                        _log.warning(
+                            "turns.subscriber_failed",
+                            extra={
+                                "kind": entry.kind,
+                                "session_key": entry.session_key,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            },
+                        )
         return entry
 
     # ------------------------------------------------ read

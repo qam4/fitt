@@ -23,7 +23,7 @@ import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from gateway.turns import TURN_EVENT_KINDS, TurnLog, new_event
+from gateway.turns import TURN_EVENT_KINDS, TurnEvent, TurnLog, new_event
 
 
 def _ts(day: date, hour: int = 12) -> float:
@@ -398,3 +398,107 @@ def test_new_event_custom_ts_and_event_id_honoured(tmp_path: Path) -> None:
     )
     assert e.ts == 123.456
     assert e.event_id == "deterministic"
+
+
+# --------------------------------------------------------------- pub/sub hook
+
+
+def test_subscribe_fires_callback_on_append(tmp_path: Path) -> None:
+    """One registered subscriber receives every successful
+    append in order. The source of truth is still the JSONL
+    on disk; the callback is a convenience for live
+    consumers like the Telegram renderer."""
+    log = TurnLog(tmp_path)
+    seen: list[TurnEvent] = []
+    log.subscribe(seen.append)
+
+    day = date(2026, 5, 12)
+    e1 = log.append(
+        new_event(turn_id="t-1", kind="turn_started", session_key="main", ts=_ts(day, 10))
+    )
+    e2 = log.append(
+        new_event(
+            turn_id="t-1",
+            kind="tool_call_executed",
+            session_key="main",
+            meta={"tool_name": "read_file", "ok": True},
+            ts=_ts(day, 10) + 1,
+        )
+    )
+    assert [e.event_id for e in seen] == [e1.event_id, e2.event_id]
+    assert seen[1].meta["tool_name"] == "read_file"
+
+
+def test_subscribe_supports_multiple_callbacks(tmp_path: Path) -> None:
+    """The bot and the future admin dashboard might both
+    register. Both should see every event."""
+    log = TurnLog(tmp_path)
+    seen_a: list[TurnEvent] = []
+    seen_b: list[TurnEvent] = []
+    log.subscribe(seen_a.append)
+    log.subscribe(seen_b.append)
+
+    day = date(2026, 5, 12)
+    log.append(new_event(turn_id="t-1", kind="turn_started", session_key="main", ts=_ts(day)))
+    assert len(seen_a) == 1
+    assert len(seen_b) == 1
+
+
+def test_subscribe_raising_callback_swallowed(tmp_path: Path) -> None:
+    """A misbehaving subscriber must not break persistence
+    or prevent other subscribers from firing. Mirrors the
+    'IO failure is non-fatal' principle on the subscriber
+    side: observability is not load-bearing."""
+    log = TurnLog(tmp_path)
+    seen: list[TurnEvent] = []
+
+    def bad(_entry: TurnEvent) -> None:
+        raise RuntimeError("subscriber boom")
+
+    log.subscribe(bad)
+    log.subscribe(seen.append)
+
+    day = date(2026, 5, 12)
+    log.append(new_event(turn_id="t-1", kind="turn_started", session_key="main", ts=_ts(day)))
+    # Good subscriber still fired.
+    assert len(seen) == 1
+    # And the file still got written.
+    path = tmp_path / "main" / "turns" / "2026-05-12.jsonl"
+    assert path.exists()
+    assert path.read_text(encoding="utf-8").count("\n") == 1
+
+
+def test_subscribe_not_fired_on_write_failure(tmp_path: Path) -> None:
+    """If the underlying append fails (disk full, permission
+    denied), subscribers don't fire. The JSONL is the source
+    of truth; a subscriber call without a corresponding disk
+    record would produce false signals downstream."""
+    # Block the expected directory path with a file.
+    blocker = tmp_path / "blocked-session"
+    blocker.write_text("not a dir", encoding="utf-8")
+
+    log = TurnLog(tmp_path)
+    seen: list[TurnEvent] = []
+    log.subscribe(seen.append)
+
+    entry = new_event(
+        turn_id="t-1",
+        kind="turn_started",
+        session_key="blocked-session",
+        ts=_ts(date(2026, 5, 12)),
+    )
+    log.append(entry)
+    # append didn't raise (P3); it also didn't fire the
+    # subscriber because the write failed.
+    assert seen == []
+
+
+def test_subscribe_no_subscribers_is_noop(tmp_path: Path) -> None:
+    """Sanity: a TurnLog with no registered subscribers works
+    identically to one without the hook existing."""
+    log = TurnLog(tmp_path)
+    day = date(2026, 5, 12)
+    got = log.append(new_event(turn_id="t-1", kind="turn_started", session_key="main", ts=_ts(day)))
+    assert got.turn_id == "t-1"
+    path = tmp_path / "main" / "turns" / "2026-05-12.jsonl"
+    assert path.exists()
