@@ -69,7 +69,14 @@ Extensions to existing files:
 
 ### `turns.jsonl`
 
-Path: `$FITT_HOME/sessions/<session_key>/turns.jsonl`.
+Path: `$FITT_HOME/sessions/<session_key>/turns/<YYYY-MM-DD>.jsonl`.
+
+One file per session per day — same shape as
+`history/<YYYY-MM-DD>.md`. A turn that crosses midnight
+writes later events to the next day's file; readers that want
+a full turn stitch adjacent days (uncommon in practice; chat
+turns finish in seconds). The pruner reuses its existing
+date-parsing logic; no new retention knob.
 
 One JSONL line per event. Schema:
 
@@ -111,12 +118,8 @@ One JSONL line per event. Schema:
 
 The history pruner's existing walk (`sessions/<k>/history/*.md`
 + `sessions/<k>/artifacts/<YYYY-MM-DD>/` from the tool-artifact
-commit) extends to `sessions/<k>/turns.jsonl` by file mtime
-rather than filename-date since the file is one per session
-not per day. Rotation happens if the file exceeds a configurable
-size (default 10 MB) — renamed to `turns-<YYYY-MM-DD>.jsonl` and
-a fresh file is opened. Pruner removes rotated files past
-retention.
+commit) extends to `sessions/<k>/turns/<YYYY-MM-DD>.jsonl` —
+same date-parsing logic, same retention window, no new knob.
 
 ## Correctness properties
 
@@ -126,11 +129,11 @@ retention.
 - **P2: Events are ordered within a turn.** Sequential append
   on a single file from one process; no locking needed (single
   writer is the gateway's chat loop for a given turn).
-- **P3: IO failure is non-fatal.** An unwritable turns.jsonl
+- **P3: IO failure is non-fatal.** An unwritable turns file
   logs a warning and the turn continues. Lost visibility is
   worse than stopped FITT.
 - **P4: Concurrent sessions don't collide.** Each session has
-  its own `turns.jsonl`; cross-session events (cron firings,
+  its own per-day file; cross-session events (cron firings,
   late-tool results) write to their own session's file.
 - **P5: Read is consistent.** The reader opens the file,
   seeks to `since` (via a stored offset cache), parses to
@@ -139,10 +142,7 @@ retention.
 - **P6: Schema is additive.** Adding new event kinds or new
   `meta` fields on existing kinds is never a breaking change.
   Clients (CLI, HTML viewer) ignore unknown kinds and fields.
-- **P7: Rotation preserves order.** When a file rotates, the
-  next write opens the new file atomically. A reader spanning
-  a rotation reads the rotated file first, then the new one.
-- **P8: Redaction is explicit.** `args` on `tool_call_planned`
+- **P7: Redaction is explicit.** `args` on `tool_call_planned`
   contains the model's arguments verbatim, including anything
   the model invented. Secrets leaked into args are a separate
   problem (fixed at the tool layer, not the log layer); the
@@ -267,14 +267,44 @@ keyboard (`⬅️ Older` / `➡️ Newer`).
 ## Config
 
 ```yaml
-turns:
-  max_file_bytes: 10_485_760       # 10 MB rotation threshold
-  retention_days: 90               # piggybacks on history_max_days
+# (no new block — the turns log reuses the history
+# retention knob; artifact hoisting introduced
+# memory.tool_output_* for its own thresholds)
+memory:
+  history_max_days: 90  # already exists; now also governs turns/<date>.jsonl
 ```
 
-New block under `memory:` or `server:` or top-level — decide at
-implementation time. Leaning `memory:` since artifacts already
-live there.
+## Decisions
+
+Resolved before 4.8a implementation started (2026-05-12):
+
+1. **Rotation: per-day, matching history.** Path is
+   `sessions/<k>/turns/<YYYY-MM-DD>.jsonl`. Pruner reuses
+   the existing filename-date walk for
+   `history/<YYYY-MM-DD>.md`. No per-size rotation; no
+   `turns.jsonl` single-file-per-session variant. A turn
+   that crosses midnight writes later events to the next
+   day's file. If real use ever exceeds 100 MB per session
+   per day, reconsider.
+2. **No `limit=0` HEAD query on HTTP.** Not in MVP; add only
+   if the HTML viewer's first-load cost shows up as a
+   problem.
+3. **`fitt watch --follow` across day rotation.** The tailer
+   watches today's file; at midnight it switches to the
+   next day. Simple `date.today()` check before each poll;
+   no inotify/watchdog.
+4. **HTML viewer auth: `?token=<token>` query param.**
+   Single-operator deployment; OAuth / basic-auth is
+   over-engineering. Tokens are the existing bearer tokens
+   from `secrets.yaml`.
+5. **Config location: reuse `memory.history_max_days`.** No
+   new `turns:` block. Turn logs are session-scoped detail;
+   they share retention with history.
+
+## Migration
+
+No migration. Turn logs are new files; existing sessions get
+them the first time a turn runs under 4.8a-or-later.
 
 ## Testing strategy
 
@@ -319,35 +349,8 @@ Per sub-phase:
 
 ## Migration
 
-No migration. `turns.jsonl` is a new file; existing sessions
-get one the first time a turn runs under 4.8a-or-later.
-
-## Open questions
-
-1. **Should `turns.jsonl` rotation be per-day or per-size?**
-   Per-day is simpler (matches history file layout and the
-   pruner code). Per-size handles a bursty session that
-   generates 50 MB in one day. Leaning per-day with
-   `meta.max_file_bytes` as a soft check that logs a warning
-   but doesn't rotate until end-of-day. Revisit if any real
-   session crosses 100 MB/day.
-2. **Should the HTTP endpoints support `limit=0` for a
-   latest-ts-only HEAD-style query?** Would let the HTML
-   viewer skip loading 50 rows on page open when it only
-   wants the watermark. Not in MVP.
-3. **Should `fitt watch` support `--follow` across session
-   rotations?** When a session's `turns.jsonl` rotates (if we
-   implement rotation), does `watch` keep following the new
-   file? In practice the session id is stable so the rotation
-   is at the file-contents level; `watch` should follow.
-   Needs a tail impl that handles rename-then-create
-   gracefully.
-4. **Where does the bearer token for the static HTML viewer
-   live in practice?** `?token=...` in a URL is terrible for
-   sharing but fine for single-operator use. Alternative:
-   HTTP Basic. Leaning `?token=` + a default redirect from
-   `/v1/events/view` to `/v1/events/view?token={env or
-   prompt}`.
+No migration. Turn logs are new files; existing sessions get
+them the first time a turn runs under 4.8a-or-later.
 
 ## Sub-phase decomposition
 

@@ -49,8 +49,8 @@ rendered any way the operator wants.
 
 As a FITT developer, I want a structured record of what
 happened in each chat turn — LLM calls, tool invocations,
-approvals, claim mismatches, narration detection — so the
-failure modes we live with stop being invisible.
+approvals, gap reports — so the failure modes we live
+with stop being invisible.
 
 **Acceptance:**
 
