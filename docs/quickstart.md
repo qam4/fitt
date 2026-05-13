@@ -418,8 +418,54 @@ satellite isn't up yet - move to Part B.
 
 ### Troubleshooting first boot
 
-If something looks wrong, run the smoke script from the repo
-root:
+If something looks wrong, the first thing to do is read what the
+gateway actually said. The gateway is configured with
+`restart: on-failure:3` (intentional, see below), so a startup
+failure will:
+
+1. Try to start three times.
+2. Stop. `docker compose ps` shows `fitt-gateway` as `Exited (N)`,
+   not `unhealthy` or `Restarting`. The exit code tells you the
+   failure class:
+   - **Exited (2)** = config error (bad YAML, missing field,
+     wrong type). Fix `$FITT_HOME/config.yaml` or
+     `$FITT_HOME/secrets.yaml`.
+   - **Exited (1) or other non-zero** = unexpected crash (Python
+     import error, missing dependency, runtime exception during
+     startup). The cause is in the logs.
+3. Sit there until you fix the underlying issue and run
+   `docker compose up -d` again, or `docker compose restart
+   gateway` after the fix.
+
+To see the actual error message:
+
+```bash
+docker compose logs fitt-gateway --tail 30
+```
+
+The gateway prints a friendly explanation to stderr before
+exiting; that's what you'll see. For example, on a bad
+`secrets.yaml`:
+
+```
+============================================================
+[fitt-gateway] CONFIG ERROR (exit 2): /fitt/secrets.yaml
+failed validation: api_keys must be a YAML mapping (key: value
+pairs), not a list...
+============================================================
+[fitt-gateway] To fix: edit your config files in ~/.fitt/...
+```
+
+**Why `on-failure:3`, not `unless-stopped`?** A normal `restart:
+unless-stopped` would loop forever on a bad config, with the
+healthcheck eventually marking the container `unhealthy` —
+hiding the real error in `docker logs`. With `on-failure:3` the
+container exits visibly after three tries, so `compose ps` is
+honest about WHY it stopped. If a runtime issue genuinely needs
+recovery beyond three restarts, that's a sign something deeper
+is wrong; it's not a footgun, it's a feature.
+
+If the failure isn't covered by the log:
 
 ```bash
 scripts/smoke-compose.sh
@@ -429,16 +475,16 @@ It builds the gateway image, starts it against a throwaway
 config, hits `/health` and `/v1/models`, and tears down. If that
 passes, the image is fine and the issue is in your
 `$FITT_HOME/config.yaml`, `secrets.yaml`, or `.env`. If it fails,
-the build or the entrypoint is broken - read the compose logs
+the build or the entrypoint is broken — read the compose logs
 for the real error.
 
-Also useful:
+Other useful one-liners:
 
 ```bash
 docker compose ps                           # container states
-docker compose logs gateway                 # gateway stdout/stderr
-docker compose logs telegram-bot            # bot stdout/stderr
-docker compose logs -f -t                   # tail all three with timestamps
+docker compose logs fitt-gateway --tail 50  # gateway stdout/stderr
+docker compose logs fitt-telegram-bot       # bot stdout/stderr
+docker compose logs -f -t                   # tail all three live
 tail -f "$FITT_HOME/logs/gateway.log" \
         "$FITT_HOME/logs/telegram-bot.log"  # structured JSON on disk
 ```

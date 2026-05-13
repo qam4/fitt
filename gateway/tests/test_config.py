@@ -260,6 +260,38 @@ def test_secrets_api_key_for_openai_backend(tmp_path: Path) -> None:
     assert secrets.api_key_for("openai") is None
 
 
+def test_secrets_api_keys_as_list_gets_friendly_error(tmp_path: Path) -> None:
+    """The most common foot-gun: writing ``api_keys`` as a YAML
+    list of single-key dicts (``- key: val``) instead of a flat
+    mapping. Pydantic rejects it but with a noisy nested error
+    message; we wrap it with a one-line "fix it like this"
+    explanation that gives the operator the right shape verbatim.
+
+    Pinned 2026-05-13 after a live first-boot debug session
+    where the operator hit this and had to spelunk through
+    `docker logs` + Pydantic dump to figure it out."""
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: personal
+            token: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+        api_keys:
+          - nvidia-qwen: nvapi-xyz
+          - groq-llama: gsk-abc
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    with pytest.raises(ConfigError) as exc:
+        load_secrets(sp)
+    msg = str(exc.value)
+    assert "api_keys" in msg
+    assert "must be a YAML mapping" in msg
+    # Helpful examples in the message.
+    assert "your-model-id: nvapi" in msg
+    assert "leading `-`" in msg
+
+
 # --------------------------------------------------------------- client tags
 
 

@@ -349,6 +349,26 @@ def load_secrets(path: Path | None = None) -> Secrets:
     p = path or default_secrets_path()
     _check_secrets_permissions(p)
     raw = _read_yaml(p)
+    # Pre-validate the shape of the most common foot-gun: ``api_keys``
+    # in YAML can easily be written as a list of single-key dicts
+    # (``- key: val`` style) instead of a flat mapping. Pydantic
+    # rejects it but with a wall of "Input should be a valid
+    # dictionary" nesting that doesn't tell the operator what to do.
+    # Catch it here and surface a single readable line.
+    if isinstance(raw, dict):
+        api_keys_raw = raw.get("api_keys")
+        if api_keys_raw is not None and not isinstance(api_keys_raw, dict):
+            shape = type(api_keys_raw).__name__
+            raise ConfigError(
+                f"{p} `api_keys` must be a YAML mapping (key: value pairs), "
+                f"got a {shape}. Common cause: leading `-` on each entry "
+                f"makes it a list. Fix:\n"
+                f"  api_keys:\n"
+                f"    your-model-id: nvapi-...\n"
+                f"NOT:\n"
+                f"  api_keys:\n"
+                f"    - your-model-id: nvapi-..."
+            )
     try:
         return Secrets.model_validate(raw)
     except Exception as e:  # pydantic.ValidationError

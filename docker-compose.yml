@@ -25,7 +25,23 @@ services:
       dockerfile: Dockerfile
     image: fitt-gateway:local
     container_name: fitt-gateway
-    restart: unless-stopped
+    # `on-failure:3` instead of the more usual `unless-stopped`.
+    # The gateway crashes hard at boot on a bad config, missing
+    # secret, syntax error in a freshly-pulled commit, etc. With
+    # `unless-stopped`, compose restart-loops the container, the
+    # healthcheck eventually marks it `unhealthy`, and the
+    # actual reason gets buried in `docker logs`. With
+    # `on-failure:3` the container exits visibly: `compose ps`
+    # shows `Exited (N)` — a meaningful exit code (2 = config
+    # error, others = unexpected crash) — and `docker compose
+    # logs fitt-gateway --tail 30` surfaces the friendly error
+    # the gateway already prints to stderr.
+    #
+    # Trade-off: a runtime crash also stops being auto-recovered
+    # after 3 attempts. For a single-user hub that's correct: if
+    # the gateway has crash-looped 3 times, a fourth restart
+    # isn't going to fix it — the operator should know.
+    restart: on-failure:3
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       FITT_HOME: /fitt

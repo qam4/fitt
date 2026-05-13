@@ -20,10 +20,30 @@ def main() -> int:
     try:
         cfg = load_config(default_config_path(), default_secrets_path())
     except ConfigError as e:
-        print(f"[fitt-gateway] configuration error: {e}", file=sys.stderr)
+        # Loud, structured stderr so operators running under docker
+        # see the same shape regardless of context. The compose
+        # restart policy is ``on-failure:3``: after three failed
+        # boots, ``docker compose ps`` shows ``Exited (2)`` and
+        # this stderr lives in ``docker compose logs fitt-gateway
+        # --tail 30``. The trailing hint points at that command so
+        # operators don't have to remember it.
+        print("=" * 60, file=sys.stderr)
+        print(f"[fitt-gateway] CONFIG ERROR (exit 2): {e}", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
         print(
-            "[fitt-gateway] copy configs/config.example.yaml and "
-            "configs/secrets.example.yaml into ~/.fitt/ and edit them.",
+            "[fitt-gateway] To fix: edit your config files in ~/.fitt/ "
+            "(or whatever FITT_HOME points at).",
+            file=sys.stderr,
+        )
+        print(
+            "[fitt-gateway] Templates: configs/config.example.yaml + "
+            "configs/secrets.example.yaml in the repo.",
+            file=sys.stderr,
+        )
+        print(
+            "[fitt-gateway] Under docker compose: re-run with "
+            "`docker compose logs fitt-gateway --tail 30` to see "
+            "this message after a `compose ps` shows Exited(2).",
             file=sys.stderr,
         )
         return 2
