@@ -294,6 +294,38 @@ Operator setup for Aider: add
 or tag the Aider token with `client: coding-cli` in
 `secrets.yaml`.
 
+**Reshape 2026-05-13:** The `coding-cli` value conflated two
+orthogonal concepts: which client interface the request came
+from (a noun) and what runtime mode FITT should run (a
+behaviour). Calling the IDE-shaped surfaces "coding-cli" worked
+by accident because every router-mode caller happened to be a
+coding CLI, but it ruled out useful combos like "Telegram in
+router mode for an experiment" or "VS Code chat in agent mode
+vs OpenCode in router mode through the same `client: ide`
+policy bucket".
+
+Split into two fields on `allowed_tokens`:
+
+* `client:` — `ide | telegram | webui | cli`. The request's
+  interface, drives per-client policy and routing.
+* `mode:` — `router | agent`. The runtime layering. Default
+  `agent` (full FITT). Set `router` for thin pass-through.
+
+Recommended setup for OpenCode, Aider, Claude Code, etc.:
+`client: ide` + `mode: router`. The legacy `client: coding-cli`
+still parses; the runtime maps it to `client: ide, mode: router`
+with a boot-time `auth.coding_cli_tag_deprecated` log line
+prompting the operator to migrate. `is_router_mode_client(client)`
+is gone; replaced by `is_router_mode_request(request)` which
+reads the new `request.state.mode`.
+
+`X-FITT-Client: coding-cli` on the request header is no longer
+accepted (the value isn't in `_VALID_CLIENTS`). Setting router
+mode is now a token-level decision, not a per-request one —
+makes sense because mode is an authority decision the operator
+takes when issuing the credential, not something the request
+gets to declare.
+
 ---
 
 ## Silent failure when api_keys entry is missing for an openai-backend model

@@ -257,7 +257,13 @@ def test_auth_header_disagrees_with_token_tag_rejects(tmp_path: Path) -> None:
 
 
 def test_auth_header_with_invalid_value_rejects(tmp_path: Path) -> None:
-    """Header present but not one of ide/telegram/webui/cli → 400."""
+    """Header present but not one of ide/telegram/webui/cli → 400.
+
+    ``coding-cli`` was an accepted value pre-2026-05-13 but is
+    no longer; setting router mode is now a token-side decision
+    via ``mode: router``, not a per-request header. We pin the
+    rejection so a stale operator config doesn't silently fall
+    back to webui."""
     cfg = build_test_config(tmp_path)
     app = create_app(cfg)
     _mount_probe(app)
@@ -272,6 +278,121 @@ def test_auth_header_with_invalid_value_rejects(tmp_path: Path) -> None:
     )
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "client_mismatch"
+
+    r = c.get(
+        "/v1/_probe_client",
+        headers={
+            "Authorization": f"Bearer {PERSONAL_TOKEN}",
+            "X-FITT-Client": "coding-cli",
+        },
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "client_mismatch"
+
+
+def test_auth_sets_mode_state_for_router_token(tmp_path: Path) -> None:
+    """A token tagged ``mode: router`` lands as
+    ``request.state.mode == 'router'``. Downstream
+    ``is_router_mode_request`` reads this to flip the chat
+    handler into thin-pass-through."""
+    cfg = build_test_config(tmp_path)
+    cfg.secrets = Secrets(
+        allowed_tokens=[
+            AllowedToken(
+                name="opencode",
+                token=PERSONAL_TOKEN,
+                client="ide",
+                mode="router",
+            ),
+        ],
+        openrouter_api_key=cfg.secrets.openrouter_api_key,
+    )
+    app = create_app(cfg)
+
+    router = APIRouter()
+
+    @router.get("/v1/_probe_mode")
+    async def _probe(request: Request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "client": request.state.client,
+                "mode": request.state.mode,
+            }
+        )
+
+    app.include_router(router)
+    c = TestClient(app)
+    r = c.get(
+        "/v1/_probe_mode",
+        headers={"Authorization": f"Bearer {PERSONAL_TOKEN}"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"client": "ide", "mode": "router"}
+
+
+def test_auth_sets_mode_state_to_agent_when_unset(tmp_path: Path) -> None:
+    """An untagged-mode token defaults to agent. Pin the
+    fail-closed default so a future schema tweak doesn't
+    flip it."""
+    cfg = build_test_config(tmp_path)
+    # The default fixture's "personal" token is untagged for mode.
+    app = create_app(cfg)
+
+    router = APIRouter()
+
+    @router.get("/v1/_probe_mode")
+    async def _probe(request: Request) -> JSONResponse:
+        return JSONResponse({"mode": request.state.mode})
+
+    app.include_router(router)
+    c = TestClient(app)
+    r = c.get(
+        "/v1/_probe_mode",
+        headers={"Authorization": f"Bearer {PERSONAL_TOKEN}"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"mode": "agent"}
+
+
+def test_auth_legacy_coding_cli_token_resolves_to_ide_router(
+    tmp_path: Path,
+) -> None:
+    """A legacy ``client: coding-cli`` token (no explicit mode)
+    resolves at runtime to ``client=ide`` and ``mode=router``
+    so existing operator setups continue to work without edits.
+    Boot-time deprecation warning logs a hint to migrate."""
+    cfg = build_test_config(tmp_path)
+    cfg.secrets = Secrets(
+        allowed_tokens=[
+            AllowedToken(
+                name="legacy-coder",
+                token=PERSONAL_TOKEN,
+                client="coding-cli",
+            ),
+        ],
+        openrouter_api_key=cfg.secrets.openrouter_api_key,
+    )
+    app = create_app(cfg)
+
+    router = APIRouter()
+
+    @router.get("/v1/_probe_mode")
+    async def _probe(request: Request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "client": request.state.client,
+                "mode": request.state.mode,
+            }
+        )
+
+    app.include_router(router)
+    c = TestClient(app)
+    r = c.get(
+        "/v1/_probe_mode",
+        headers={"Authorization": f"Bearer {PERSONAL_TOKEN}"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"client": "ide", "mode": "router"}
 
 
 def test_auth_header_case_insensitive(tmp_path: Path) -> None:

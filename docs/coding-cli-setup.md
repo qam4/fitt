@@ -7,27 +7,22 @@ alias-routing proxy instead of its usual agent layer.
 
 For the motivation and mechanics of router mode see the
 [Aider collision entry in docs/observed-issues.md](./observed-issues.md#fitt-capability-block-leaks-into-coding-cli-clients-aider)
-and the `coding-cli` section of
+and the auth module's docstring at
 [gateway/src/gateway/auth.py](../gateway/src/gateway/auth.py).
 
-## The two-line contract
+## The contract
 
-A coding-CLI tool gets router mode from FITT when the gateway
-sees either of these on the request:
+A request gets router mode (thin pass-through) when its
+bearer token is tagged ``mode: router`` in
+``secrets.yaml``. Otherwise FITT runs the full agent layer
+(capability block, FITT tools, memory, approval middleware).
 
-1. `X-FITT-Client: coding-cli` header, or
-2. A bearer token whose `client:` tag in `secrets.yaml` is
-   `coding-cli`.
-
-Either is sufficient. If both are set they have to agree; the
-auth middleware rejects mismatches with a 400 so silent
-misconfig doesn't happen.
-
-**Preferred approach:** tag the token. Keeps the client
-config free of FITT-specific headers, makes per-client audit
-entries clean, and means swapping a CLI between "just use
-FITT" and "fully agent-layered" is a token change, not a
-config edit.
+The two modes are orthogonal to the client interface tag.
+A coding CLI is typically `client: ide` (IDE-shaped surface
+for per-client policy purposes) plus `mode: router` (skip
+the FITT agent). Telegram is `client: telegram, mode: agent`
+(full FITT). You can combine any client with any mode if
+you have a reason — the fields don't depend on each other.
 
 ## Setup — shared prerequisites
 
@@ -42,13 +37,16 @@ On the Hub (FITT gateway host), one-time:
    python -c "import secrets; print(secrets.token_urlsafe(32))"
    ```
 
-2. **Add it to `secrets.yaml`** with `client: coding-cli`:
+2. **Add it to `secrets.yaml`** with `client: ide` (the
+   coding CLI is an IDE-shaped surface for policy purposes)
+   and `mode: router` (skip the FITT agent layer):
 
    ```yaml
    allowed_tokens:
      - name: opencode        # or aider, claude-code, codex, etc.
        token: <the-token-you-just-generated>
-       client: coding-cli
+       client: ide
+       mode: router
    ```
 
 3. **Restart the gateway** (or wait for the next natural
@@ -76,7 +74,7 @@ On the machine running the CLI:
 ### opencode
 
 opencode uses OpenAI-compatible providers via AI SDK and
-supports custom `options.headers`.
+supports custom provider configurations.
 
 `~/.config/opencode/opencode.json`:
 
@@ -107,17 +105,8 @@ Notes:
   `POST /v1/chat/completions`; opencode appends the path
   itself.
 - **Token tagging is enough.** The `allowed_tokens` entry
-  above sets `client: coding-cli`, so no
-  `X-FITT-Client` header is needed in opencode's config.
-  If you'd rather set the header explicitly (leaving the
-  token untagged), add:
-
-  ```json
-  "headers": { "X-FITT-Client": "coding-cli" }
-  ```
-
-  to `options` and drop the `client:` tag in `secrets.yaml`.
-  Both work; one source of truth is easier to reason about.
+  above sets `mode: router`, so no per-request header is
+  needed in opencode's config.
 - Use `/models` inside opencode to pick a FITT alias.
 
 ### Aider
@@ -132,14 +121,8 @@ openai-api-key: ${FITT_TOKEN}
 model: fitt-smart
 ```
 
-Aider sends `Authorization: Bearer $FITT_TOKEN` and doesn't
-need the header because the token is tagged. If you prefer
-the header approach:
-
-```yaml
-extra-headers:
-  X-FITT-Client: coding-cli
-```
+Aider sends `Authorization: Bearer $FITT_TOKEN` and that's
+all you need. The mode comes from the token tag.
 
 ### Claude Code, Codex, Cursor agent mode, Kiro CLI
 
@@ -173,11 +156,10 @@ You're NOT in router mode if:
 - `fitt inbox` shows `tool_executed` events that weren't
   triggered by you directly on the Hub.
 
-Any of those mean the client tag isn't landing. Usual
-culprits: token without a `client:` tag AND no header;
-header typo (`X-FITT-Client`, not `X-Fitt-Client` — case
-doesn't matter but the spelling does); gateway not restarted
-after the `secrets.yaml` edit.
+Any of those mean the token isn't tagged with `mode: router`.
+Usual culprits: missing `mode:` field, token's `mode` set
+to `agent`, gateway not restarted after the `secrets.yaml`
+edit.
 
 ## What router mode does NOT give up
 
@@ -200,18 +182,28 @@ agent.
 ## When NOT to use router mode
 
 If you want FITT's tools (file / git / shell / cron / etc.)
-exposed to the coding session, don't flip router mode.
-Examples:
+exposed to the coding session, leave `mode` unset (or
+explicitly `mode: agent`). Examples:
 
 - Telegram conversations. Always agent mode (the bot
-  explicitly tags `telegram`).
+  explicitly tags `client: telegram`).
 - Continue in VS Code Chat mode (vs. Agent mode). Chat mode
-  wants FITT's tool list; tag the token `ide` instead of
-  `coding-cli`.
+  wants FITT's tool list; tag the token `client: ide` and
+  leave `mode` off.
 - Ad-hoc curl / Open WebUI exploration. Default (untagged)
-  stays `webui`, which is agent mode.
+  stays `client: webui, mode: agent`.
 
 Router mode is specifically for clients where the client
 itself is a coding agent and FITT should be a transparent
 pipe. If you're not sure, default to agent mode — silent
 feature-stripping is worse than an extra capability block.
+
+## Legacy: `client: coding-cli`
+
+Setups that predate the `mode` field tag the token
+`client: coding-cli`. The runtime transparently maps that
+to `client: ide, mode: router`, so existing operator
+configs keep working. The boot log emits a deprecation
+warning per token (`auth.coding_cli_tag_deprecated`) when
+the legacy form is detected — replace with the explicit
+two-field form when convenient.

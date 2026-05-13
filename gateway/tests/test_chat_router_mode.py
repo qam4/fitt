@@ -38,7 +38,7 @@ from fastapi.testclient import TestClient
 from gateway.app import create_app
 from gateway.projects import Project
 
-from ._fixtures import PERSONAL_TOKEN, build_test_config
+from ._fixtures import PERSONAL_TOKEN, ROUTER_MODE_TOKEN, build_test_config
 from ._llm_stubs import make_response, make_tool_call
 
 
@@ -47,10 +47,14 @@ def _auth() -> dict[str, str]:
 
 
 def _coding_cli_headers() -> dict[str, str]:
-    return {
-        **_auth(),
-        "X-FITT-Client": "coding-cli",
-    }
+    """Headers for a router-mode (coding-CLI) request.
+
+    The fixture's secrets carry a token tagged
+    ``client: ide, mode: router``; sending it is enough.
+    No header needed. Older shape (``X-FITT-Client:
+    coding-cli`` on the regular token) was retired in
+    Phase 4.8 when interface and runtime mode were split."""
+    return {"Authorization": f"Bearer {ROUTER_MODE_TOKEN}"}
 
 
 @pytest.fixture
@@ -387,12 +391,72 @@ def test_unknown_client_defaults_to_agent_mode_not_router(
 # --------------------------------------------------------------- helper
 
 
-def test_is_router_mode_client_contract() -> None:
-    """Pin the contract on which client tags flip router mode.
-    Guards against a naive equality check spreading across the
-    codebase — the auth module is the single source of truth."""
-    from gateway.auth import is_router_mode_client
+def test_secrets_mode_for_returns_correct_runtime_mode() -> None:
+    """Pin the mode-resolution contract on Secrets:
 
-    assert is_router_mode_client("coding-cli") is True
-    for tag in ("ide", "telegram", "webui", "cli", "unknown", ""):
-        assert is_router_mode_client(tag) is False, tag
+    1. Token explicitly tagged ``mode: router`` → router.
+    2. Legacy ``client: coding-cli`` token (no mode) → router.
+    3. ``client: coding-cli, mode: agent`` (someone explicitly
+       overriding the legacy default) → agent. We honour the
+       explicit field over the legacy implication.
+    4. Default (no mode field, no coding-cli) → agent.
+
+    Replaces the prior ``is_router_mode_client`` contract test
+    that branched purely on the client tag — that conflated
+    interface and runtime mode in a way that made router mode
+    impossible to combine with non-IDE interfaces."""
+    from gateway.config import AllowedToken, Secrets
+
+    secrets = Secrets(
+        allowed_tokens=[
+            AllowedToken(
+                name="opencode",
+                token="A" * 44,
+                client="ide",
+                mode="router",
+            ),
+            AllowedToken(
+                name="legacy_coding_cli",
+                token="B" * 44,
+                client="coding-cli",
+            ),
+            AllowedToken(
+                name="legacy_overridden",
+                token="C" * 44,
+                client="coding-cli",
+                mode="agent",
+            ),
+            AllowedToken(
+                name="phone",
+                token="D" * 44,
+                client="telegram",
+            ),
+            AllowedToken(
+                name="untagged",
+                token="E" * 44,
+            ),
+        ]
+    )
+
+    assert secrets.mode_for("A" * 44) == "router"
+    assert secrets.mode_for("B" * 44) == "router"  # legacy compat
+    assert secrets.mode_for("C" * 44) == "agent"  # explicit wins over legacy
+    assert secrets.mode_for("D" * 44) == "agent"
+    assert secrets.mode_for("E" * 44) == "agent"
+    # Unknown token defaults to agent (defensive — shouldn't
+    # happen post-auth).
+    assert secrets.mode_for("Z" * 44) == "agent"
+
+
+def test_secrets_client_for_normalises_legacy_coding_cli_to_ide() -> None:
+    """The legacy ``coding-cli`` value resolves to ``ide`` for
+    per-client policy purposes. The ``mode`` is reported
+    separately via :meth:`mode_for`."""
+    from gateway.config import AllowedToken, Secrets
+
+    secrets = Secrets(
+        allowed_tokens=[
+            AllowedToken(name="opencode", token="A" * 44, client="coding-cli"),
+        ]
+    )
+    assert secrets.client_for("A" * 44) == "ide"
