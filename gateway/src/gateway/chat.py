@@ -241,6 +241,58 @@ def _translate_upstream_error(exc: Exception) -> JSONResponse:
     )
 
 
+def _classify_upstream_error(exc: Exception) -> dict[str, Any]:
+    """Return a structured classification of an upstream-dispatch
+    exception, suitable for ``log_request``'s extra fields.
+
+    Mirrors the routing logic of :func:`_translate_upstream_error`
+    so the structured log shape and the user-facing HTTP shape
+    can't drift. Three buckets:
+
+    * ``upstream_rate_limited`` — 429/529 from upstream.
+      ``upstream_status`` carries the actual code; ``retry_after``
+      records the parsed Retry-After header (or the synthesized
+      default).
+    * ``upstream_client_error`` — other 4xx (auth, bad request).
+    * ``upstream_server_error`` — 5xx, transport failures
+      (connection reset, read timeout), DNS failures, anything
+      that doesn't expose a ``status_code`` attribute. Catch-all.
+
+    The ``error_class`` field carries the Python exception class
+    name (``RateLimitError``, ``APIConnectionError``,
+    ``httpx.ReadTimeout``, etc.) so an operator grepping the log
+    can tell "is this NVIDIA queue depth or my Tailscale flapping
+    or both?". The ``error_detail`` field carries the
+    exception's str() so the wire-side detail (NVIDIA's
+    "368 in queue" body, say) is preserved without needing to
+    enable response-body capture.
+    """
+    status = getattr(exc, "status_code", None)
+    message = getattr(exc, "message", None) or str(exc)
+    resp = getattr(exc, "response", None)
+    retry_after: str | None = None
+    if resp is not None:
+        headers = getattr(resp, "headers", {}) or {}
+        retry_after = headers.get("retry-after") or headers.get("Retry-After")
+
+    fields: dict[str, Any] = {
+        "error_class": type(exc).__name__,
+        "error_detail": message[:500] if isinstance(message, str) else str(message)[:500],
+    }
+    if status in (429, 529):
+        fields["error_type"] = "upstream_rate_limited"
+        fields["upstream_status"] = status
+        fields["retry_after"] = retry_after or ("30" if status == 529 else "5")
+    elif isinstance(status, int) and 400 <= status < 500:
+        fields["error_type"] = "upstream_client_error"
+        fields["upstream_status"] = status
+    else:
+        fields["error_type"] = "upstream_server_error"
+        if isinstance(status, int):
+            fields["upstream_status"] = status
+    return fields
+
+
 # -------- streaming helpers ---------------------------------------
 
 
@@ -279,6 +331,20 @@ async def _sse_stream_with_memory(
         err = {"error": {"type": "stream_failure", "message": str(exc)}}
         yield f"data: {json.dumps(err)}\n\n".encode()
         yield b"data: [ERROR]\n\n"
+        # Mid-stream failures are easy to miss otherwise: the
+        # client sees ``[ERROR]`` on the wire, but the gateway
+        # would log nothing structured because we'd already
+        # emitted the ``stream_started`` ``chat.completion``
+        # event at dispatch time. This second event closes the
+        # loop with the actual outcome.
+        _log.warning(
+            "chat.completion",
+            session_id=session_id,
+            status="stream_failure",
+            error_class=type(exc).__name__,
+            error_detail=str(exc)[:500],
+            collected_chars=len("".join(collected)),
+        )
 
     if succeeded and collected:
         assistant_message = "".join(collected)
@@ -555,7 +621,36 @@ async def _run_tool_loop(
             detach_threshold_s=detach_threshold,
             on_detach=_on_detach,
         )
-    except (UnknownAlias, NoBackendAvailable):
+    except UnknownAlias:
+        raise
+    except NoBackendAvailable as exc:
+        # Tool-loop counterpart to the same observability fix
+        # in the plain-chat dispatch path: log every transport
+        # failure that emptied the candidate chain so an
+        # operator can correlate "telegram says gateway
+        # unreachable" with the actual ``ConnectError`` /
+        # ``ReadTimeout`` underneath.
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+        classification = _classify_upstream_error(cause)
+        log_request(
+            _log,
+            alias=parsed.model,
+            model="(unknown)",
+            backend="(unknown)",
+            backend_actual="(unknown)",
+            session_id=session_id,
+            history_messages=len(ctx.history_messages),
+            history_truncated_bytes=ctx.truncated_bytes,
+            latency_ms=latency_ms,
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=Decimal("0"),
+            status="no_backend_available",
+            fallback=False,
+            attempted=list(exc.attempted),
+            **{k: v for k, v in classification.items() if k != "error_type"},
+        )
         raise
 
     # ---- detached: return a placeholder and let the worker finish
@@ -636,6 +731,35 @@ async def _run_tool_loop(
             status="upstream_error",
             iterations=result.iterations,
             final_reply_len=0,
+        )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        model_used = result.model_used
+        # Without this, an upstream rate-limit / queue / server
+        # error during a tool-loop turn vanished from
+        # ``gateway.log`` — the chat handler returned the
+        # translated 503/502 to the client without recording
+        # what happened. After 2026-05-13 we always emit one
+        # ``chat.completion`` event per chat request, regardless
+        # of outcome, so operators can grep the log for failed
+        # turns and tell e.g. NVIDIA queue depth from a
+        # transient connection drop.
+        classification = _classify_upstream_error(result.error)
+        log_request(
+            _log,
+            alias=parsed.model,
+            model=model_used.model if model_used else "(unknown)",
+            backend=model_used.backend if model_used else "(unknown)",
+            backend_actual=backend_tag(model_used) if model_used else "(unknown)",
+            session_id=session_id,
+            history_messages=len(ctx.history_messages),
+            history_truncated_bytes=ctx.truncated_bytes,
+            latency_ms=latency_ms,
+            input_tokens=result.in_tokens,
+            output_tokens=result.out_tokens,
+            cost_usd=Decimal("0"),
+            status=classification["error_type"],
+            fallback=result.fallback_used,
+            **{k: v for k, v in classification.items() if k != "error_type"},
         )
         return _translate_upstream_error(result.error)
 
@@ -908,9 +1032,69 @@ async def chat_completions(request: Request) -> Response:
 
     try:
         dispatch = await alias_router.dispatch(parsed.model, request_body)
-    except (UnknownAlias, NoBackendAvailable):
+    except UnknownAlias:
+        raise
+    except NoBackendAvailable as exc:
+        # All candidates had transport failures. The
+        # exception handler in app.py turns this into a
+        # 503 ``no_backend_available`` for the client, but
+        # without this branch the gateway log was silent —
+        # an operator chasing "telegram showed gateway
+        # unreachable, what happened?" had nothing to grep.
+        # Log the underlying transport exception (the
+        # ``__cause__`` set by ``raise NoBackendAvailable
+        # ... from last_transport_exc``) so the row carries
+        # the actual class (``ConnectError``,
+        # ``ReadTimeout``, ...) and detail.
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+        classification = _classify_upstream_error(cause)
+        log_request(
+            _log,
+            alias=parsed.model,
+            model="(unknown)",
+            backend="(unknown)",
+            backend_actual="(unknown)",
+            session_id=session_id,
+            history_messages=len(ctx.history_messages),
+            history_truncated_bytes=ctx.truncated_bytes,
+            latency_ms=latency_ms,
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=Decimal("0"),
+            status="no_backend_available",
+            fallback=False,
+            attempted=list(exc.attempted),
+            **{k: v for k, v in classification.items() if k != "error_type"},
+        )
         raise
     except Exception as exc:
+        # Same observability gap as the tool-loop path: an
+        # upstream rate-limit / queue / connection-reset during a
+        # plain-chat dispatch returned a translated 503/502 to
+        # the client without any structured log entry. Now we
+        # always emit one ``chat.completion`` event regardless
+        # of outcome so operators can grep for "did this turn
+        # actually fail upstream?" and see the answer.
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        classification = _classify_upstream_error(exc)
+        log_request(
+            _log,
+            alias=parsed.model,
+            model="(unknown)",
+            backend="(unknown)",
+            backend_actual="(unknown)",
+            session_id=session_id,
+            history_messages=len(ctx.history_messages),
+            history_truncated_bytes=ctx.truncated_bytes,
+            latency_ms=latency_ms,
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=Decimal("0"),
+            status=classification["error_type"],
+            fallback=False,
+            **{k: v for k, v in classification.items() if k != "error_type"},
+        )
         return _translate_upstream_error(exc)
 
     backend_header = backend_tag(dispatch.model_used)
