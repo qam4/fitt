@@ -1,11 +1,11 @@
-"""Tests for router-mode pass-through for coding-CLI clients.
+"""Tests for router-mode pass-through for coding-agent clients.
 
 What router mode means
 ----------------------
 
 Clients that own their own agent loop (Aider, Claude Code,
 Cursor agent mode, Codex, Kiro CLI, ...) send
-``X-FITT-Client: coding-cli``. For those clients, FITT behaves
+``X-FITT-Client: coding-agent``. For those clients, FITT behaves
 as a thin alias-routing proxy:
 
 * No capability block in the system prompt.
@@ -49,7 +49,7 @@ def _auth() -> dict[str, str]:
 def _coding_cli_headers() -> dict[str, str]:
     return {
         **_auth(),
-        "X-FITT-Client": "coding-cli",
+        "X-FITT-Client": "coding-agent",
     }
 
 
@@ -165,7 +165,7 @@ def test_coding_cli_skips_memory_injection(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Identity files under $FITT_HOME/identity shouldn't land
-    in a coding-CLI request. Aider has its own conventions
+    in a coding-agent request. Aider has its own conventions
     file; layering FITT's identity on top noise-injects the
     client's agent."""
     captured: list[dict[str, Any]] = []
@@ -197,7 +197,7 @@ def test_coding_cli_does_not_run_fitt_tool_loop(
 ) -> None:
     """Even if the model returns tool_calls naming a FITT tool,
     router mode passes the response through without executing
-    any tools. The coding-CLI client will take the tool_calls
+    any tools. The coding-agent client will take the tool_calls
     and either execute them in its own runtime or reject them.
 
     Assert by checking we only see ONE upstream dispatch: a
@@ -288,7 +288,7 @@ def test_coding_cli_rejects_concrete_model_ids(
 ) -> None:
     """Aliases-only discipline applies even in router mode —
     otherwise the "swap a model by editing config.yaml" promise
-    breaks for the coding-CLI use case. If someone tries to
+    breaks for the coding-agent use case. If someone tries to
     send a concrete model id, we reject with the usual 400."""
 
     async def fake(**kwargs: Any) -> Any:
@@ -393,6 +393,6 @@ def test_is_router_mode_client_contract() -> None:
     codebase — the auth module is the single source of truth."""
     from gateway.auth import is_router_mode_client
 
-    assert is_router_mode_client("coding-cli") is True
+    assert is_router_mode_client("coding-agent") is True
     for tag in ("ide", "telegram", "webui", "cli", "unknown", ""):
         assert is_router_mode_client(tag) is False, tag

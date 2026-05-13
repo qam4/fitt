@@ -198,7 +198,7 @@ end-to-end decide-handler flow the Telegram bot uses.
 
 ---
 
-## FITT capability block leaks into coding-CLI clients (Aider)
+## FITT capability block leaks into coding-agent clients (Aider)
 
 **First observed:** 2026-05-11. **Fixed:** 2026-05-11.
 **Tag:** design (closed), medium pain. Cross-references the
@@ -225,16 +225,16 @@ into the request's `tools` array, memory snippets prepended
 — actively confuses Aider's own agent.
 
 **Cost:** Proportional to how much the author wants to use
-FITT-as-router for coding-CLI tools (Aider today; Claude
+FITT-as-router for coding-agent tools (Aider today; Claude
 Code, Cursor, Continue-Agent, Codex, Kiro-CLI tomorrow). At
 minimum: one wasted turn per session chasing a ghost tool
 list. Worst case: the model pattern-matches on FITT's `ssh`-
 routed file tools and tries to call them instead of Aider's
 own file edits, which silently breaks the Aider workflow.
 
-**Fix plan:** Router-mode for coding-CLI clients. Classify
+**Fix plan:** Router-mode for coding-agent clients. Classify
 clients via `X-FITT-Client` (values `aider`, `claude-code`,
-`cursor`, `codex`, or the generic `coding-cli`). When the
+`cursor`, `codex`, or the generic `coding-agent`). When the
 client is in router mode: skip capability-block injection,
 skip FITT tool merge into the `tools` array, skip memory
 injection, skip approval middleware (the client owns that
@@ -256,14 +256,14 @@ framework interfere when FITT is used in an IDE or CLI" open
 question. Router mode for known coding agents; agent mode
 for everything else.
 
-**Fix landed 2026-05-11:** A new `coding-cli` client tag joins
+**Fix landed 2026-05-11:** A new `coding-agent` client tag joins
 `{ide, telegram, webui, cli}` as an accepted value for
 `X-FITT-Client` and the `client:` field on tokens. Single
 source of truth lives at `gateway.auth.is_router_mode_client()`;
 `chat.py`'s chat handler calls it once at request entry and
 branches:
 
-* Router mode (`coding-cli`): skip memory load, skip
+* Router mode (`coding-agent`): skip memory load, skip
   capability-block construction, skip `_inject_memory`, skip
   `_inject_fitt_tools`, and skip the FITT tool loop
   altogether. The request body reaches LiteLLM as the client
@@ -290,8 +290,8 @@ still-rejects-concrete-model-ids contract, plus the Telegram
 regression guard and the unclassified-client default.
 
 Operator setup for Aider: add
-`X-FITT-Client: coding-cli` to Aider's `extra_headers` config,
-or tag the Aider token with `client: coding-cli` in
+`X-FITT-Client: coding-agent` to Aider's `extra_headers` config,
+or tag the Aider token with `client: coding-agent` in
 `secrets.yaml`.
 
 ---

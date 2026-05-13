@@ -433,3 +433,97 @@ def test_fitt_port_rejects_out_of_range(tmp_path: Path, monkeypatch: pytest.Monk
     with pytest.raises(ConfigError) as exc:
         load_config(cp, sp)
     assert "out of range" in str(exc.value)
+
+
+# --------------------------------------------------------------- allowed_tokens validators
+
+
+def test_secrets_rejects_duplicate_token_value(tmp_path: Path) -> None:
+    """Two entries with the same token value: only the first
+    matches at runtime, the rest are dead weight. Almost always
+    a copy-paste mistake. Pin the validator's rejection so a
+    future schema tweak doesn't silently restore the
+    order-dependent behaviour."""
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: phone
+            token: SHARED_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAA
+            client: telegram
+          - name: ide
+            token: SHARED_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAA
+            client: ide
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    with pytest.raises(ConfigError) as exc:
+        load_secrets(sp)
+    msg = str(exc.value)
+    assert "duplicate token" in msg
+    assert "phone" in msg
+    assert "ide" in msg
+
+
+def test_secrets_rejects_duplicate_name(tmp_path: Path) -> None:
+    """Two entries with the same name make audit logs and
+    deprecation warnings ambiguous about which entry produced
+    them."""
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: bot
+            token: TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+            client: telegram
+          - name: bot
+            token: TOKEN_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+            client: ide
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    with pytest.raises(ConfigError) as exc:
+        load_secrets(sp)
+    assert "duplicate name" in str(exc.value)
+
+
+def test_secrets_rejects_duplicate_client_tag(tmp_path: Path) -> None:
+    """Two entries claiming the same client tag would make the
+    ``[t for t in tokens if t.client == 'telegram']`` lookup
+    used by the bot pick whichever ends up first in the list.
+    Refuse to start so the operator picks one explicitly."""
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: phone-old
+            token: TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+            client: telegram
+          - name: phone-new
+            token: TOKEN_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+            client: telegram
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    with pytest.raises(ConfigError) as exc:
+        load_secrets(sp)
+    msg = str(exc.value)
+    assert "telegram" in msg
+    assert "phone-old" in msg
+    assert "phone-new" in msg
+
+
+def test_secrets_allows_multiple_untagged_tokens(tmp_path: Path) -> None:
+    """Untagged tokens (ad-hoc curl, testing) should be allowed
+    in any quantity — they don't drive the by-tag lookups, so
+    there's no ambiguity to refuse over. Pinned so a stricter
+    validator doesn't accidentally regress this."""
+    secrets_yaml = dedent(
+        """
+        allowed_tokens:
+          - name: scratch-1
+            token: TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          - name: scratch-2
+            token: TOKEN_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+        """
+    ).strip()
+    sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
+    secrets = load_secrets(sp)
+    assert len(secrets.allowed_tokens) == 2

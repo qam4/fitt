@@ -56,8 +56,9 @@ def _seed_fitt_home(fitt_home: Path, *, port: int = 8080) -> None:
         dedent(
             """
             allowed_tokens:
-              - name: personal
+              - name: phone-bot
                 token: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+                client: telegram
 
             telegram:
               bot_token: 987654:REAL-ISH-TOKEN-PLACEHOLDER-FOR-TESTS
@@ -123,3 +124,132 @@ def test_gateway_url_localhost_uses_configured_port(
 
     _cfg, bot_cfg = load_bot_config()
     assert bot_cfg.gateway_url == "http://127.0.0.1:9999"
+
+
+# --------------------------------------------------------------- bearer-token lookup
+
+
+def test_bearer_token_picked_by_telegram_tag_not_by_position(
+    isolate_fitt_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bot must pick its bearer token by the
+    ``client: telegram`` tag, not by list position.
+
+    Pre-fix the bot used ``allowed_tokens[0]``; once an operator
+    added a second token (e.g. for opencode), reordering
+    secrets.yaml could silently swap which token the bot used.
+    Now the bot looks up the entry tagged ``client: telegram``;
+    the gateway-side ``Secrets`` validator rejects multiple
+    entries with the same client tag, so the lookup is
+    deterministic.
+
+    Pin: list the IDE token first; the bot still picks the
+    telegram-tagged one."""
+    fitt_home = isolate_fitt_home
+    (fitt_home / "config.yaml").write_text(
+        dedent(
+            """
+            server:
+              host: 0.0.0.0
+              port: 8080
+              log_level: info
+
+            aliases:
+              fitt-default: qwen-coder-big
+
+            models:
+              - id: qwen-coder-big
+                backend: ollama
+                endpoint: http://192.168.1.10:11434
+                model: qwen2.5-coder:14b
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    secrets = fitt_home / "secrets.yaml"
+    secrets.write_text(
+        dedent(
+            """
+            allowed_tokens:
+              # IDE token first to make the position lookup
+              # diverge from the tag lookup if it ever
+              # regressed.
+              - name: ide-token
+                token: IDE_TOKEN_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+                client: ide
+              - name: phone-bot
+                token: TELEGRAM_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+                client: telegram
+
+            telegram:
+              bot_token: 987654:REAL-ISH-TOKEN-PLACEHOLDER-FOR-TESTS
+              allowlist_user_ids:
+                - 42
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    if os.name != "nt":
+        secrets.chmod(0o600)
+    monkeypatch.delenv("FITT_GATEWAY_URL", raising=False)
+
+    _cfg, bot_cfg = load_bot_config()
+    assert bot_cfg.bearer_token == "TELEGRAM_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+
+def test_bot_config_errors_when_no_telegram_tagged_token(
+    isolate_fitt_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a ``client: telegram`` tag on at least one
+    token, the bot can't tell which credential is its own.
+    Refuse to start with a clear message rather than silently
+    grabbing some other client's token."""
+    from gateway.errors import ConfigError
+
+    fitt_home = isolate_fitt_home
+    (fitt_home / "config.yaml").write_text(
+        dedent(
+            """
+            server:
+              host: 0.0.0.0
+              port: 8080
+              log_level: info
+
+            aliases:
+              fitt-default: qwen-coder-big
+
+            models:
+              - id: qwen-coder-big
+                backend: ollama
+                endpoint: http://192.168.1.10:11434
+                model: qwen2.5-coder:14b
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    secrets = fitt_home / "secrets.yaml"
+    secrets.write_text(
+        dedent(
+            """
+            allowed_tokens:
+              - name: ide-token
+                token: IDE_TOKEN_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+                client: ide
+
+            telegram:
+              bot_token: 987654:REAL-ISH-TOKEN-PLACEHOLDER-FOR-TESTS
+              allowlist_user_ids:
+                - 42
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    if os.name != "nt":
+        secrets.chmod(0o600)
+    monkeypatch.delenv("FITT_GATEWAY_URL", raising=False)
+
+    with pytest.raises(ConfigError) as exc:
+        load_bot_config()
+    assert "client: telegram" in str(exc.value)

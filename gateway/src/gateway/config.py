@@ -245,7 +245,7 @@ class AllowedToken(BaseModel):
     # Optional client tag — drives per-client approval defaults in
     # Phase 4+. When absent, the client is treated as "webui" (least
     # trusted) so older secrets files stay safe by default.
-    client: Literal["ide", "telegram", "webui", "cli", "coding-cli"] | None = None
+    client: Literal["ide", "telegram", "webui", "cli", "coding-agent"] | None = None
 
 
 class TelegramSecrets(BaseModel):
@@ -272,6 +272,63 @@ class Secrets(BaseModel):
     # usually don't.
     api_keys: dict[str, str] = Field(default_factory=dict)
     telegram: TelegramSecrets | None = None
+
+    @model_validator(mode="after")
+    def _validate_allowed_tokens(self) -> Secrets:
+        """Catch operator misconfigurations in ``allowed_tokens``
+        at load time rather than via subtle order-dependent runtime
+        behaviour. Three kinds of accident we refuse to start on:
+
+        1. **Duplicate token values.** Two entries with the same
+           ``token``: only the first one would ever match, the
+           rest are dead weight. Almost always a copy-paste
+           mistake.
+        2. **Duplicate names.** Two entries with the same
+           ``name``: makes audit logs unreadable.
+        3. **Duplicate ``client`` tags.** Two entries with the
+           same ``client: telegram`` (say): consumers like the
+           Telegram bot pick "the token tagged telegram" by
+           name; an ambiguity here would silently degrade to
+           order-dependence. Better to fail loud and have the
+           operator pick one.
+
+        Tokens with no ``client`` field don't trip rule 3 — the
+        bot cares about tagged tokens, untagged ones are for
+        ad-hoc curl / testing."""
+        seen_tokens: dict[str, str] = {}
+        seen_names: dict[str, str] = {}
+        seen_clients: dict[str, str] = {}
+        for entry in self.allowed_tokens:
+            if entry.token in seen_tokens:
+                raise ValueError(
+                    f"allowed_tokens has duplicate token value, used by both "
+                    f"{seen_tokens[entry.token]!r} and {entry.name!r}. "
+                    f"Each entry must have a unique token; rotate by adding "
+                    f"a new entry with a fresh token, then removing the old "
+                    f"one once clients have switched."
+                )
+            seen_tokens[entry.token] = entry.name
+
+            if entry.name in seen_names:
+                raise ValueError(
+                    f"allowed_tokens has duplicate name {entry.name!r}. Each "
+                    f"entry must have a unique name so audit logs and the "
+                    f"deprecation warnings can identify it."
+                )
+            seen_names[entry.name] = entry.name
+
+            if entry.client is not None:
+                if entry.client in seen_clients:
+                    raise ValueError(
+                        f"allowed_tokens has multiple entries tagged "
+                        f"{entry.client!r} ({seen_clients[entry.client]!r} and "
+                        f"{entry.name!r}). Consumers like the Telegram bot "
+                        f"pick 'the token tagged X' by lookup; an ambiguity "
+                        f"here would silently degrade to order-dependence. "
+                        f"Pick one entry per client tag."
+                    )
+                seen_clients[entry.client] = entry.name
+        return self
 
     def api_key_for(self, backend: Backend, *, model_id: str | None = None) -> str | None:
         match backend:

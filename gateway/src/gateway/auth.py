@@ -56,22 +56,24 @@ _log = logging.getLogger(__name__)
 
 _EXEMPT_PREFIXES: tuple[str, ...] = ("/health", "/ready", "/v1/models")
 
-_VALID_CLIENTS: frozenset[str] = frozenset({"ide", "telegram", "webui", "cli", "coding-cli"})
+_VALID_CLIENTS: frozenset[str] = frozenset({"ide", "telegram", "webui", "cli", "coding-agent"})
 """Accepted values for the ``X-FITT-Client`` header and the
 ``client:`` field on tokens. Kept as a module constant so the
 validation list doesn't drift between the config schema (which uses
 ``Literal[...]``) and the runtime check here.
 
-``coding-cli`` (added 2026-05-11) marks clients that own their
-own agent loop — Aider, Claude Code, Cursor's agent mode, Codex,
-Kiro CLI, any coding CLI that expects a plain OpenAI-compatible
-endpoint. The chat handler treats these as router-mode: FITT
-resolves aliases, dispatches, tracks cost, audits; it does NOT
-inject the capability block, does NOT merge FITT tools into the
-request's ``tools`` array, does NOT inject memory, and does NOT
-run the approval middleware. The client's own agent owns those
-concerns. See :func:`is_router_mode_client` and the Aider-
-collision entry in docs/observed-issues.md."""
+``coding-agent`` (added 2026-05-11, renamed from ``coding-cli``
+on 2026-05-13) marks clients that own their own agent loop —
+Aider, Claude Code, Cursor's agent mode, OpenCode, Codex, Kiro
+CLI, any tool that brings its own tool-calling layer and
+expects a plain OpenAI-compatible endpoint. The chat handler
+treats these as router-mode: FITT resolves aliases,
+dispatches, tracks cost, audits; it does NOT inject the
+capability block, does NOT merge FITT tools into the
+request's ``tools`` array, does NOT inject memory, and does
+NOT run the approval middleware. The client's own agent owns
+those concerns. See :func:`is_router_mode_client` and the
+Aider-collision entry in docs/observed-issues.md."""
 
 
 def is_router_mode_client(client: str) -> bool:
@@ -82,7 +84,7 @@ def is_router_mode_client(client: str) -> bool:
     on "is this a coding-agent client?" reads this function,
     so a future client tag added for the same shape doesn't
     require hunting down parallel equality checks."""
-    return client == "coding-cli"
+    return client == "coding-agent"
 
 
 def _unauthorized(message: str) -> JSONResponse:

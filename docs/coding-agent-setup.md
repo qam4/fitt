@@ -1,23 +1,23 @@
-# Pointing a Coding CLI at FITT (Router Mode)
+# Pointing a Coding Agent at FITT (Router Mode)
 
-How to configure a coding-CLI tool (Aider, opencode, Claude
+How to configure a coding-agent tool (Aider, opencode, Claude
 Code, Cursor, Codex, Kiro CLI, ...) to use FITT as its
 OpenAI-compatible model backend, with FITT acting as a thin
 alias-routing proxy instead of its usual agent layer.
 
 For the motivation and mechanics of router mode see the
-[Aider collision entry in docs/observed-issues.md](./observed-issues.md#fitt-capability-block-leaks-into-coding-cli-clients-aider)
-and the `coding-cli` section of
+[Aider collision entry in docs/observed-issues.md](./observed-issues.md#fitt-capability-block-leaks-into-coding-agent-clients-aider)
+and the `coding-agent` section of
 [gateway/src/gateway/auth.py](../gateway/src/gateway/auth.py).
 
 ## The two-line contract
 
-A coding-CLI tool gets router mode from FITT when the gateway
+A coding-agent tool gets router mode from FITT when the gateway
 sees either of these on the request:
 
-1. `X-FITT-Client: coding-cli` header, or
+1. `X-FITT-Client: coding-agent` header, or
 2. A bearer token whose `client:` tag in `secrets.yaml` is
-   `coding-cli`.
+   `coding-agent`.
 
 Either is sufficient. If both are set they have to agree; the
 auth middleware rejects mismatches with a 400 so silent
@@ -42,13 +42,13 @@ On the Hub (FITT gateway host), one-time:
    python -c "import secrets; print(secrets.token_urlsafe(32))"
    ```
 
-2. **Add it to `secrets.yaml`** with `client: coding-cli`:
+2. **Add it to `secrets.yaml`** with `client: coding-agent`:
 
    ```yaml
    allowed_tokens:
      - name: opencode        # or aider, claude-code, codex, etc.
        token: <the-token-you-just-generated>
-       client: coding-cli
+       client: coding-agent
    ```
 
 3. **Restart the gateway** (or wait for the next natural
@@ -56,7 +56,7 @@ On the Hub (FITT gateway host), one-time:
 
 4. **Watch the boot log for `alias_probe.ok`** per alias. If
    any alias probes as `alias_probe.narrated`, swap that
-   alias before pointing a coding-CLI at FITT. You don't want
+   alias before pointing a coding-agent at FITT. You don't want
    to find out mid-editing-session that the model emits
    prose instead of tool_calls.
 
@@ -107,13 +107,13 @@ Notes:
   `POST /v1/chat/completions`; opencode appends the path
   itself.
 - **Token tagging is enough.** The `allowed_tokens` entry
-  above sets `client: coding-cli`, so no
+  above sets `client: coding-agent`, so no
   `X-FITT-Client` header is needed in opencode's config.
   If you'd rather set the header explicitly (leaving the
   token untagged), add:
 
   ```json
-  "headers": { "X-FITT-Client": "coding-cli" }
+  "headers": { "X-FITT-Client": "coding-agent" }
   ```
 
   to `options` and drop the `client:` tag in `secrets.yaml`.
@@ -138,7 +138,7 @@ the header approach:
 
 ```yaml
 extra-headers:
-  X-FITT-Client: coding-cli
+  X-FITT-Client: coding-agent
 ```
 
 ### Claude Code, Codex, Cursor agent mode, Kiro CLI
@@ -194,8 +194,8 @@ FITT still:
 All the no-subscription alias routing you use FITT for
 continues to work. What router mode skips is the FITT agent
 layer (tools, memory, capability block, approval middleware)
-that would duplicate or conflict with the coding CLI's own
-agent.
+that would duplicate or conflict with the coding agent's own
+agent loop.
 
 ## When NOT to use router mode
 
@@ -207,7 +207,7 @@ Examples:
   explicitly tags `telegram`).
 - Continue in VS Code Chat mode (vs. Agent mode). Chat mode
   wants FITT's tool list; tag the token `ide` instead of
-  `coding-cli`.
+  `coding-agent`.
 - Ad-hoc curl / Open WebUI exploration. Default (untagged)
   stays `webui`, which is agent mode.
 

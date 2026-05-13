@@ -63,13 +63,33 @@ def load_bot_config(
     # An empty list is a valid 'lock everyone out' state and NOT an
     # error - we log it loudly at runtime instead.
 
-    # The bot authenticates to the gateway with the first allowed
-    # token. In v0 there's exactly one.
+    # The bot authenticates to the gateway with the token tagged
+    # ``client: telegram`` in ``secrets.yaml``. Picking by tag
+    # (rather than position) means reordering ``allowed_tokens``
+    # doesn't accidentally swap which token the bot uses, and it
+    # forces the operator to think about which token is which —
+    # the ``Secrets`` validator already rejects multiple tokens
+    # claiming the same client tag, so this lookup is
+    # deterministic by construction.
     if not secrets.allowed_tokens:
         raise ConfigError(
-            "No allowed_tokens in secrets.yaml. The bot needs a Bearer token to reach the gateway."
+            "No allowed_tokens in secrets.yaml. The bot needs a Bearer "
+            "token tagged `client: telegram` to reach the gateway."
         )
-    bearer = secrets.allowed_tokens[0].token
+    telegram_tokens = [t for t in secrets.allowed_tokens if t.client == "telegram"]
+    if not telegram_tokens:
+        raise ConfigError(
+            "No allowed_tokens entry tagged `client: telegram`. The bot "
+            "needs an explicit `client: telegram` tag on its bearer "
+            "token entry in secrets.yaml so picking the right one isn't "
+            "order-dependent. Add `client: telegram` to the token entry "
+            "the bot should authenticate with."
+        )
+    # The Secrets validator rejects multiple tokens claiming the
+    # same client tag at config-load time, so we'll never see
+    # >1 here. Defensive index-0 in case a future schema tweak
+    # relaxes that and someone forgets to update this lookup.
+    bearer = telegram_tokens[0].token
 
     # Where the bot reaches the gateway. Precedence:
     #   1. FITT_GATEWAY_URL env var — the explicit knob, set by

@@ -60,8 +60,9 @@ def _seed_fitt_home(fitt_home: Path) -> None:
         dedent(
             """
             allowed_tokens:
-              - name: personal
+              - name: phone-bot
                 token: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+                client: telegram
 
             telegram:
               bot_token: 987654:REAL-ISH-TOKEN-PLACEHOLDER-FOR-TESTS
