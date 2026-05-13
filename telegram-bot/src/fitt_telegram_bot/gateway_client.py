@@ -5,18 +5,29 @@ lists aliases. Errors do not raise up to the handler - they surface
 as a single string delta prefixed with ``⚠️``. That keeps the
 handler's render loop uniform ("whatever deltas come in, append to
 the Telegram message") without a separate error path.
+
+Every error that turns into a user-visible ⚠️ also lands in
+``telegram-bot.log`` as a structured ``gateway.chat.failed``
+event. The bot used to swallow these silently — an operator
+seeing "gateway unreachable" in Telegram had no log to grep,
+and no way to tell DNS-failure from connection-reset from
+HTTP-401 without re-running the request. The structured log
+entry carries the response status (when present), the parsed
+``error.type`` from the gateway body, and the exception class
++ truncated detail for transport failures, so an operator can
+correlate user-visible warnings with what actually happened.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+import structlog
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger("fitt.telegram_bot.gateway_client")
 
 _STREAM_TIMEOUT_S = 120.0
 
@@ -61,7 +72,11 @@ class GatewayClient:
                 r = await client.get(f"{self._base}/v1/models", headers=self._headers)
                 r.raise_for_status()
             except httpx.HTTPError as e:
-                _log.warning("gateway.list_aliases.failed", extra={"error": str(e)})
+                _log.warning(
+                    "gateway.list_aliases.failed",
+                    error_class=type(e).__name__,
+                    error=str(e),
+                )
                 return []
         data = r.json().get("data", [])
         return [m["id"] for m in data if isinstance(m, dict) and "id" in m]
@@ -88,7 +103,8 @@ class GatewayClient:
             except httpx.HTTPError as e:
                 _log.warning(
                     "gateway.list_pending_approvals.failed",
-                    extra={"error": str(e)},
+                    error_class=type(e).__name__,
+                    error=str(e),
                 )
                 return []
         pending = r.json().get("pending", [])
@@ -131,7 +147,8 @@ class GatewayClient:
             except httpx.HTTPError as e:
                 _log.warning(
                     "gateway.list_events.failed",
-                    extra={"error": str(e)},
+                    error_class=type(e).__name__,
+                    error=str(e),
                 )
                 return []
         entries = r.json().get("entries", [])
@@ -158,7 +175,9 @@ class GatewayClient:
             except httpx.HTTPError as e:
                 _log.warning(
                     "gateway.decide_approval.transport_failed",
-                    extra={"error": str(e)},
+                    approval_id=approval_id,
+                    error_class=type(e).__name__,
+                    error=str(e),
                 )
                 return False, f"transport error: {e}"
         if r.status_code // 100 == 2:
@@ -171,11 +190,9 @@ class GatewayClient:
             detail = r.text
         _log.info(
             "gateway.decide_approval.failed",
-            extra={
-                "approval_id": approval_id,
-                "status": r.status_code,
-                "detail": detail,
-            },
+            approval_id=approval_id,
+            status=r.status_code,
+            detail=detail,
         )
         return False, f"HTTP {r.status_code}: {detail}"
 
@@ -215,17 +232,47 @@ class GatewayClient:
                 ) as response:
                     if response.status_code >= 400:
                         payload = await response.aread()
-                        async for msg in self._format_error(response, payload):
+                        async for msg in self._format_error(
+                            response,
+                            payload,
+                            alias=alias,
+                            session_id=session_id,
+                        ):
                             yield msg
                         return
-                    async for delta in self._parse_sse(response):
+                    async for delta in self._parse_sse(
+                        response, alias=alias, session_id=session_id
+                    ):
                         yield delta
             except httpx.RequestError as e:
+                # Transport-level failure — DNS, connect refused,
+                # read timeout. The bot used to swallow these
+                # silently; now we record one row per failed
+                # turn so the operator can grep
+                # ``telegram-bot.log`` for "why did the user see
+                # 'gateway unreachable'?" and find the actual
+                # exception class + message. This is the bot
+                # half of the gateway's
+                # ``no_backend_available`` event.
+                _log.warning(
+                    "gateway.chat.failed",
+                    alias=alias,
+                    session_id=session_id,
+                    failure_kind="transport",
+                    error_class=type(e).__name__,
+                    error=str(e)[:500],
+                )
                 yield f"⚠️ gateway unreachable: {e}"
 
     # ---------- internals -----------------------------------------
 
-    async def _parse_sse(self, response: httpx.Response) -> AsyncIterator[str]:
+    async def _parse_sse(
+        self,
+        response: httpx.Response,
+        *,
+        alias: str,
+        session_id: str,
+    ) -> AsyncIterator[str]:
         async for line in response.aiter_lines():
             if not line or not line.startswith("data: "):
                 continue
@@ -233,6 +280,17 @@ class GatewayClient:
             if payload == "[DONE]":
                 return
             if payload == "[ERROR]":
+                # Mid-stream upstream abort — the gateway side
+                # logs ``status=stream_failure``; we mirror that
+                # here so a single grep across both files lines
+                # up the user-visible warning with the gateway
+                # event.
+                _log.warning(
+                    "gateway.chat.failed",
+                    alias=alias,
+                    session_id=session_id,
+                    failure_kind="stream_aborted",
+                )
                 yield "⚠️ upstream stream aborted"
                 return
             try:
@@ -243,16 +301,41 @@ class GatewayClient:
             if delta:
                 yield delta
 
-    async def _format_error(self, response: httpx.Response, body: bytes) -> AsyncIterator[str]:
+    async def _format_error(
+        self,
+        response: httpx.Response,
+        body: bytes,
+        *,
+        alias: str,
+        session_id: str,
+    ) -> AsyncIterator[str]:
         try:
             parsed = json.loads(body.decode("utf-8", errors="replace"))
+            err_obj = parsed.get("error", {}) if isinstance(parsed, dict) else {}
             message = (
-                parsed.get("error", {}).get("message") if isinstance(parsed, dict) else None
+                err_obj.get("message") if isinstance(err_obj, dict) else None
             ) or body.decode("utf-8", errors="replace")[:200]
+            error_type = err_obj.get("type") if isinstance(err_obj, dict) else None
         except json.JSONDecodeError:
             message = body.decode("utf-8", errors="replace")[:200]
+            error_type = None
 
         retry_after = response.headers.get("retry-after")
+        # One log per ⚠️ yield. Carries the gateway's parsed
+        # ``error.type`` so the bot's failure stream can be
+        # joined with the gateway's ``chat.completion`` event
+        # by ``upstream_status``+``error_type`` rather than
+        # only by timestamp.
+        _log.warning(
+            "gateway.chat.failed",
+            alias=alias,
+            session_id=session_id,
+            failure_kind="http_error",
+            upstream_status=response.status_code,
+            error_type=error_type,
+            error_detail=message[:500] if isinstance(message, str) else str(message)[:500],
+            retry_after=retry_after,
+        )
         if response.status_code == 503 and retry_after:
             yield f"⚠️ rate limited, retry in {retry_after}s"
         elif response.status_code == 401:

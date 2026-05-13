@@ -200,3 +200,146 @@ async def test_chat_request_skips_tool_choice_when_disabled() -> None:
     body = captured["body"]
     assert isinstance(body, dict)
     assert "tool_choice" not in body
+
+
+# ----------------------------------------------------- structured failure logs
+
+
+async def test_chat_unreachable_logs_structured_failure() -> None:
+    """Pre-2026-05-13 the bot swallowed transport errors silently —
+    the user saw '⚠️ gateway unreachable' in Telegram with no
+    matching row in ``telegram-bot.log``. After the fix, every
+    yielded ⚠️ has a corresponding ``gateway.chat.failed`` event
+    so an operator can grep the log to confirm what actually
+    happened. This test pins that contract for transport
+    failures (DNS / connect refused / read timeout)."""
+    import structlog
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(
+            side_effect=httpx.ConnectError("nope")
+        )
+        with structlog.testing.capture_logs() as captured:
+            deltas = await _collect(
+                _client().chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    alias="fitt-smart",
+                    session_id="main",
+                )
+            )
+
+    # User-visible warning still surfaces.
+    assert deltas == [d for d in deltas if d.startswith("⚠️")]
+    # And the structured event landed.
+    failed = [e for e in captured if e.get("event") == "gateway.chat.failed"]
+    assert len(failed) == 1, captured
+    e = failed[0]
+    assert e["alias"] == "fitt-smart"
+    assert e["session_id"] == "main"
+    assert e["failure_kind"] == "transport"
+    assert e["error_class"] == "ConnectError"
+    assert "nope" in e["error"]
+
+
+async def test_chat_rate_limited_logs_structured_failure() -> None:
+    """A 503 with a Retry-After is the most common upstream
+    rate-limit / queue-overflow shape. The structured log row
+    carries the upstream status, the parsed ``error.type`` from
+    the gateway body, and the Retry-After so an operator can
+    correlate the bot-side row with the gateway-side
+    ``chat.completion`` event by matching on those fields."""
+    import structlog
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                503,
+                json={
+                    "error": {
+                        "message": "too busy",
+                        "type": "upstream_rate_limited",
+                    }
+                },
+                headers={"retry-after": "7"},
+            )
+        )
+        with structlog.testing.capture_logs() as captured:
+            await _collect(
+                _client().chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    alias="fitt-smart",
+                    session_id="main",
+                )
+            )
+
+    failed = [e for e in captured if e.get("event") == "gateway.chat.failed"]
+    assert len(failed) == 1
+    e = failed[0]
+    assert e["failure_kind"] == "http_error"
+    assert e["upstream_status"] == 503
+    assert e["error_type"] == "upstream_rate_limited"
+    assert "too busy" in e["error_detail"]
+    assert e["retry_after"] == "7"
+
+
+async def test_chat_unauthorised_logs_structured_failure() -> None:
+    """401 from a misconfigured Bearer token surfaces with the
+    parsed gateway error type so the bot's failure stream and
+    the gateway's ``chat.completion`` event can be joined on
+    ``upstream_status=401`` without timestamp guesswork."""
+    import structlog
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                401,
+                json={"error": {"message": "bad token", "type": "invalid_auth"}},
+            )
+        )
+        with structlog.testing.capture_logs() as captured:
+            await _collect(
+                _client().chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    alias="fitt-smart",
+                    session_id="main",
+                )
+            )
+
+    failed = [e for e in captured if e.get("event") == "gateway.chat.failed"]
+    assert len(failed) == 1
+    e = failed[0]
+    assert e["upstream_status"] == 401
+    assert e["error_type"] == "invalid_auth"
+    assert "bad token" in e["error_detail"]
+
+
+async def test_chat_stream_abort_logs_structured_failure() -> None:
+    """The mid-stream ``[ERROR]`` marker is the gateway telling
+    the bot the upstream died after streaming started. The bot
+    logs ``failure_kind=stream_aborted`` to mirror the gateway's
+    own ``status=stream_failure`` ``chat.completion`` event;
+    same incident, two log files, joinable by alias +
+    session_id + timestamp."""
+    import structlog
+
+    sse = b"data: [ERROR]\n\n"
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200, content=sse, headers={"Content-Type": "text/event-stream"}
+            )
+        )
+        with structlog.testing.capture_logs() as captured:
+            await _collect(
+                _client().chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    alias="fitt-smart",
+                    session_id="main",
+                )
+            )
+
+    failed = [e for e in captured if e.get("event") == "gateway.chat.failed"]
+    assert len(failed) == 1
+    assert failed[0]["failure_kind"] == "stream_aborted"
+    assert failed[0]["alias"] == "fitt-smart"
+    assert failed[0]["session_id"] == "main"
