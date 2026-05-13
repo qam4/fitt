@@ -13,6 +13,61 @@ by Tailscale.
 
 Repository: `qam4/home-ai-cluster` (private).
 
+## Scope: what FITT is and is not
+
+**FITT is a personal AI assistant** in the MeshClaw / OpenClaw
+shape. It excels at:
+
+- Cron + proactive notifications ("monitor X, ping me when Y").
+- Read-mostly project queries ("status of training run Z",
+  "find me last week's spec").
+- Memory across sessions, learn-corrections, identity.
+- Routing hard turns to cloud, easy turns to local.
+- Multi-interface reach: phone (Telegram), browser (Open WebUI),
+  voice (Phase 8), Home Assistant (Phase 9).
+- Tool surface for short / side-effect-light tasks: send_message,
+  http_get, list_directory, grep, status checks, cron management,
+  learn_*.
+
+**FITT is not a coding agent.** Decision codified
+2026-05-13. The user uses dedicated coding tools (OpenCode,
+Cursor, Kiro, Claude Code) for editing code in an IDE with
+diff review. FITT can READ code (read_file, grep_repo,
+list_directory) but should not be the primary venue for
+write-side editing tools (write_file, edit_file,
+project_shell-with-mutation) — particularly not from
+Telegram, where the small-screen no-diff-review UX is a
+footgun. Future work should not invest in making FITT
+better at code editing; if a session is shaped like
+"FITT, edit this file for me", the correct response is
+to point at the IDE.
+
+This rules out:
+
+- Phase 6 ("FITT writes code from a spec") as originally
+  framed. If revisited, it should be reshaped to "FITT
+  hands tasks to OpenCode and monitors", not "FITT
+  writes the code itself."
+- Optimisations targeted at making the file-edit /
+  code-edit experience smoother in routine chat
+  (multi-block edits, line-range insertion, patch
+  formats, etc.). They are not on the critical path.
+- Renderer / approval-UX work specifically aimed at
+  code-edit task cards. The renderer should be good
+  enough for any tool-using turn (cron status, http_get,
+  send_message, grep results); we don't agonise over
+  edit_file failure visualisation.
+
+This rules in:
+
+- Memory v1 (RAG, cross-project recall) — the
+  assistant-shape feature, high payoff.
+- Voice (Phase 8).
+- Home Assistant integration (Phase 9) — biggest
+  potential daily-life payoff.
+- Cron / proactive-monitoring polish.
+- Hardening of what we have (Phase 10).
+
 Key documents (read in this order when context needed):
 
 - `README.md` - landing page
