@@ -245,24 +245,7 @@ class AllowedToken(BaseModel):
     # Optional client tag — drives per-client approval defaults in
     # Phase 4+. When absent, the client is treated as "webui" (least
     # trusted) so older secrets files stay safe by default.
-    #
-    # ``coding-cli`` was an older value that conflated the client
-    # interface ("which kind of caller") with the runtime mode
-    # ("router pass-through vs full FITT agent"). It still parses
-    # for backward compatibility — see :func:`Secrets._migrate_legacy`
-    # — but new tokens should use ``client: ide`` (or whichever
-    # interface the coding CLI is) and ``mode: router``.
     client: Literal["ide", "telegram", "webui", "cli", "coding-cli"] | None = None
-
-    # Optional behaviour mode. ``router`` means FITT acts as a thin
-    # alias-routing proxy: no capability block injection, no FITT
-    # tool merge into the request's ``tools`` array, no memory
-    # injection, no approval middleware. The client's own agent
-    # owns those concerns. ``agent`` (the default) runs the full
-    # FITT layering. See ``docs/coding-cli-setup.md`` for setup
-    # patterns and ``docs/observed-issues.md`` for the Aider
-    # collision that motivated router mode.
-    mode: Literal["router", "agent"] | None = None
 
 
 class TelegramSecrets(BaseModel):
@@ -314,74 +297,13 @@ class Secrets(BaseModel):
         matching token has no ``client:`` field configured. Returns
         ``"unknown"`` only if no token matches, which should never
         happen for a request that already passed auth.
-
-        Legacy tokens tagged ``client: coding-cli`` resolve to
-        ``"ide"`` here so per-client policy (the
-        ``_CLIENT_DEFAULTS`` map and ``tools.per_client``
-        operator config) sees a real interface tag. The
-        router-mode flag is reported separately via
-        :meth:`mode_for`."""
-        entry = self._lookup(token)
-        if entry is None:
-            return "unknown"
-        return _normalise_client(entry.client)
-
-    def mode_for(self, token: str) -> str:
-        """Return the runtime mode for an incoming Bearer token:
-        ``"router"`` for thin pass-through, ``"agent"`` for full
-        FITT layering. Default is ``"agent"``.
-
-        Two routes resolve to ``"router"``:
-
-        1. Token explicitly tagged ``mode: router``.
-        2. Legacy tokens tagged ``client: coding-cli``. Kept for
-           backward compatibility; the boot-time deprecation
-           warning in :func:`check_legacy_client_tags` tells the
-           operator to migrate."""
-        entry = self._lookup(token)
-        if entry is None:
-            return "agent"
-        if entry.mode is not None:
-            return entry.mode
-        if entry.client == "coding-cli":
-            return "router"
-        return "agent"
-
-    def _lookup(self, token: str) -> AllowedToken | None:
-        """Constant-time lookup for the entry matching ``token``."""
+        """
         import secrets as _secrets
 
         for entry in self.allowed_tokens:
             if _secrets.compare_digest(entry.token, token):
-                return entry
-        return None
-
-    def legacy_coding_cli_token_names(self) -> list[str]:
-        """Return the names of any tokens still using the legacy
-        ``client: coding-cli`` tag. Used at boot to emit a one-time
-        deprecation warning per token. Empty when nothing legacy
-        is configured."""
-        return [t.name for t in self.allowed_tokens if t.client == "coding-cli"]
-
-
-def _normalise_client(client: str | None) -> str:
-    """Map a token's ``client`` field onto an interface tag the
-    rest of FITT understands.
-
-    ``coding-cli`` is the legacy compound tag that conflated
-    interface and runtime mode; for per-client policy lookups it
-    resolves to ``ide``, since OpenCode / Aider / Claude Code /
-    Kiro CLI are all developer-IDE-shaped surfaces. The
-    router-mode flag rides separately on :class:`AllowedToken`'s
-    new ``mode`` field; see :meth:`Secrets.mode_for`.
-
-    ``None`` falls through to ``webui`` (least-trusted), matching
-    the fail-closed posture for untagged tokens."""
-    if client is None:
-        return "webui"
-    if client == "coding-cli":
-        return "ide"
-    return client
+                return entry.client or "webui"
+        return "unknown"
 
 
 # ----------------------------------------------------------------- loader

@@ -9,25 +9,12 @@ Token comparison uses ``secrets.compare_digest`` to prevent timing
 attacks — not strictly needed on a single-user Tailscale network, but
 correct-by-default.
 
-Two attributes ride on every authenticated request:
+Client identity
+---------------
 
-- ``request.state.client``: which interface initiated the call
-  (``ide``, ``telegram``, ``webui``, ``cli``). Drives per-client
-  approval defaults, approval routing, audit / observability tags.
-- ``request.state.mode``: ``router`` or ``agent``. Router mode
-  treats FITT as a thin alias-routing proxy — no capability block
-  injection, no FITT tool merge, no memory injection, no approval
-  middleware. Agent mode (the default) runs the full FITT
-  layering. Router mode exists for clients that own their own
-  agent loop (Aider, OpenCode, Claude Code, Cursor agent mode,
-  Codex, Kiro CLI). See ``docs/coding-cli-setup.md`` for setup
-  patterns and ``docs/observed-issues.md`` for the Aider
-  collision that motivated it.
-
-Client identity resolution
---------------------------
-
-The ``client`` tag can come from two places:
+Downstream handlers read ``request.state.client`` (one of ``ide``,
+``telegram``, ``webui``, ``cli``) to route approvals and pick
+per-client tool policies. The tag can come from two places:
 
 1. **`X-FITT-Client` request header** — the self-assertion the
    client sends. The Telegram bot always sends
@@ -42,24 +29,15 @@ Resolution order, in priority:
   a compromised token can't silently misclaim.
 * If only the token is tagged, use that.
 * If neither is set, fall back to ``webui`` (least-trusted) with
-  a logged warning.
+  a logged warning — historical behaviour preserved for
+  backward compatibility, but loud enough that operators notice.
 
-Mode resolution
----------------
-
-The ``mode`` field rides on the token only — it's a property of
-"how this principal wants FITT to behave," set by the operator
-when the token is issued. There's no header equivalent; a
-request can't request router mode without an operator-issued
-router-mode token. Two routes resolve to ``router``:
-
-1. Token explicitly tagged ``mode: router`` (the recommended
-   shape going forward).
-2. Legacy tokens tagged ``client: coding-cli``. Kept for
-   backward compatibility with operator setups that predate the
-   ``mode`` field; resolves to ``client: ide, mode: router``.
-   The boot-time deprecation warning in :func:`AuthMiddleware`
-   tells the operator to migrate.
+Background on the principle: untagged tokens silently routing to
+``webui`` was the root cause of a real bug where the Telegram bot
+couldn't see approvals meant for it — the bot was polling
+``?client=telegram`` but its requests came in tagged ``webui``.
+We now support the bot declaring itself via header so a user
+doesn't have to remember to tag tokens.
 """
 
 from __future__ import annotations
@@ -78,30 +56,33 @@ _log = logging.getLogger(__name__)
 
 _EXEMPT_PREFIXES: tuple[str, ...] = ("/health", "/ready", "/v1/models")
 
-_VALID_CLIENTS: frozenset[str] = frozenset({"ide", "telegram", "webui", "cli"})
-"""Accepted values for the ``X-FITT-Client`` header. The
-``client:`` field on a token also accepts ``coding-cli`` as a
-deprecated synonym for ``ide`` + ``mode: router``; see
-:meth:`gateway.config.Secrets.client_for` and
-:meth:`gateway.config.Secrets.mode_for`. The deprecated value
-is NOT accepted on the header — operators who want router
-mode declare it via the token, not the request."""
+_VALID_CLIENTS: frozenset[str] = frozenset({"ide", "telegram", "webui", "cli", "coding-cli"})
+"""Accepted values for the ``X-FITT-Client`` header and the
+``client:`` field on tokens. Kept as a module constant so the
+validation list doesn't drift between the config schema (which uses
+``Literal[...]``) and the runtime check here.
+
+``coding-cli`` (added 2026-05-11) marks clients that own their
+own agent loop — Aider, Claude Code, Cursor's agent mode, Codex,
+Kiro CLI, any coding CLI that expects a plain OpenAI-compatible
+endpoint. The chat handler treats these as router-mode: FITT
+resolves aliases, dispatches, tracks cost, audits; it does NOT
+inject the capability block, does NOT merge FITT tools into the
+request's ``tools`` array, does NOT inject memory, and does NOT
+run the approval middleware. The client's own agent owns those
+concerns. See :func:`is_router_mode_client` and the Aider-
+collision entry in docs/observed-issues.md."""
 
 
-def is_router_mode_request(request: Request) -> bool:
-    """Return ``True`` when this request should get a thin-router
+def is_router_mode_client(client: str) -> bool:
+    """Return ``True`` when ``client`` should get a thin-router
     pass-through rather than the full FITT agent layering.
 
-    Reads ``request.state.mode`` populated by
-    :class:`AuthMiddleware`. Single source of truth so call
-    sites in chat.py and elsewhere don't reproduce the
-    "is this a coding-agent request?" check by hand.
-
-    Defaults to ``False`` if ``mode`` isn't set — defensive
-    posture for a hypothetical caller path that bypasses auth
-    middleware (tests that build a request fixture directly,
-    say). The agent path is the safe default."""
-    return getattr(request.state, "mode", "agent") == "router"
+    Single source of truth: any call site that wants to branch
+    on "is this a coding-agent client?" reads this function,
+    so a future client tag added for the same shape doesn't
+    require hunting down parallel equality checks."""
+    return client == "coding-cli"
 
 
 def _unauthorized(message: str) -> JSONResponse:
@@ -137,78 +118,45 @@ def _bad_request(message: str) -> JSONResponse:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Enforce Bearer-token auth on non-exempt paths.
 
-    On success, stores two values on ``request.state``:
-
-    * ``client``: resolved interface tag (header / token tag /
-      fallback). See module docstring for resolution rules.
-    * ``mode``: ``"router"`` or ``"agent"``. Read from the
-      matched token via :meth:`Secrets.mode_for`.
-
-    Downstream handlers consult these for approval routing,
-    per-client policies, and the router-mode pass-through
-    branch.
+    On success, stores the resolved client tag on
+    ``request.state.client`` for downstream handlers to consult
+    (approval routing, per-client policies). See module docstring
+    for the header-vs-token resolution rules.
     """
 
     def __init__(self, app, config: Config) -> None:  # type: ignore[no-untyped-def]
         super().__init__(app)
-        # Store (token, client_tag, mode) so the dispatch loop
-        # doesn't need to re-resolve from the secrets object on
-        # every request.
-        self._allowed: list[tuple[str, str | None, str]] = []
-        if config.secrets is not None:
-            for entry in config.secrets.allowed_tokens:
-                client_tag = entry.client
-                # Legacy compat: coding-cli token resolves to
-                # client=ide. The mode comes from the dedicated
-                # field, falling back to "router" if the legacy
-                # tag is what brought them here.
-                if client_tag == "coding-cli":
-                    resolved_client_tag: str | None = "ide"
-                    resolved_mode = entry.mode or "router"
-                else:
-                    resolved_client_tag = client_tag
-                    resolved_mode = entry.mode or "agent"
-                self._allowed.append((entry.token, resolved_client_tag, resolved_mode))
-
+        # Store (token, optional_tag) so the header path can still
+        # fall back to the tag when no header is sent.
+        self._allowed: list[tuple[str, str | None]] = [
+            (t.token, t.client) for t in (config.secrets.allowed_tokens if config.secrets else [])
+        ]
         # Warn once at boot if any token is untagged. Untagged
         # tokens default to "webui" (least-trusted) at request
         # time, which is the safe choice but often not what the
-        # operator meant.
-        if config.secrets is not None:
-            for entry in config.secrets.allowed_tokens:
-                if entry.client is None:
-                    _log.warning(
-                        "auth.token_without_client_tag",
-                        extra={
-                            "token_name": entry.name,
-                            "hint": (
-                                "Add a `client:` field (ide, "
-                                "telegram, webui, or cli) to this "
-                                "token in secrets.yaml. Clients "
-                                "that send the X-FITT-Client "
-                                "header are unaffected; this only "
-                                "matters for clients that don't."
-                            ),
-                        },
-                    )
-
-            # Deprecation warning for any legacy ``coding-cli``
-            # tags. Don't break the boot — the runtime
-            # transparently maps the value to
-            # ``client: ide, mode: router`` — but tell the
-            # operator how to migrate.
-            legacy = config.secrets.legacy_coding_cli_token_names()
-            for name in legacy:
+        # operator meant. Typical symptom: the Telegram bot sends
+        # chat requests that end up tagged "webui" and can't see
+        # its own approvals. The X-FITT-Client header fixes this
+        # for well-behaved clients; this warning nudges operators
+        # to add the tag explicitly if they want the config to be
+        # self-describing.
+        for i, (_, tag) in enumerate(self._allowed):
+            if tag is None:
+                name = (
+                    config.secrets.allowed_tokens[i].name
+                    if config.secrets and config.secrets.allowed_tokens
+                    else "?"
+                )
                 _log.warning(
-                    "auth.coding_cli_tag_deprecated",
+                    "auth.token_without_client_tag",
                     extra={
                         "token_name": name,
                         "hint": (
-                            "`client: coding-cli` is deprecated. "
-                            "Replace with `client: ide` + "
-                            "`mode: router` in secrets.yaml. The "
-                            "old tag still works but will be "
-                            "removed in a future release."
+                            "Add a `client:` field (ide, telegram, webui, "
+                            "or cli) to this token in secrets.yaml. "
+                            "Clients that send the X-FITT-Client header "
+                            "are unaffected; this only matters for "
+                            "clients that don't."
                         ),
                     },
                 )
@@ -216,25 +164,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
     def _is_exempt(self, path: str) -> bool:
         return any(path == p or path.startswith(p + "/") for p in _EXEMPT_PREFIXES)
 
-    def _match(self, header: str | None) -> tuple[bool, str | None, str]:
-        """Return ``(ok, token_client_tag, mode)``. ``ok`` is
-        whether a bearer token matched; ``token_client_tag`` is
-        its resolved client tag (legacy ``coding-cli`` already
-        mapped to ``ide``) or ``None`` if untagged; ``mode`` is
-        the token's runtime mode (``"router"`` or ``"agent"``)
-        with the legacy default applied for ``coding-cli``."""
+    def _match(self, header: str | None) -> tuple[bool, str | None]:
+        """Return ``(ok, token_tag)``. ``ok`` is whether a bearer
+        token matched; ``token_tag`` is its ``client:`` tag or
+        ``None`` if the token was untagged."""
         if not header:
-            return False, None, "agent"
+            return False, None
         parts = header.split(maxsplit=1)
         if len(parts) != 2 or parts[0].lower() != "bearer":
-            return False, None, "agent"
+            return False, None
         provided = parts[1].strip()
         if not provided:
-            return False, None, "agent"
-        for allowed, client_tag, mode in self._allowed:
+            return False, None
+        for allowed, tag in self._allowed:
             if secrets.compare_digest(provided, allowed):
-                return True, client_tag, mode
-        return False, None, "agent"
+                return True, tag
+        return False, None
 
     async def dispatch(
         self,
@@ -242,11 +187,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         if self._is_exempt(request.url.path):
-            # No client / mode on exempt paths — those shouldn't
-            # be making tool-dispatching calls.
+            # No client tag on exempt paths — those shouldn't be
+            # making tool-dispatching calls.
             return await call_next(request)
 
-        ok, token_tag, mode = self._match(request.headers.get("authorization"))
+        ok, token_tag = self._match(request.headers.get("authorization"))
         if not ok:
             return _unauthorized("Missing or invalid Bearer token.")
 
@@ -269,7 +214,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         request.state.client = effective
-        request.state.mode = mode
         return await call_next(request)
 
 
@@ -288,9 +232,8 @@ class _MismatchError:
 
 
 def _resolve_client(*, token_tag: str | None, header_tag: str | None) -> str | _MismatchError:
-    """Combine the token's resolved ``client:`` tag and the
-    request's ``X-FITT-Client`` header into one effective client
-    identity.
+    """Combine the token's ``client:`` tag and the request's
+    ``X-FITT-Client`` header into one effective client identity.
 
     Precedence:
 

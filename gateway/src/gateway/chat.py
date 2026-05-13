@@ -34,7 +34,7 @@ from .agent_loop import (
     response_to_dict,
     run_agent_loop,
 )
-from .auth import is_router_mode_request
+from .auth import is_router_mode_client
 from .capabilities import build_capability_block
 from .config import Config
 from .cost import estimate_cost
@@ -810,7 +810,8 @@ async def chat_completions(request: Request) -> Response:
     session_id = resolve_session_id(request, session_registry)
     started = time.perf_counter()
 
-    router_mode = is_router_mode_request(request)
+    client = getattr(request.state, "client", "unknown")
+    router_mode = is_router_mode_client(client)
 
     # ---- memory load + injection ---------------------------------
     # Router-mode clients (Aider, Claude Code, Cursor, ...) own

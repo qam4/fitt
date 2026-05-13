@@ -22,12 +22,6 @@ from gateway.config import (
 
 PERSONAL_TOKEN = "TEST_TOKEN_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 WRONG_TOKEN = "NOT_THE_RIGHT_TOKEN_XXXXXXXXXXXXXXXXXXXXXXXX"
-ROUTER_MODE_TOKEN = "TEST_ROUTER_TOKEN_BBBBBBBBBBBBBBBBBBBBBBBBB"
-"""A second tagged token wired into the test config for tests
-exercising router-mode behaviour (Phase 4.8 split of client
-interface vs. runtime mode). Carries
-``client: ide, mode: router`` — i.e. the recommended shape
-for an OpenCode / Aider / Claude Code / Kiro CLI setup."""
 
 
 def build_test_config(tmp_path: Path, *, memory_enabled: bool = False) -> Config:
@@ -78,15 +72,7 @@ def build_test_config(tmp_path: Path, *, memory_enabled: bool = False) -> Config
         ),
     )
     cfg.secrets = Secrets(
-        allowed_tokens=[
-            AllowedToken(name="personal", token=PERSONAL_TOKEN),
-            AllowedToken(
-                name="opencode",
-                token=ROUTER_MODE_TOKEN,
-                client="ide",
-                mode="router",
-            ),
-        ],
+        allowed_tokens=[AllowedToken(name="personal", token=PERSONAL_TOKEN)],
         openrouter_api_key="sk-or-test-xxxxx",
     )
     return cfg
