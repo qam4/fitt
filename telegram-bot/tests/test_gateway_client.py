@@ -343,3 +343,75 @@ async def test_chat_stream_abort_logs_structured_failure() -> None:
     assert failed[0]["failure_kind"] == "stream_aborted"
     assert failed[0]["alias"] == "fitt-smart"
     assert failed[0]["session_id"] == "main"
+
+
+# ----------------------------------------------------- request_id propagation
+
+
+async def test_chat_sends_x_request_id_header() -> None:
+    """Every chat call generates a UUID4 ``X-Request-Id`` and
+    sends it on the wire. The gateway side mirrors it back as
+    a response header and uses it as the ``request_id`` field
+    in every ``chat.completion`` log event written while the
+    request runs, so an operator grepping ``telegram-bot.log``
+    and ``gateway.log`` for the same id sees the entire turn
+    end-to-end."""
+    captured: dict[str, object] = {}
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        captured["x-request-id"] = request.headers.get("x-request-id")
+        return httpx.Response(
+            200,
+            content=b"data: [DONE]\n\n",
+            headers={"Content-Type": "text/event-stream"},
+        )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(side_effect=_record)
+        async for _ in _client().chat(
+            messages=[{"role": "user", "content": "hi"}],
+            alias="fitt-smart",
+            session_id="main",
+        ):
+            pass
+
+    rid = captured["x-request-id"]
+    # 32 hex chars (uuid4().hex) — never None, never empty.
+    assert isinstance(rid, str)
+    assert len(rid) == 32
+    assert all(c in "0123456789abcdef" for c in rid)
+
+
+async def test_chat_failure_log_carries_request_id() -> None:
+    """The shared ``request_id`` is the join key that lets an
+    operator pull a single user-visible warning out of
+    ``telegram-bot.log`` and find every gateway-side log row
+    for the same turn. This test pins that the structured
+    failure event carries the same id sent on the wire."""
+    import structlog
+
+    captured_request: dict[str, object] = {}
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        captured_request["x-request-id"] = request.headers.get("x-request-id")
+        return httpx.Response(
+            503,
+            json={"error": {"message": "queue full", "type": "upstream_rate_limited"}},
+            headers={"retry-after": "5"},
+        )
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(side_effect=_record)
+        with structlog.testing.capture_logs() as captured_logs:
+            await _collect(
+                _client().chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    alias="fitt-smart",
+                    session_id="main",
+                )
+            )
+
+    failed = [e for e in captured_logs if e.get("event") == "gateway.chat.failed"]
+    assert len(failed) == 1
+    # Same id on the wire and in the log row.
+    assert failed[0]["request_id"] == captured_request["x-request-id"]

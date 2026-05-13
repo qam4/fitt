@@ -207,7 +207,21 @@ class GatewayClient:
 
         Yields successive chunks of assistant text. On error, yields
         a single ``⚠️`` message and stops.
+
+        Generates a fresh ``X-Request-Id`` per chat call. The
+        gateway echoes it back as a response header and uses it
+        as the ``request_id`` field in every structured log
+        event written while the request runs. That gives an
+        operator a single id that joins ``telegram-bot.log``
+        (this file's ``gateway.chat.failed`` rows) with
+        ``gateway.log`` (chat.completion + agent_loop +
+        tool-call rows) — invaluable for chasing a "user saw
+        ⚠️ — what happened?" thread across both files.
         """
+        import uuid
+
+        request_id = uuid.uuid4().hex
+
         body: dict[str, Any] = {
             "model": alias,
             "messages": messages,
@@ -220,7 +234,11 @@ class GatewayClient:
             # so the bot's existing streaming-consumer code keeps
             # working.
             body["tool_choice"] = "auto"
-        headers = {**self._headers, "X-FITT-Session": session_id}
+        headers = {
+            **self._headers,
+            "X-FITT-Session": session_id,
+            "X-Request-Id": request_id,
+        }
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
@@ -237,11 +255,15 @@ class GatewayClient:
                             payload,
                             alias=alias,
                             session_id=session_id,
+                            request_id=request_id,
                         ):
                             yield msg
                         return
                     async for delta in self._parse_sse(
-                        response, alias=alias, session_id=session_id
+                        response,
+                        alias=alias,
+                        session_id=session_id,
+                        request_id=request_id,
                     ):
                         yield delta
             except httpx.RequestError as e:
@@ -256,6 +278,7 @@ class GatewayClient:
                 # ``no_backend_available`` event.
                 _log.warning(
                     "gateway.chat.failed",
+                    request_id=request_id,
                     alias=alias,
                     session_id=session_id,
                     failure_kind="transport",
@@ -272,6 +295,7 @@ class GatewayClient:
         *,
         alias: str,
         session_id: str,
+        request_id: str,
     ) -> AsyncIterator[str]:
         async for line in response.aiter_lines():
             if not line or not line.startswith("data: "):
@@ -287,6 +311,7 @@ class GatewayClient:
                 # event.
                 _log.warning(
                     "gateway.chat.failed",
+                    request_id=request_id,
                     alias=alias,
                     session_id=session_id,
                     failure_kind="stream_aborted",
@@ -308,6 +333,7 @@ class GatewayClient:
         *,
         alias: str,
         session_id: str,
+        request_id: str,
     ) -> AsyncIterator[str]:
         try:
             parsed = json.loads(body.decode("utf-8", errors="replace"))
@@ -325,9 +351,11 @@ class GatewayClient:
         # ``error.type`` so the bot's failure stream can be
         # joined with the gateway's ``chat.completion`` event
         # by ``upstream_status``+``error_type`` rather than
-        # only by timestamp.
+        # only by timestamp. The shared ``request_id`` makes
+        # joining trivial: same id = same turn.
         _log.warning(
             "gateway.chat.failed",
+            request_id=request_id,
             alias=alias,
             session_id=session_id,
             failure_kind="http_error",

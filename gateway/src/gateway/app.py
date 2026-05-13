@@ -22,6 +22,7 @@ from .errors import (
 )
 from .logging_config import configure_logging, get_logger
 from .memory import MemoryStore
+from .request_id import RequestIdMiddleware
 from .sessions import SessionRegistry
 
 _log = get_logger("fitt.gateway.app")
@@ -516,8 +517,15 @@ def create_app(config: Config) -> FastAPI:
                     },
                 )
 
-    # Middleware registration order matters: auth runs first (outermost).
+    # Middleware registration order matters: in Starlette,
+    # the LAST middleware added wraps the others (outermost).
+    # Auth runs *inside* the request-id wrapper so that every
+    # request — even ones rejected with 401 — appears in
+    # structured logs under a request_id; that's the whole
+    # point of the wrapper, otherwise auth-rejected requests
+    # disappear from the cross-log correlation story.
     app.add_middleware(AuthMiddleware, config=config)
+    app.add_middleware(RequestIdMiddleware)
 
     # Domain-error handlers. Must map to the HTTP status codes the
     # chat endpoint's documented contract specifies.
