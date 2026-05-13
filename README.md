@@ -14,7 +14,11 @@ A private project to build an always-on personal AI assistant that:
 
 ## Status
 
-Phase 0 complete, Phase 1 in at-home verification.
+Phase 4.8 in active use - gateway, alias router, memory v0,
+Telegram bot, agentic tools (MCP + inline), approval flow,
+cron, capability-gap log, audit log, Open WebUI integration
+all shipped. See [`FITT_ROADMAP.md`](./FITT_ROADMAP.md) for
+what's next and what's been deferred.
 
 ## Docs
 
