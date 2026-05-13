@@ -169,7 +169,7 @@ memory:
 #
 # tools:
 #   # Global knobs:
-#   approval_timeout_secs: 45   # how long to wait for a tap
+#   approval_timeout_secs: 600   # 10 min default — see below
 #
 #   # Phase 4.5 Task 5.5: detached delivery. When a tool's
 #   # approval is still pending at this many seconds, the HTTP
@@ -180,8 +180,8 @@ memory:
 #   # finishes — you see the answer in Telegram or `fitt inbox`.
 #   # Unset (default) = never detach, same as pre-4.5 behaviour.
 #   # Set below approval_timeout_secs to activate; typical pair:
-#   # approval_detach_threshold_secs: 45   +   approval_timeout_secs: 7200
-#   approval_detach_threshold_secs: 45
+#   # approval_detach_threshold_secs: 30   +   approval_timeout_secs: 7200
+#   approval_detach_threshold_secs: 30
 #
 #   # Per-tool defaults (can be wildcards for MCP tools):
 #   write_file:

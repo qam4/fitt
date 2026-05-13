@@ -42,7 +42,14 @@ def _ts(day: date, hour: int = 12) -> float:
 
 
 def _one_event(log: TurnLog, session_key: str) -> TurnEvent:
-    got = log.read(session_key, now=_ts(date(2026, 5, 12), 23))
+    # Read using "now" = current real time. record_* helpers
+    # write events with time.time() so the reader's window
+    # has to include today. Originally hardcoded to
+    # 2026-05-12; that bit-rotted on the next day. Use the
+    # actual clock so the test stays valid as time passes.
+    import time as _time
+
+    got = log.read(session_key, now=_time.time())
     assert len(got) == 1, f"expected exactly one event, got {got}"
     return got[0]
 

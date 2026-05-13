@@ -15,11 +15,11 @@ from typing import Any
 import pytest
 
 from gateway.app import create_app
+from gateway.approval import ApprovalMiddleware
 from gateway.cron import CronJob, CronSchedule
 from gateway.cron_runner import CronRunner, _AutoApproveWrapper
 from gateway.tools import (
     ApprovalBucket,
-    ApprovalDecision,
     Tool,
     ToolContext,
     ToolResult,
@@ -145,42 +145,115 @@ async def test_fire_upstream_error_emits_failed(app: Any, monkeypatch: pytest.Mo
 # --------------------------------------------------------------- auto-approve
 
 
-async def test_auto_approve_wrapper_flips_rejected_to_auto() -> None:
-    """The wrapper replaces ask/rejected outcomes with auto so
-    a cron can run unattended. Deny-list and block stay intact."""
+async def test_auto_approve_wrapper_collapses_ask_buckets_to_auto() -> None:
+    """The wrapper resolves the bucket via the registry (not by
+    awaiting the inner middleware) and translates ASK /
+    TRUST_SESSION / YOLO directly to AUTO so a cron firing
+    doesn't block on a tap that will never come.
 
-    class _Inner:
-        def __init__(self, decision: ApprovalDecision) -> None:
-            self.decision = decision
+    Deny-list and BLOCK still kill the call. Reshaped 2026-05-13
+    after the prior implementation was found to await
+    ``inner.check`` — which on an ASK bucket blocks for the
+    full ``approval_timeout_secs``, locking cron firings for
+    the entire timeout per ASK call. Inner-stub-based tests
+    no longer apply; we test bucket→decision translation
+    directly with a real registry."""
+    from gateway.tools import ApprovalBucket as Bucket
+    from gateway.tools.registry import ToolPolicy, ToolRegistry
 
-        async def check(self, *_args: Any, **_kwargs: Any) -> ApprovalDecision:
-            return self.decision
+    async def _no_impl(_args: dict[str, Any], _ctx: ToolContext) -> ToolResult:
+        return ToolResult.ok("ran")
 
-    # An ask-bucket decision that the inner middleware timed out
-    # on → the wrapper should flip it to auto.
-    timed_out = _AutoApproveWrapper(_Inner(ApprovalDecision.timeout("no user")))
-    decision = await timed_out.check(None, {}, None)  # type: ignore[arg-type]
-    assert decision.reason == "auto"
+    def _mk(name: str, default: Bucket) -> Tool:
+        return Tool(
+            name=name,
+            description="test",
+            schema={"type": "object", "properties": {}, "additionalProperties": False},
+            callable=_no_impl,
+            default_bucket=default,
+        )
 
-    # Rejected decisions are preserved (user or policy explicitly said no).
-    rejected = _AutoApproveWrapper(_Inner(ApprovalDecision.rejected("user tapped reject")))
-    decision = await rejected.check(None, {}, None)  # type: ignore[arg-type]
-    assert decision.reason == "rejected"
+    reg = ToolRegistry(ToolPolicy())
+    for tool in (
+        _mk("auto_tool", Bucket.AUTO),
+        _mk("ask_tool", Bucket.ASK),
+        _mk("trust_tool", Bucket.TRUST_SESSION),
+        _mk("yolo_tool", Bucket.YOLO),
+        _mk("blocked_tool", Bucket.BLOCK),
+    ):
+        reg.register(tool)
 
-    # Deny list stays deny list.
-    deny = _AutoApproveWrapper(_Inner(ApprovalDecision.denied_deny_list("rm -rf /")))
-    decision = await deny.check(None, {}, None)  # type: ignore[arg-type]
-    assert decision.reason == "denied_deny_list"
+    inner = ApprovalMiddleware(reg)
+    wrapper = _AutoApproveWrapper(inner)
 
-    # Block stays block.
-    blocked = _AutoApproveWrapper(_Inner(ApprovalDecision.blocked("policy")))
-    decision = await blocked.check(None, {}, None)  # type: ignore[arg-type]
-    assert decision.reason == "blocked"
+    class _DummyCtx:
+        client = "cron"
+        session_key = "main"
 
-    # Auto passes through.
-    auto = _AutoApproveWrapper(_Inner(ApprovalDecision.auto("read")))
-    decision = await auto.check(None, {}, None)  # type: ignore[arg-type]
-    assert decision.reason == "auto"
+    ctx: Any = _DummyCtx()
+
+    # AUTO passes through.
+    d = await wrapper.check(reg.lookup("auto_tool"), {}, ctx)
+    assert d.reason == "auto"
+
+    # ASK collapses to auto under cron auto-mode.
+    d = await wrapper.check(reg.lookup("ask_tool"), {}, ctx)
+    assert d.execute is True
+    assert d.reason == "auto"
+
+    # TRUST_SESSION same.
+    d = await wrapper.check(reg.lookup("trust_tool"), {}, ctx)
+    assert d.execute is True
+    assert d.reason == "auto"
+
+    # YOLO same — collapses to auto.
+    d = await wrapper.check(reg.lookup("yolo_tool"), {}, ctx)
+    assert d.execute is True
+    assert d.reason == "auto"
+
+    # BLOCK is preserved — auto-mode doesn't override an
+    # explicit operator block.
+    d = await wrapper.check(reg.lookup("blocked_tool"), {}, ctx)
+    assert d.execute is False
+    assert d.reason == "blocked"
+
+
+async def test_auto_approve_wrapper_preserves_deny_list() -> None:
+    """A destructive shell command short-circuits before bucket
+    resolution, even under cron auto-mode."""
+    from gateway.tools import ApprovalBucket as Bucket
+    from gateway.tools.registry import ToolPolicy, ToolRegistry
+
+    async def _no_impl(_args: dict[str, Any], _ctx: ToolContext) -> ToolResult:
+        return ToolResult.ok("ran")
+
+    reg = ToolRegistry(ToolPolicy())
+    reg.register(
+        Tool(
+            name="project_shell",
+            description="x",
+            schema={"type": "object", "properties": {}, "additionalProperties": False},
+            callable=_no_impl,
+            default_bucket=Bucket.AUTO,
+            shell_command_for=lambda args: args.get("command", ""),
+        )
+    )
+
+    inner = ApprovalMiddleware(reg)
+    wrapper = _AutoApproveWrapper(inner)
+
+    class _DummyCtx:
+        client = "cron"
+        session_key = "main"
+
+    ctx: Any = _DummyCtx()
+    d = await wrapper.check(
+        reg.lookup("project_shell"),
+        {"command": "rm -rf /"},
+        ctx,
+    )
+    assert d.execute is False
+    assert d.reason == "denied_deny_list"
 
 
 async def test_fire_with_approval_mode_auto_runs_an_ask_tool(

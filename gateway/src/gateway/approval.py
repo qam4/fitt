@@ -67,23 +67,46 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
-_DEFAULT_APPROVAL_TIMEOUT_S = 45.0
-"""45 seconds.
+_DEFAULT_APPROVAL_TIMEOUT_S = 600.0
+"""10 minutes.
 
-Short because the gateway's HTTP chat request holds its TCP
-connection open for this long waiting on the approval future,
-and most HTTP clients (including the Telegram bot) cap at
-60-120s. If we wait two hours for the tap, the bot's httpx
-client gives up at ~60s and the user sees "gateway unreachable"
-even though the gateway is fine.
+Long enough for a phone tap from a locked screen, short
+enough that a forgotten approval doesn't sit forever.
 
-Two-hour workflows belong in Phase 4.5 (event log + proactive
-push) so the chat turn can return immediately while the tool
-result arrives asynchronously as a new Telegram message.
+Why not infinite: pending approvals live in an in-memory
+dict and don't survive a gateway restart. Some bound aligns
+disk + memory state — if the operator restarts after 12
+hours, they're not in a worse place than if they hadn't.
 
-Override via ``tools.approval_timeout_secs`` in config.yaml if
-you're testing end-to-end latency or running a client with a
-longer HTTP timeout."""
+Why not the prior 45s: 45s was sized to fit inside the bot's
+HTTP client timeout (~60s) so the chat request didn't return
+"gateway unreachable" while waiting on a tap. Detached
+delivery (Phase 4.5 Task 5.5,
+``approval_detach_threshold_secs``) decoupled this — when
+detach is enabled the chat request returns a placeholder
+fast and the tool work continues in the background, so
+``approval_timeout_secs`` no longer needs to fit inside the
+HTTP timeout. Without detach enabled, a 10-minute timeout
+will still expose the HTTP client timeout (the request
+returns "gateway unreachable" if the user takes longer than
+~60s to tap, even though the gateway is fine and the
+approval is still pending).
+
+Recommended pairs:
+
+* Detach enabled (best phone UX):
+  ``approval_detach_threshold_secs: 30`` +
+  ``approval_timeout_secs: 7200``  (2h)
+* Detach disabled (today's default):
+  ``approval_timeout_secs: 600``  (10 min)
+  — accept the "gateway unreachable" message in the bot
+  if you take more than 60s; the underlying approval is
+  still valid until 10min, so a tap within that window
+  resolves correctly even though the bot already
+  surfaced the disconnect.
+
+Override via ``tools.approval_timeout_secs`` in
+config.yaml."""
 
 
 DecisionLiteral = Literal["approve", "reject", "trust_session"]

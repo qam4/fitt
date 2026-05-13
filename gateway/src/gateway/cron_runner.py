@@ -35,7 +35,7 @@ from .cron import CronJob
 from .events import EventLog
 from .events import new_entry as new_event
 from .router import AliasRouter
-from .tools import ApprovalDecision, Tool, ToolContext, ToolRegistry
+from .tools import ApprovalBucket, ApprovalDecision, Tool, ToolContext, ToolRegistry
 
 if TYPE_CHECKING:
     from .config import Config
@@ -417,7 +417,19 @@ class _AutoApproveWrapper:
 
     AUTO / BLOCK / YOLO fall through unchanged. Deny-list hits,
     which the real middleware resolves before bucket lookup,
-    are preserved — we don't second-guess the deny list."""
+    are preserved — we don't second-guess the deny list.
+
+    Implementation note: we resolve the bucket up front via the
+    registry rather than calling ``self._inner.check`` and
+    inspecting the result, because ``inner.check`` on an ASK-
+    bucket tool blocks for the full ``approval_timeout_secs``
+    waiting on a human tap that will never arrive. With the
+    historical 45s default that was annoying but bounded; with
+    the post-2026-05-13 10-minute default it would lock the
+    cron firing for ten minutes per ASK call. The same
+    short-circuit was needed before — the wrapper was just
+    accidentally working because nothing exercised it past the
+    timeout."""
 
     def __init__(self, inner: Any) -> None:
         self._inner = inner
@@ -425,24 +437,46 @@ class _AutoApproveWrapper:
     async def check(
         self, tool: Tool, args: dict[str, Any], context: ToolContext
     ) -> ApprovalDecision:
-        decision: ApprovalDecision = await self._inner.check(tool, args, context)
-        if decision.reason in ("rejected", "denied_deny_list", "blocked"):
-            # Preserve the "no" — deny list and block are
-            # policy-level kill switches, not prompt-to-user
-            # rungs.
-            return decision
-        # If the user's policy would have prompted (i.e. the
-        # bucket was ASK / TRUST_SESSION before the middleware
-        # decided), the inner .check returns reason="approved"
-        # or reason="timeout" depending on the user response.
-        # We can't see the bucket from the decision alone, so
-        # the simpler rule: if the decision didn't already
-        # execute, flip it to auto.
-        if not decision.execute:
-            return ApprovalDecision.auto(
-                detail=f"cron auto-approve (would have been {decision.reason})"
+        # Mirror the deny-list short-circuit so destructive
+        # commands are still blocked even under auto-mode.
+        # Same logic as ApprovalMiddleware.check: if the tool
+        # surfaces a shell command and the deny list matches,
+        # reject. Doesn't enter the inner check at all.
+        from .tools import deny_list
+
+        if tool.shell_command_for is not None:
+            command_str = tool.shell_command_for(args)
+            if command_str:
+                hit = deny_list.check(command_str)
+                if hit is not None:
+                    return ApprovalDecision.denied_deny_list(
+                        detail=(
+                            f"Tool {tool.name!r} blocked by the deny list "
+                            f"under cron auto-mode: {hit.label}."
+                        )
+                    )
+
+        # Resolve the bucket without entering the inner's wait
+        # path. We rely on the registry's policy ladder (the
+        # same ladder ApprovalMiddleware.check uses) to figure
+        # out what bucket this tool sits in, then translate
+        # ASK / TRUST_SESSION / YOLO to AUTO directly.
+        bucket = self._inner._registry.resolve_bucket(
+            tool, client=context.client, session_key=context.session_key
+        )
+        if bucket is ApprovalBucket.AUTO:
+            return ApprovalDecision.auto()
+        if bucket is ApprovalBucket.BLOCK:
+            return ApprovalDecision.blocked(
+                detail=(
+                    f"Tool {tool.name!r} is blocked by policy for "
+                    f"client {context.client!r} and approval_mode=auto "
+                    f"does not override block."
+                )
             )
-        return decision
+        # ASK / TRUST_SESSION / YOLO under cron auto-mode all
+        # collapse to AUTO. The tool runs without prompting.
+        return ApprovalDecision.auto(detail=f"cron auto-approve (was {bucket.value})")
 
     # Pass-through surface: request_approval / resolve_approval
     # don't exist in this wrapper because a cron never awaits a

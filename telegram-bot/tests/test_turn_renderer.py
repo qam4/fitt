@@ -221,30 +221,71 @@ async def test_tool_call_executed_rewrites_planned_line() -> None:
     assert edits[0].message_id == r.state.stream_message_id
 
 
-async def test_tool_call_executed_failure_renders_error() -> None:
+async def test_tool_call_executed_failure_uses_gerund_not_past_tense() -> None:
+    """A failed tool call should render with the gerund verb
+    ("Reading"/"Editing"/"Writing"), not past tense ("Read"/
+    "Edited"/"Wrote"). Past tense lies: "Edited — old_str
+    not found" reads as "the file was edited and additionally
+    we noticed old_str didn't match", which is wrong — the
+    edit didn't happen. Pinned 2026-05-13 after a live
+    qwen3-instruct trajectory misled the operator into
+    thinking edits had landed when they hadn't."""
     bot = _FakeBot()
     r = _make_renderer(bot, _Clock())
     await r.handle_event(
         {
             "kind": "tool_call_planned",
-            "meta": {"tool_name": "read_file", "args": {"path": "x"}, "call_id": "c1"},
+            "meta": {"tool_name": "edit_file", "args": {"path": "README.md"}, "call_id": "c1"},
         }
     )
     await r.handle_event(
         {
             "kind": "tool_call_executed",
             "meta": {
-                "tool_name": "read_file",
+                "tool_name": "edit_file",
                 "call_id": "c1",
                 "ok": False,
-                "duration_ms": 3,
-                "result_summary": "file not found",
+                "duration_ms": 5,
+                "result_summary": "old_str not found in README.md",
             },
         }
     )
     last = bot.edits()[-1]
     assert "❌" in last.text
-    assert "file not found" in last.text
+    assert "Editing" in last.text  # gerund
+    assert "Edited" not in last.text  # not past tense
+    assert "old_str not found" in last.text
+
+
+async def test_tool_call_executed_success_uses_past_tense() -> None:
+    """A successful tool call uses past tense — the tool ran,
+    the action happened. Pinning the contrast with the
+    failure path so the verb-tense logic doesn't accidentally
+    invert."""
+    bot = _FakeBot()
+    r = _make_renderer(bot, _Clock())
+    await r.handle_event(
+        {
+            "kind": "tool_call_planned",
+            "meta": {"tool_name": "edit_file", "args": {"path": "README.md"}, "call_id": "c1"},
+        }
+    )
+    await r.handle_event(
+        {
+            "kind": "tool_call_executed",
+            "meta": {
+                "tool_name": "edit_file",
+                "call_id": "c1",
+                "ok": True,
+                "duration_ms": 12,
+                "result_summary": "patched 1 location",
+            },
+        }
+    )
+    last = bot.edits()[-1]
+    assert "✅" in last.text
+    assert "Edited" in last.text  # past tense
+    assert "12ms" in last.text
 
 
 async def test_multiple_tools_accumulate_in_same_bubble() -> None:

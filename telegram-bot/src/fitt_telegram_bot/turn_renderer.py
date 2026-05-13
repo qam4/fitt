@@ -359,14 +359,26 @@ class TurnRenderer:
             # final-state line so the user sees it happened.
             task = _ToolCallTask(call_id=call_id, placeholder=f"🔵 {tool_name}…")
             self.state.tool_tasks.append(task)
-        # Reuse the planning-phase label derivation for
-        # consistency between planned and executed lines.
-        # ``args`` isn't in the executed event, so fall back
-        # to the bare tool name.
-        verb = _tool_verb(tool_name, phase="done")
         if ok:
+            # Success: past-tense verb ("Read", "Wrote",
+            # "Committed") — the tool actually ran, the
+            # action happened.
+            verb = _tool_verb(tool_name, phase="done")
             task.final = f"✅ {verb} ({duration_ms}ms)"
         else:
+            # Failure: gerund verb ("Reading", "Writing",
+            # "Editing") — the tool didn't successfully
+            # complete its action, whether because it ran and
+            # errored (old_str not found, file missing) or
+            # got blocked before running (approval rejected,
+            # deny list, unknown tool). Past tense here lies
+            # to the user: "Edited — old_str not found" reads
+            # as "the file was edited and additionally we
+            # noticed old_str didn't match", which is wrong —
+            # nothing was edited. Observed live 2026-05-13
+            # on a qwen3-instruct trajectory that misled the
+            # operator about whether changes had landed.
+            verb = _tool_verb(tool_name, phase="planning")
             summary = str(meta.get("result_summary", "")).strip()
             brief = f" — {summary[:80]}" if summary else ""
             task.final = f"❌ {verb}{brief}"
