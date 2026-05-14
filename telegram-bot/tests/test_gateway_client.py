@@ -80,7 +80,7 @@ async def test_chat_rate_limited_surface() -> None:
             )
         )
     assert len(deltas) == 1
-    assert "rate limited" in deltas[0]
+    assert "Rate limited" in deltas[0]
     assert "7" in deltas[0]
 
 
@@ -131,7 +131,7 @@ async def test_chat_upstream_stream_abort() -> None:
                 session_id="main",
             )
         )
-    assert "upstream stream aborted" in deltas[0]
+    assert "Upstream stopped responding mid-reply" in deltas[0]
 
 
 async def test_chat_request_includes_tool_choice_auto() -> None:
@@ -236,7 +236,7 @@ async def test_chat_unreachable_logs_structured_failure() -> None:
     e = failed[0]
     assert e["alias"] == "fitt-smart"
     assert e["session_id"] == "main"
-    assert e["failure_kind"] == "transport"
+    assert e["failure_kind"] == "connect_failure"
     assert e["error_class"] == "ConnectError"
     assert "nope" in e["error"]
 
@@ -415,3 +415,147 @@ async def test_chat_failure_log_carries_request_id() -> None:
     assert len(failed) == 1
     # Same id on the wire and in the log row.
     assert failed[0]["request_id"] == captured_request["x-request-id"]
+
+
+# ----------------------------------------------------- upstream_silent (Phase 4.9)
+
+
+async def test_chat_upstream_silent_translates_to_actionable_message() -> None:
+    """The headline Phase 4.9 case. Gateway returns 503 with
+    body
+    ``{"error": {"type": "upstream_silent", "timeout_secs": 300,
+    "alias": "fitt-smart", "request_id": "..."}}``. The bot's
+    user-visible message tells the user *what* happened
+    (upstream queued, not gateway down), *which* alias, *how
+    long* the gateway waited, and includes the short
+    request_id tag for cross-log correlation."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                503,
+                json={
+                    "error": {
+                        "type": "upstream_silent",
+                        "timeout_secs": 300,
+                        "alias": "fitt-smart",
+                        "request_id": "abc12345deadbeef",
+                        "message": "Upstream went silent after 300s",
+                    }
+                },
+            )
+        )
+        deltas = await _collect(
+            _client().chat(
+                messages=[{"role": "user", "content": "hi"}],
+                alias="fitt-smart",
+                session_id="main",
+            )
+        )
+    assert len(deltas) == 1
+    msg = deltas[0]
+    # Specific shape pinned: tells the user the cause and the
+    # remedy, mentions the alias by name, includes the timeout
+    # number, and ends with the request_id short tag.
+    assert "went silent" in msg
+    assert "300s" in msg
+    assert "fitt-smart" in msg
+    assert "queued" in msg.lower() or "different alias" in msg
+    # Short request_id tag at the end. The id printed is the
+    # bot's own uuid4().hex (the one sent on the wire as
+    # ``X-Request-Id``), not the one echoed in the gateway's
+    # error body — the bot trusts what it generated.
+    import re
+
+    m = re.search(r"\(req: ([a-f0-9]{8})\)", msg)
+    assert m is not None, msg
+
+
+async def test_chat_no_backend_translates_clearly() -> None:
+    """When the gateway returns no_backend_available, the bot
+    must surface that distinctly from upstream_silent — a
+    gateway that exhausted its candidate chain on
+    transport failures is genuinely 'I tried every option'."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                503,
+                json={
+                    "error": {
+                        "type": "no_backend_available",
+                        "message": "all candidates failed",
+                    }
+                },
+            )
+        )
+        deltas = await _collect(
+            _client().chat(
+                messages=[{"role": "user", "content": "hi"}],
+                alias="fitt-smart",
+                session_id="main",
+            )
+        )
+    assert len(deltas) == 1
+    assert "couldn't reach any backend" in deltas[0]
+    assert "fitt-smart" in deltas[0]
+
+
+async def test_chat_user_messages_include_short_request_id() -> None:
+    """Every user-facing ⚠️ message ends with a ``(req:
+    <8chars>)`` tag so the user can paste it in a bug report
+    and the operator can grep both log files. Pinned via the
+    upstream_silent path; same code path for every error
+    type so this also covers no_backend, rate_limited, etc.
+
+    The bot generates a fresh UUID4 hex per chat call in
+    `chat()`; the gateway echoes it as
+    `X-Request-Id`. Even when the gateway's response body
+    repeats it via `error.request_id`, the bot uses the
+    one from the wire (its own generation) so the tag is
+    consistent regardless of body shape."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                503,
+                json={"error": {"type": "upstream_silent", "timeout_secs": 5}},
+            )
+        )
+        deltas = await _collect(
+            _client().chat(
+                messages=[{"role": "user", "content": "hi"}],
+                alias="fitt-smart",
+                session_id="main",
+            )
+        )
+    msg = deltas[0]
+    # Find the (req: xxxxxxxx) suffix and verify its 8-char id is
+    # 8 hex chars (first 8 of the bot's uuid4().hex).
+    import re
+
+    m = re.search(r"\(req: ([a-f0-9]{8})\)", msg)
+    assert m is not None, msg
+    rid = m.group(1)
+    assert len(rid) == 8
+
+
+async def test_chat_bot_read_timeout_distinct_from_connect_failure() -> None:
+    """ReadTimeout means the bot bailed before the gateway
+    answered — with the Phase 4.9 invariant in place
+    (bot read-timeout > gateway upstream_timeout), this is
+    a misconfiguration symptom, not a 'gateway unreachable'
+    symptom. The bot's message must call that out so the
+    operator goes looking at the timeouts, not at network."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/chat/completions").mock(
+            side_effect=httpx.ReadTimeout("blocked too long")
+        )
+        deltas = await _collect(
+            _client().chat(
+                messages=[{"role": "user", "content": "hi"}],
+                alias="fitt-smart",
+                session_id="main",
+            )
+        )
+    assert len(deltas) == 1
+    msg = deltas[0]
+    assert "didn't respond in time on the bot side" in msg
+    assert "Configuration drift" in msg or "read-timeout" in msg

@@ -29,7 +29,20 @@ import structlog
 
 _log = structlog.get_logger("fitt.telegram_bot.gateway_client")
 
-_STREAM_TIMEOUT_S = 120.0
+# Bot's HTTP read-timeout for chat-completion requests. Phase 4.9
+# invariant: this MUST be strictly greater than the gateway's
+# ``upstream_timeout_secs`` (default 300s). Otherwise the bot
+# disconnects before the gateway can return its structured
+# ``upstream_silent`` error and the user falls through to the
+# bot's own ReadTimeout path, recreating the bug we hit on
+# 2026-05-13. The 60s margin is generous; even a slow-poke
+# gateway with full network buffers couldn't realistically take
+# 60s to serialize a 1KB JSON error response.
+#
+# Boot-time enforcement of the invariant is deferred per the
+# Phase 4.9 spec; for now, operators reading this constant see
+# the relationship and the docs document it.
+_STREAM_TIMEOUT_S = 360.0
 
 
 class GatewayClient:
@@ -266,16 +279,69 @@ class GatewayClient:
                         request_id=request_id,
                     ):
                         yield delta
+            except httpx.ConnectError as e:
+                # Could not establish a TCP connection. The
+                # gateway is genuinely unreachable (DNS, port,
+                # firewall, container down). This is the
+                # message that "gateway unreachable" was always
+                # supposed to mean.
+                _log.warning(
+                    "gateway.chat.failed",
+                    request_id=request_id,
+                    alias=alias,
+                    session_id=session_id,
+                    failure_kind="connect_failure",
+                    error_class=type(e).__name__,
+                    error=str(e)[:500],
+                )
+                yield (f"⚠️ FITT gateway unreachable: {type(e).__name__} {_short_rid(request_id)}")
+            except httpx.ConnectTimeout as e:
+                # TCP handshake didn't complete in time. Same
+                # operator meaning as ConnectError; separate
+                # branch so the bot log row is precise.
+                _log.warning(
+                    "gateway.chat.failed",
+                    request_id=request_id,
+                    alias=alias,
+                    session_id=session_id,
+                    failure_kind="connect_timeout",
+                    error_class=type(e).__name__,
+                    error=str(e)[:500],
+                )
+                yield (f"⚠️ FITT gateway connect timeout: {e} {_short_rid(request_id)}")
+            except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+                # Bot's HTTP read-timeout fired before the
+                # gateway returned. With the Phase 4.9
+                # invariant in place (bot read-timeout >
+                # gateway upstream_timeout_secs), this branch
+                # should be effectively unreachable in
+                # production — the gateway's typed error
+                # always arrives first. If it DOES fire, the
+                # invariant is violated; surface that
+                # explicitly so an operator can fix the
+                # configs.
+                _log.warning(
+                    "gateway.chat.failed",
+                    request_id=request_id,
+                    alias=alias,
+                    session_id=session_id,
+                    failure_kind="bot_read_timeout",
+                    error_class=type(e).__name__,
+                    error=str(e)[:500],
+                )
+                yield (
+                    "⏱️ FITT didn't respond in time on the bot side. "
+                    "Configuration drift — the bot's read-timeout "
+                    "should be greater than the gateway's "
+                    "upstream_timeout_secs. See telegram-bot.log."
+                    f" {_short_rid(request_id)}"
+                )
             except httpx.RequestError as e:
-                # Transport-level failure — DNS, connect refused,
-                # read timeout. The bot used to swallow these
-                # silently; now we record one row per failed
-                # turn so the operator can grep
-                # ``telegram-bot.log`` for "why did the user see
-                # 'gateway unreachable'?" and find the actual
-                # exception class + message. This is the bot
-                # half of the gateway's
-                # ``no_backend_available`` event.
+                # Catch-all for other transport-shaped errors
+                # (NetworkError, RemoteProtocolError, ...).
+                # Less common than the explicit branches above;
+                # gives operators a generic "transport failed"
+                # bucket without losing the structured row.
                 _log.warning(
                     "gateway.chat.failed",
                     request_id=request_id,
@@ -285,7 +351,9 @@ class GatewayClient:
                     error_class=type(e).__name__,
                     error=str(e)[:500],
                 )
-                yield f"⚠️ gateway unreachable: {e}"
+                yield (
+                    f"⚠️ Network error reaching FITT: {type(e).__name__} {_short_rid(request_id)}"
+                )
 
     # ---------- internals -----------------------------------------
 
@@ -316,7 +384,7 @@ class GatewayClient:
                     session_id=session_id,
                     failure_kind="stream_aborted",
                 )
-                yield "⚠️ upstream stream aborted"
+                yield (f"⚠️ Upstream stopped responding mid-reply {_short_rid(request_id)}")
                 return
             try:
                 event = json.loads(payload)
@@ -342,9 +410,13 @@ class GatewayClient:
                 err_obj.get("message") if isinstance(err_obj, dict) else None
             ) or body.decode("utf-8", errors="replace")[:200]
             error_type = err_obj.get("type") if isinstance(err_obj, dict) else None
+            timeout_secs = err_obj.get("timeout_secs") if isinstance(err_obj, dict) else None
+            silent_alias = err_obj.get("alias") if isinstance(err_obj, dict) else None
         except json.JSONDecodeError:
             message = body.decode("utf-8", errors="replace")[:200]
             error_type = None
+            timeout_secs = None
+            silent_alias = None
 
         retry_after = response.headers.get("retry-after")
         # One log per ⚠️ yield. Carries the gateway's parsed
@@ -364,12 +436,44 @@ class GatewayClient:
             error_detail=message[:500] if isinstance(message, str) else str(message)[:500],
             retry_after=retry_after,
         )
-        if response.status_code == 503 and retry_after:
-            yield f"⚠️ rate limited, retry in {retry_after}s"
-        elif response.status_code == 401:
-            yield "⚠️ gateway refused our Bearer token (401). Check secrets.yaml."
+        rid = _short_rid(request_id)
+        # Branch on error.type rather than on the message
+        # string so future error types (Phase 4.9 added
+        # ``upstream_silent``) just slot in here without
+        # touching the rest of the function.
+        if error_type == "upstream_silent":
+            # The headline Phase 4.9 case: gateway timed out
+            # the upstream. Tell the user what happened and
+            # what to do — retry or pick a different alias.
+            n = int(timeout_secs) if isinstance(timeout_secs, int | float) else "?"
+            who = silent_alias or alias
+            yield (
+                f"⏱️ Upstream `{who}` went silent after {n}s — "
+                f"likely queued. Try again, or pick a different "
+                f"alias. {rid}"
+            )
+        elif error_type == "no_backend_available":
+            yield (
+                f"⚠️ FITT couldn't reach any backend for `{alias}`. "
+                f"Gateway tried every candidate without success. "
+                f"{rid}"
+            )
+        elif error_type == "upstream_rate_limited" or (response.status_code == 503 and retry_after):
+            wait = retry_after or (
+                str(int(timeout_secs)) if isinstance(timeout_secs, int | float) else "a moment"
+            )
+            yield f"⏳ Rate limited, retry in {wait}s. {rid}"
+        elif response.status_code == 401 or error_type == "upstream_client_error":
+            yield (
+                f"⚠️ FITT gateway refused our token (HTTP "
+                f"{response.status_code}). Check secrets.yaml. "
+                f"{rid}"
+            )
         else:
-            yield f"⚠️ gateway error ({response.status_code}): {message}"
+            yield (
+                f"⚠️ FITT gateway error (HTTP {response.status_code}, "
+                f"type={error_type or 'unknown'}): {message} {rid}"
+            )
 
 
 def _extract_delta(event: dict[str, Any]) -> str:
@@ -384,3 +488,16 @@ def _extract_delta(event: dict[str, Any]) -> str:
         return ""
     content = delta.get("content")
     return content if isinstance(content, str) else ""
+
+
+def _short_rid(request_id: str) -> str:
+    """Format the short request_id tag appended to every user-
+    facing ⚠️ message. Lets the user paste 8 chars into a bug
+    report and the operator can ``jq 'select(.request_id |
+    startswith("a1b2c3d4"))'`` both log files. Empty if the
+    request_id is empty (defensive against tests / pre-Phase
+    4.9 setups). Wraps in parens with a leading ``req:`` so
+    it's visually distinct from message content."""
+    if not request_id:
+        return ""
+    return f"(req: {request_id[:8]})"

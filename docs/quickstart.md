@@ -1378,6 +1378,38 @@ safe to run any time. Containers that didn't change keep running.
 401, `/ready` 503, streaming cost=0, firewall issues, and the
 first-response `smoke-compose.sh` script.
 
+### What happens on an upstream timeout
+
+If a chat turn shows a ⏱️ or ⚠️ message in Telegram, here's
+what each means and where to look.
+
+| User sees | Meaning | Where to look |
+|---|---|---|
+| `⏱️ Upstream <alias> went silent after Ns — likely queued. Try again, or pick a different alias.` | The gateway's upstream LLM took longer than `upstream_timeout_secs` (default 300s). Common with NVIDIA Build's free tier under load. | `gateway.log`, grep for the request_id printed in the message: rows with `status=upstream_silent` |
+| `⚠️ FITT gateway unreachable: ConnectError` | Bot couldn't connect to the gateway at all. Gateway is down, network partition, Tailscale flap. | `docker compose ps`, `docker compose logs --tail=100 fitt-gateway` |
+| `⏱️ FITT didn't respond in time on the bot side. Configuration drift…` | The bot's read-timeout fired before the gateway returned. With Phase 4.9 defaults this should never happen — it means the bot's read-timeout is now ≤ the gateway's `upstream_timeout_secs`. Fix by raising the bot's value or lowering the gateway's. | Both timeouts in `~/.fitt/config.yaml` (gateway side) and the bot's `_STREAM_TIMEOUT_S` (compile-time) |
+| `⚠️ Upstream stopped responding mid-reply` | Stream started, then died mid-flight. Provider crashed or the connection dropped. | `gateway.log` for `status=stream_failure` |
+| `⏳ Rate limited, retry in Ns` | Upstream returned 429 / 503 with Retry-After. Wait the indicated time. | — |
+
+The `(req: <8chars>)` tag at the end of every ⚠️ message is
+the short request_id. Paste it as a single grep across both
+log files to see the entire turn end-to-end:
+
+```bash
+grep abc12345 ~/.fitt/logs/telegram-bot.log
+grep abc12345 ~/.fitt/logs/gateway.log
+```
+
+Adjusting timeouts. Gateway's `upstream_timeout_secs` is in
+`~/.fitt/config.yaml` (top-level field, default 300s). The
+bot's read-timeout is `_STREAM_TIMEOUT_S` in
+`telegram-bot/src/fitt_telegram_bot/gateway_client.py` (default
+360s). The invariant is: **bot read-timeout > gateway
+`upstream_timeout_secs`**, with enough margin (~60s) for the
+gateway to serialize its error response. Raise both together
+if you have legitimately slow upstreams; leave them at default
+otherwise.
+
 ## Common slip-ups
 
 - **`OLLAMA_HOST=0.0.0.0`** not taking effect on the satellite:
