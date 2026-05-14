@@ -117,6 +117,16 @@ aliases:
   fitt-smart:   <model-id>   # cloud, hard turns
   fitt-fast:    <model-id>   # local, cheap helpers
 
+# Phase 4.9: per-call upstream timeout in seconds. Passed verbatim
+# to litellm.acompletion(timeout=...) for every dispatched request.
+# When this fires, the gateway returns 503 with
+# error.type="upstream_silent" and the bot translates that to a
+# clear user-facing message. INVARIANT: the bot's HTTP read-timeout
+# (_STREAM_TIMEOUT_S in telegram-bot/src/.../gateway_client.py)
+# MUST be strictly greater than this value, or the bot disconnects
+# before the gateway can return its structured error.
+upstream_timeout_secs: 300
+
 models:
   - id: <string>
     backend: openrouter | anthropic | ollama | openai
