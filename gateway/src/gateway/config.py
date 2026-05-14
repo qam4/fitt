@@ -160,6 +160,15 @@ class Config(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     aliases: dict[str, str]
     models: list[ModelConfig]
+    # Phase 4.9: per-call upstream timeout. Passed verbatim to
+    # ``litellm.acompletion(timeout=...)`` for every dispatched
+    # request. The bot's HTTP read-timeout MUST be strictly
+    # greater than this (default bot 360s vs. default gateway
+    # 300s, so a 60s margin) — otherwise the bot disconnects
+    # before the gateway can return its structured upstream-
+    # silent error, recreating the bug this knob was added to
+    # fix. Documented invariant; v1 doesn't enforce it at boot.
+    upstream_timeout_secs: float = 300.0
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     # ``tools:`` block is Phase 4+: per-tool approval buckets,
@@ -204,6 +213,10 @@ class Config(BaseModel):
                 )
             if m.fallback == m.id:
                 raise ValueError(f"model {m.id!r} cannot have itself as fallback")
+        if self.upstream_timeout_secs <= 0:
+            raise ValueError(
+                f"upstream_timeout_secs must be > 0 (got {self.upstream_timeout_secs})"
+            )
         return self
 
     # ------------------------------------------------------------- lookup helpers

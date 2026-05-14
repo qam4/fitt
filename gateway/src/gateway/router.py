@@ -147,7 +147,19 @@ class AliasRouter:
             attempted_ids.append(candidate.id)
             key = secrets.api_key_for(candidate.backend, model_id=candidate.id)
             kwargs = _litellm_kwargs(candidate, key)
-            call_kwargs = {**body, **kwargs}
+            # Phase 4.9: pass the configured upstream timeout so
+            # ``litellm.acompletion`` raises ``Timeout`` at OUR
+            # threshold rather than its own ~600s default. The
+            # chat handler wraps this in a shielded ``wait_for``
+            # at the same threshold; the explicit ``timeout=``
+            # kwarg here is belt-and-braces (so a misbehaving
+            # backend that ignores asyncio cancellation still
+            # gets the http-level timeout).
+            call_kwargs = {
+                **body,
+                **kwargs,
+                "timeout": self._config.upstream_timeout_secs,
+            }
 
             # Debug-only: log the exact kwargs going to LiteLLM.
             # Gated on ``server.log_bodies`` alongside the

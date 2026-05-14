@@ -18,6 +18,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
@@ -199,12 +200,26 @@ def _last_user_message(messages: list[dict[str, Any]]) -> str:
 # -------- upstream error translation ------------------------------
 
 
-def _translate_upstream_error(exc: Exception) -> JSONResponse:
+def _translate_upstream_error(
+    exc: Exception,
+    *,
+    upstream_timeout_secs: float | None = None,
+    alias: str | None = None,
+    request_id: str | None = None,
+) -> JSONResponse:
     """Map an exception from LiteLLM to the right HTTP response.
 
+    * ``litellm.Timeout`` (Phase 4.9) -> 503 ``upstream_silent``
     * 429 / 529 (rate-limit / overload) -> 503 + Retry-After
     * 4xx other                         -> pass through with body
     * 5xx other                         -> 502 + upstream message
+
+    The ``upstream_timeout_secs`` / ``alias`` / ``request_id``
+    kwargs are required when the caller wants the
+    ``upstream_silent`` shape — they populate the structured
+    error body the bot's ``_format_error`` reads to build a
+    user-facing string. For the other branches they're ignored
+    (callers that don't have them set just don't pass them).
     """
     status = getattr(exc, "status_code", None)
     message = getattr(exc, "message", None) or str(exc)
@@ -214,6 +229,19 @@ def _translate_upstream_error(exc: Exception) -> JSONResponse:
     if resp is not None:
         headers = getattr(resp, "headers", {}) or {}
         retry_after = headers.get("retry-after") or headers.get("Retry-After")
+
+    # Phase 4.9: LiteLLM's Timeout. Same routing as
+    # _classify_upstream_error so the wire shape and the log
+    # shape can't drift.
+    is_litellm_timeout = type(exc).__name__ == "Timeout" or (
+        status == 408 and "timeout" in message.lower()
+    )
+    if is_litellm_timeout and upstream_timeout_secs is not None and alias is not None:
+        return _upstream_silent_response(
+            timeout_secs=upstream_timeout_secs,
+            alias=alias,
+            request_id=request_id or "",
+        )
 
     if status in (429, 529):
         retry_after = retry_after or ("30" if status == 529 else "5")
@@ -247,8 +275,11 @@ def _classify_upstream_error(exc: Exception) -> dict[str, Any]:
 
     Mirrors the routing logic of :func:`_translate_upstream_error`
     so the structured log shape and the user-facing HTTP shape
-    can't drift. Three buckets:
+    can't drift. Four buckets:
 
+    * ``upstream_silent`` — LiteLLM (or the underlying httpx) hit
+      our configured timeout. The upstream went quiet for longer
+      than we were willing to wait. Phase 4.9.
     * ``upstream_rate_limited`` — 429/529 from upstream.
       ``upstream_status`` carries the actual code; ``retry_after``
       records the parsed Retry-After header (or the synthesized
@@ -279,6 +310,19 @@ def _classify_upstream_error(exc: Exception) -> dict[str, Any]:
         "error_class": type(exc).__name__,
         "error_detail": message[:500] if isinstance(message, str) else str(message)[:500],
     }
+    # Phase 4.9: LiteLLM raises ``litellm.Timeout`` (with
+    # ``status_code=408`` per their convention) when the
+    # ``timeout=`` kwarg fires. We treat that as upstream_silent
+    # rather than letting it fall through to upstream_client_error
+    # — 408 from the upstream itself would be unusual and is
+    # operationally the same shape (we couldn't get an answer
+    # in time).
+    is_litellm_timeout = type(exc).__name__ == "Timeout" or (
+        status == 408 and "timeout" in message.lower()
+    )
+    if is_litellm_timeout:
+        fields["error_type"] = "upstream_silent"
+        return fields
     if status in (429, 529):
         fields["error_type"] = "upstream_rate_limited"
         fields["upstream_status"] = status
@@ -291,6 +335,45 @@ def _classify_upstream_error(exc: Exception) -> dict[str, Any]:
         if isinstance(status, int):
             fields["upstream_status"] = status
     return fields
+
+
+def _upstream_silent_response(
+    *,
+    timeout_secs: float,
+    alias: str,
+    request_id: str,
+) -> JSONResponse:
+    """Return a 503 telling the bot the upstream went silent.
+
+    Phase 4.9: when the gateway's configured upstream timeout
+    fires before the upstream responds, the bot needs an
+    actionable message rather than its own ``ReadTimeout``
+    trying to mean too many things at once. This is the typed
+    error shape the bot's ``_format_error`` branches on
+    (``error.type == "upstream_silent"``) to produce a
+    user-facing string that mentions the alias, the timeout,
+    and the request_id short tag.
+
+    The 503 status code matches the existing
+    ``_translate_upstream_error`` convention for
+    rate-limited/overloaded — both shapes are "upstream is
+    not currently giving us a response", different reasons.
+    """
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "type": "upstream_silent",
+                "timeout_secs": timeout_secs,
+                "alias": alias,
+                "request_id": request_id,
+                "message": (
+                    f"Upstream {alias!r} went silent after {int(timeout_secs)}s "
+                    "— likely queued or overloaded."
+                ),
+            }
+        },
+    )
 
 
 # -------- streaming helpers ---------------------------------------
@@ -520,6 +603,8 @@ async def _run_tool_loop(
     tool_ctx: ToolContext,
     wanted_stream: bool,
     started: float,
+    upstream_timeout_secs: float,
+    request_id: str,
     capability_gaps: Any = None,
     events: Any = None,
     push_channel_available: bool = True,
@@ -630,9 +715,20 @@ async def _run_tool_loop(
         # operator can correlate "telegram says gateway
         # unreachable" with the actual ``ConnectError`` /
         # ``ReadTimeout`` underneath.
+        #
+        # Phase 4.9: same upstream_silent vs no_backend split as
+        # the plain-chat path — when the cause is a LiteLLM
+        # ``Timeout``, surface the typed ``upstream_silent``
+        # shape to the bot so the user sees an actionable
+        # message.
         latency_ms = int((time.perf_counter() - started) * 1000)
         cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
         classification = _classify_upstream_error(cause)
+        is_silent = classification.get("error_type") == "upstream_silent"
+        status_for_log = "upstream_silent" if is_silent else "no_backend_available"
+        extras = {k: v for k, v in classification.items() if k != "error_type"}
+        if is_silent:
+            extras["timeout_secs"] = upstream_timeout_secs
         log_request(
             _log,
             alias=parsed.model,
@@ -646,11 +742,17 @@ async def _run_tool_loop(
             input_tokens=0,
             output_tokens=0,
             cost_usd=Decimal("0"),
-            status="no_backend_available",
+            status=status_for_log,
             fallback=False,
             attempted=list(exc.attempted),
-            **{k: v for k, v in classification.items() if k != "error_type"},
+            **extras,
         )
+        if is_silent:
+            return _upstream_silent_response(
+                timeout_secs=upstream_timeout_secs,
+                alias=parsed.model,
+                request_id=request_id,
+            )
         raise
 
     # ---- detached: return a placeholder and let the worker finish
@@ -761,7 +863,12 @@ async def _run_tool_loop(
             fallback=result.fallback_used,
             **{k: v for k, v in classification.items() if k != "error_type"},
         )
-        return _translate_upstream_error(result.error)
+        return _translate_upstream_error(
+            result.error,
+            upstream_timeout_secs=upstream_timeout_secs,
+            alias=parsed.model,
+            request_id=request_id,
+        )
 
     if result.status == "tool_loop_exhausted":
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -1011,6 +1118,11 @@ async def chat_completions(request: Request) -> Response:
             turns=getattr(request.app.state, "turns", None),
             turn_id=turn_id,
         )
+        # Phase 4.9: pass cfg-derived upstream timeout +
+        # request_id into the tool loop so its dispatch can
+        # be wrapped in the same shielded wait_for as the
+        # plain-chat path below.
+        cfg: Config = request.app.state.config
         return await _run_tool_loop(
             parsed=parsed,
             session_id=session_id,
@@ -1024,31 +1136,42 @@ async def chat_completions(request: Request) -> Response:
             tool_ctx=tool_ctx_base,
             wanted_stream=wanted_stream,
             started=started,
+            upstream_timeout_secs=cfg.upstream_timeout_secs,
+            request_id=getattr(request.state, "request_id", ""),
             capability_gaps=getattr(request.app.state, "capability_gaps", None),
             events=getattr(request.app.state, "events", None),
             push_channel_available=_push_channel_available(request),
             artifact_store=getattr(request.app.state, "artifact_store", None),
         )
 
+    # Phase 4.9: wrap the dispatch in a shielded ``wait_for``
+    # so we time out at the configured threshold and return a
+    # typed ``upstream_silent`` error to the bot, while the
+    # in-flight LiteLLM call keeps running under the shield.
+    # v1 lets the orphan task be silently GC'd; a future
+    # commit can attach a reaper to ``dispatch_task`` at the
+    # ``TimeoutError`` site below with a single line of code.
+    cfg = request.app.state.config
+    upstream_timeout_secs = cfg.upstream_timeout_secs
+    request_id = getattr(request.state, "request_id", "")
+    dispatch_task: asyncio.Task[Any] = asyncio.create_task(
+        alias_router.dispatch(parsed.model, request_body)
+    )
     try:
-        dispatch = await alias_router.dispatch(parsed.model, request_body)
-    except UnknownAlias:
-        raise
-    except NoBackendAvailable as exc:
-        # All candidates had transport failures. The
-        # exception handler in app.py turns this into a
-        # 503 ``no_backend_available`` for the client, but
-        # without this branch the gateway log was silent —
-        # an operator chasing "telegram showed gateway
-        # unreachable, what happened?" had nothing to grep.
-        # Log the underlying transport exception (the
-        # ``__cause__`` set by ``raise NoBackendAvailable
-        # ... from last_transport_exc``) so the row carries
-        # the actual class (``ConnectError``,
-        # ``ReadTimeout``, ...) and detail.
+        dispatch = await asyncio.wait_for(
+            asyncio.shield(dispatch_task),
+            timeout=upstream_timeout_secs,
+        )
+    except TimeoutError:
+        # The upstream went silent past our threshold. Don't
+        # cancel ``dispatch_task`` — let it complete naturally
+        # under the shield (asyncio cancellation propagation
+        # to LiteLLM/httpx is fragile to verify; v1 chose not
+        # to depend on it). The orphan is bounded by LiteLLM's
+        # own ``timeout=`` kwarg passed to ``acompletion`` in
+        # ``router.dispatch``, so it can't outlive the
+        # configured threshold by more than a small margin.
         latency_ms = int((time.perf_counter() - started) * 1000)
-        cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
-        classification = _classify_upstream_error(cause)
         log_request(
             _log,
             alias=parsed.model,
@@ -1062,11 +1185,65 @@ async def chat_completions(request: Request) -> Response:
             input_tokens=0,
             output_tokens=0,
             cost_usd=Decimal("0"),
-            status="no_backend_available",
+            status="upstream_silent",
+            fallback=False,
+            timeout_secs=upstream_timeout_secs,
+        )
+        return _upstream_silent_response(
+            timeout_secs=upstream_timeout_secs,
+            alias=parsed.model,
+            request_id=request_id,
+        )
+    except UnknownAlias:
+        raise
+    except NoBackendAvailable as exc:
+        # All candidates had transport failures. Two sub-cases
+        # for the user-facing response:
+        #
+        # * If the underlying cause is a LiteLLM ``Timeout`` —
+        #   i.e. the upstream went silent past
+        #   ``upstream_timeout_secs`` and we exhausted the
+        #   fallback chain on timeouts — surface the typed
+        #   ``upstream_silent`` shape so the bot can show the
+        #   actionable message ("upstream queued") rather than
+        #   the generic ``no_backend_available``. (Phase 4.9.)
+        # * Any other transport failure (ConnectError,
+        #   ReadTimeout, DNS, ...) keeps the existing
+        #   ``no_backend_available`` 503; that's the honest
+        #   shape for "we tried every candidate and none of
+        #   them are reachable".
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+        classification = _classify_upstream_error(cause)
+        is_silent = classification.get("error_type") == "upstream_silent"
+        status_for_log = "upstream_silent" if is_silent else "no_backend_available"
+        extras = {k: v for k, v in classification.items() if k != "error_type"}
+        if is_silent:
+            extras["timeout_secs"] = upstream_timeout_secs
+        log_request(
+            _log,
+            alias=parsed.model,
+            model="(unknown)",
+            backend="(unknown)",
+            backend_actual="(unknown)",
+            session_id=session_id,
+            history_messages=len(ctx.history_messages),
+            history_truncated_bytes=ctx.truncated_bytes,
+            latency_ms=latency_ms,
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=Decimal("0"),
+            status=status_for_log,
             fallback=False,
             attempted=list(exc.attempted),
-            **{k: v for k, v in classification.items() if k != "error_type"},
+            **extras,
         )
+        if is_silent:
+            return _upstream_silent_response(
+                timeout_secs=upstream_timeout_secs,
+                alias=parsed.model,
+                request_id=request_id,
+            )
         raise
     except Exception as exc:
         # Same observability gap as the tool-loop path: an
@@ -1095,7 +1272,12 @@ async def chat_completions(request: Request) -> Response:
             fallback=False,
             **{k: v for k, v in classification.items() if k != "error_type"},
         )
-        return _translate_upstream_error(exc)
+        return _translate_upstream_error(
+            exc,
+            upstream_timeout_secs=upstream_timeout_secs,
+            alias=parsed.model,
+            request_id=request_id,
+        )
 
     backend_header = backend_tag(dispatch.model_used)
 

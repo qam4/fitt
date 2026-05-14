@@ -39,6 +39,22 @@ aliases:
 # Each entry is a concrete model configuration. `id` is referenced by
 # aliases and by `fallback`. `backend` + `model` map to LiteLLM's
 # provider naming convention.
+
+# Per-call timeout passed to LiteLLM for every dispatched request.
+# When this fires before the upstream replies, the gateway returns
+# a typed `upstream_silent` 503 error instead of waiting forever
+# (the bug we hit on 2026-05-13: NVIDIA Build queue depth made
+# requests take 15 min while the bot's hardcoded 120s read-timeout
+# fired first, leaving the bot showing "gateway unreachable" while
+# the gateway eventually paid for tokens nobody saw).
+#
+# **The bot's gateway HTTP read-timeout MUST be strictly greater
+# than this value.** Otherwise the bot disconnects before the
+# gateway can return the structured error, recreating the same
+# bug. Default bot read-timeout is 360s, so the 60s margin is
+# comfortable. Tune both together.
+upstream_timeout_secs: 300
+
 models:
 
   # --- Cloud: OpenRouter (primary cloud backend) ---
