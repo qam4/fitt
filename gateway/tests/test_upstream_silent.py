@@ -198,3 +198,70 @@ def test_litellm_timeout_classified_as_upstream_silent(
     assert body["error"]["type"] == "upstream_silent"
     rows = [e for e in captured_log_events if e.get("status") == "upstream_silent"]
     assert len(rows) == 1
+
+
+# ----------------------------------------------------- the actual yesterday bug
+
+
+async def _ignores_timeout_kwarg(**_: Any) -> Any:
+    """Stub of ``litellm.acompletion`` that does the wrong
+    thing: accepts a ``timeout=`` kwarg and silently ignores it,
+    blocking forever instead of raising.
+
+    This is the LiteLLM behavior we observed on 2026-05-13 with
+    the openai-compat NVIDIA Build endpoint
+    (``"timeout value=300.0, time taken=903.36 seconds"`` in
+    ``gateway.log.2026-05-14``). LiteLLM took 3x the configured
+    timeout to give up; the bot's read-timeout fired first and
+    the user saw a misleading message.
+
+    A test using this stub asserts the gateway's
+    *gateway-side* wait_for fires regardless, so the bug can't
+    repro even when LiteLLM misbehaves.
+    """
+    await asyncio.sleep(60.0)
+    raise AssertionError("unreachable; gateway must time out first")
+
+
+def test_gateway_times_out_when_litellm_ignores_timeout_kwarg(
+    tmp_path: Path,
+    captured_log_events: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tool-loop path (the one yesterday's bug actually hit
+    — every Telegram chat sends ``tool_choice: "auto"`` so it
+    goes here, not the plain-chat path) must time out at the
+    gateway's configured threshold even when LiteLLM ignores
+    its own ``timeout=`` kwarg.
+
+    Pre-fix this test failed: the wait_for/shield only
+    wrapped the plain-chat dispatch, so a tool-loop turn fell
+    through to LiteLLM's misbehaving timeout and the bot's
+    360s read-timeout fired before the gateway even noticed
+    something was wrong.
+
+    Sending ``tool_choice: "auto"`` is the contract that
+    drives the tool loop — the gateway sees it and routes
+    through ``_run_tool_loop`` instead of the plain dispatch.
+    """
+    monkeypatch.setattr("gateway.router.litellm.acompletion", _ignores_timeout_kwarg)
+
+    client = _build_client(tmp_path, upstream_timeout_secs=0.2)
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "fitt-smart",
+            "messages": [{"role": "user", "content": "Test"}],
+            "stream": True,
+            "tool_choice": "auto",  # forces the tool-loop path
+        },
+        headers=_auth(),
+    )
+    assert r.status_code == 503, r.text
+    body = r.json()
+    assert body["error"]["type"] == "upstream_silent", body
+    assert body["error"]["timeout_secs"] == 0.2
+
+    rows = [e for e in captured_log_events if e.get("status") == "upstream_silent"]
+    assert len(rows) == 1
+    assert rows[0]["alias"] == "fitt-smart"

@@ -20,6 +20,7 @@ Design decisions explicit in this code:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -182,7 +183,49 @@ class AliasRouter:
                 )
 
             try:
-                result = await litellm.acompletion(**call_kwargs)
+                # Phase 4.9 commit 4: gateway-side timeout
+                # enforcement. We pass ``timeout=`` to LiteLLM
+                # (above) AND wrap the call in
+                # ``asyncio.wait_for`` here, because LiteLLM's
+                # own ``timeout`` was observed to be ignored
+                # for openai-compatible streaming backends with
+                # slow-drip responses (NVIDIA Build queue
+                # depth, 2026-05-13: configured 300s, took 903s
+                # to raise). The wait_for is the load-bearing
+                # guarantee; the kwarg is belt-and-braces.
+                #
+                # ``shield`` keeps the in-flight task alive
+                # after our wait_for cancellation: cancellation
+                # propagation through LiteLLM/httpx to the
+                # upstream provider is fragile to verify (we
+                # don't try). Instead we orphan the task; it
+                # eventually completes or fails and is GC'd.
+                # On a wait_for timeout we synthesize a
+                # ``litellm.Timeout`` so all downstream
+                # classification (chat.py) just works — the
+                # bot sees ``error.type=upstream_silent`` the
+                # same way it would if LiteLLM had honored
+                # its own kwarg.
+                inner_task: asyncio.Task[Any] = asyncio.create_task(
+                    litellm.acompletion(**call_kwargs)
+                )
+                try:
+                    result = await asyncio.wait_for(
+                        asyncio.shield(inner_task),
+                        timeout=self._config.upstream_timeout_secs,
+                    )
+                except TimeoutError as timeout_exc:
+                    raise litellm.Timeout(  # type: ignore[attr-defined]
+                        message=(
+                            f"Gateway-side timeout after "
+                            f"{self._config.upstream_timeout_secs}s "
+                            f"(LiteLLM didn't honor its own timeout "
+                            f"kwarg for backend "
+                            f"{candidate.backend!r})"
+                        ),
+                        model=candidate.model,
+                        llm_provider=candidate.backend,
+                    ) from timeout_exc
             except _TRANSPORT_EXCEPTIONS as e:
                 last_transport_exc = e
                 continue
