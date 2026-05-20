@@ -20,6 +20,17 @@ This roadmap is both the outer shell **and** the draft specs. Each phase contain
 10. **Shareable by construction.** No personal info, machine-specific paths, or secrets ever land in the repo. The repo contains code + `.example` templates; every user brings their own `~/.fitt/config.yaml`, `~/.fitt/secrets.yaml`, and `~/.fitt/` runtime directory. When someone else decides to try FITT, they should need only: clone, install, copy templates, fill in their values. Zero code edits to "make it about me."
 11. **Fail loud on detectable misconfigurations.** When the system can tell something's wrong before the user hits a runtime symptom, surface the error early with a clear pointer to the fix. Silent "works but doesn't do what you expect" is the worst failure mode — a user has no idea what to change. The discipline: warn at boot when a detectable problem exists, reject at request time when an ambiguous config would produce wrong results, always include in the error message the file or field to edit. Where auto-detection is feasible (e.g. a known client sending `X-FITT-Client`), use it so users don't have to declare things the system can figure out itself.
 
+## Inspiration sources
+
+Decided 2026-05-15 after a side-by-side install of OpenClaw on the same NAS that runs FITT. Caught the moment of "should I migrate?" and the answer was "keep building FITT, draw inspiration from elsewhere."
+
+- **MeshClaw / OpenClaw** for the personal-AI-assistant shape: skills, channels, multi-interface, "talk to it and it walks you through setup," default-on web search, Google Workspace integration via CLI tools like `gog`. Their `skills/*/SKILL.md` files are MIT-licensed markdown and often portable as-is. When FITT considers a feature in that shape, look first at how OpenClaw does it.
+- **OpenCode, Cursor, Kiro, Claude Code** for code-edit / spec-driven workflows. FITT is explicitly NOT a coding agent (per project-overview steering), but borrows discipline patterns: spec-first feature design, structured tool errors, approval-gated mutations.
+
+FITT is not trying to be either. It's a single-user learning project where architecture and use cases come from the author's own needs. Inspiration is welcome; replication for completeness's sake is not.
+
+By Phase 4.9 (2026-05-15) the architectural backbone is done — gateway, memory, sessions, agentic tools, cron, audit, approvals, observability. What's left in the roadmap (memory v1, voice, home assistant, hardening) are real but optional additions. The shift from "execute the next phase" to "live with it and add things opportunistically" is the right shift for now. See the steering file's "Items observed in OpenClaw worth borrowing opportunistically" section for a current pick-list.
+
 ---
 
 ## Phase Dependencies

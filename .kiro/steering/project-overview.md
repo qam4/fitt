@@ -68,6 +68,76 @@ This rules in:
 - Cron / proactive-monitoring polish.
 - Hardening of what we have (Phase 10).
 
+## Inspiration sources
+
+Decided 2026-05-15 after a side-by-side install of
+OpenClaw on the same NAS that runs FITT. The author
+ran OpenClaw, saw what it does well, and chose to
+keep building FITT rather than migrate. The
+direction:
+
+- **MeshClaw / OpenClaw** are the inspiration source
+  for the personal-AI-assistant shape: skills,
+  channels, multi-interface, "talk to it and it
+  walks you through setup," default-on web search,
+  Google Workspace integration via CLI tools like
+  `gog`. When FITT considers a feature in that
+  shape, look first at how OpenClaw does it; their
+  skills directory is MIT-licensed markdown and
+  often portable as-is.
+- **OpenCode, Cursor, Kiro, Claude Code** are the
+  inspiration source for code-edit / spec-driven
+  workflows. FITT is explicitly NOT a coding agent
+  (see above) but borrows discipline patterns from
+  these tools where relevant (spec-first feature
+  design, structured tool errors, approval-gated
+  mutations).
+
+FITT is not trying to be either. It's a single-user
+learning project where architecture and use cases
+come from the author's own needs. Inspiration is
+welcome; replication for completeness's sake is not.
+
+## Items observed in OpenClaw worth borrowing opportunistically
+
+Captured during the 2026-05-15 OpenClaw evaluation
+so future-author doesn't have to re-derive them:
+
+- **Better timeout error messages.** OpenClaw's
+  "LLM request timed out" message names the
+  specific config key (`models.providers.<id>.
+  timeoutSeconds`) and explains the layering
+  between provider and agent timeouts. FITT's
+  `upstream_silent` (Phase 4.9) is good; copying
+  this style of operator-facing message would be
+  better. ~1 hour of work.
+- **Skills-as-markdown.** OpenClaw skills are
+  `SKILL.md` files: frontmatter + markdown body
+  describing a CLI the agent can shell out to. No
+  code, no plugin contract. Half-day to add a FITT
+  skills loader; opens the door to dropping in
+  OpenClaw's gog / gh / jq / web-search markdown
+  unchanged. The cleanest single architectural
+  upgrade FITT could make.
+- **Setup recipes the agent can drive.** "Help me
+  set up X" works in OpenClaw because the docs are
+  written FOR the agent: numbered steps, exact
+  commands, fallback paths if something fails.
+  Same substrate FITT already has (system prompt
+  injection); just missing the content. ~half a
+  day per recipe.
+- **Default-on web search.** The single biggest
+  day-1 UX delta versus FITT today. With a skills
+  loader (above), this becomes a markdown drop
+  pointing at `curl` + DuckDuckGo's HTML endpoint
+  or similar. Without the loader, it's a real
+  inline tool. Either is fine; the loader is more
+  reusable.
+
+These are opportunistic upgrades, not a phase plan.
+Pick one when an evening goes that way; resist
+treating the list as a backlog.
+
 Key documents (read in this order when context needed):
 
 - `README.md` - landing page
