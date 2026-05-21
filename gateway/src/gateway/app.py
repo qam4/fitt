@@ -148,6 +148,7 @@ def create_app(config: Config) -> FastAPI:
         build_project_shell_tool,
         build_send_message_tool,
         build_shell_tools,
+        build_web_search_tools,
     )
 
     app.state.project_registry = ProjectRegistry(default_projects_path())
@@ -231,6 +232,11 @@ def create_app(config: Config) -> FastAPI:
     for t in build_git_tools():
         tool_registry.register(t)
     for t in build_shell_tools():
+        tool_registry.register(t)
+    # Phase 4.11 — web_search tool. Triggers provider discovery
+    # as a side effect; the configured backend's name is baked
+    # into the tool's description (cf. design.md Decision 5).
+    for t in build_web_search_tools(config.web.search_backend):
         tool_registry.register(t)
     for t in build_cron_tools():
         tool_registry.register(t)

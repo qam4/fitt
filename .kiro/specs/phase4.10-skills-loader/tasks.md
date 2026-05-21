@@ -311,7 +311,7 @@ document the operator workflow.
         `~/.fitt/skills/`.
 - [x] 3e. Run lint + mypy + pytest pass in
         `gateway/`. All green.
-- [ ] 3f. Commit. Suggested message:
+- [x] 3f. Commit. Suggested message:
         `Phase 4.10/3: property tests, README, sample skill`.
 
 ## Verification

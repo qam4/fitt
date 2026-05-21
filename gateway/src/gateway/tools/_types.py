@@ -265,6 +265,16 @@ class ToolContext:
     haven't threaded a turn id through can leave the field
     default and the emission helpers do nothing."""
 
+    web_search_backend: str | None = None
+    """Phase 4.11 — name of the configured web search
+    provider, looked up in
+    :data:`~gateway.tools.web_providers.WEB_SEARCH_REGISTRY`
+    by ``web_search`` at dispatch time. Resolved from
+    ``config.web.search_backend`` at chat-handler / cron-runner
+    setup. ``None`` falls back to the default ``"ddgs"``;
+    tests that don't exercise web search can leave it
+    default."""
+
 
 # --------------------------------------------------------------- decisions
 

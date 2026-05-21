@@ -27,6 +27,7 @@ from .project_shell import build_project_shell_tool
 from .registry import ToolPolicy, ToolRegistry
 from .send_message import SendMessageRateLimiter, build_send_message_tool
 from .shelltools import build_shell_tools
+from .web_search import build_web_search_tools
 
 __all__ = [
     "ApprovalBucket",
@@ -48,5 +49,6 @@ __all__ = [
     "build_project_shell_tool",
     "build_send_message_tool",
     "build_shell_tools",
+    "build_web_search_tools",
     "deny_list",
 ]

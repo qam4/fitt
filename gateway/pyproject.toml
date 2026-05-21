@@ -32,6 +32,11 @@ dependencies = [
     # production target) usually has /usr/share/zoneinfo; this
     # package is a no-op there.
     "tzdata>=2024.1",
+    # Phase 4.11: DuckDuckGo HTML search via the maintained
+    # ddgs PyPI package. ~50KB pure-Python; handles cooldown,
+    # region/safesearch params, and DDG quirks. Pinned to
+    # match Hermes's choice (>=9.0,<10).
+    "ddgs>=9.0,<10",
 ]
 
 [project.optional-dependencies]

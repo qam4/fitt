@@ -161,6 +161,23 @@ class MemoryConfig(BaseModel):
         return v
 
 
+class WebSearchConfig(BaseModel):
+    """Phase 4.11 — web search settings.
+
+    Operator picks the active provider in ``search_backend``;
+    the agent's tool-call code path doesn't change. Default
+    ``ddgs`` (DuckDuckGo via the ddgs PyPI package; no API key
+    required). Future providers (SearXNG, Brave-free, Exa, ...)
+    drop in as additional files under
+    ``gateway/src/gateway/tools/web_providers/`` and operators
+    swap the name here without code changes.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    search_backend: str = "ddgs"
+
+
 class Config(BaseModel):
     """Top-level configuration loaded from config.yaml."""
 
@@ -180,6 +197,10 @@ class Config(BaseModel):
     upstream_timeout_secs: float = 300.0
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    # Phase 4.11 — web search backend selection. Operator picks
+    # the active provider; the agent's tool-call code path is
+    # stable across the swap.
+    web: WebSearchConfig = Field(default_factory=WebSearchConfig)
     # ``tools:`` block is Phase 4+: per-tool approval buckets,
     # wildcards for MCP, per-client overrides. Shape is
     # intentionally loose at the Config layer (any mapping) and

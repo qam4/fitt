@@ -322,6 +322,7 @@ class CronRunner:
             lessons=self._lessons,
             turns=self._turns,
             turn_id=turn_id,
+            web_search_backend=self._config.web.search_backend,
         )
 
         alias_router = AliasRouter(self._config)

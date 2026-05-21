@@ -1138,6 +1138,7 @@ async def chat_completions(request: Request) -> Response:
             lessons=getattr(request.app.state, "lessons", None),
             turns=getattr(request.app.state, "turns", None),
             turn_id=turn_id,
+            web_search_backend=config.web.search_backend,
         )
         # Phase 4.9: pass cfg-derived upstream timeout +
         # request_id into the tool loop so its dispatch can
