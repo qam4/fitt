@@ -152,6 +152,32 @@ MUST be one of the `aliases` keys. Concrete names like
 `qwen2.5-coder:14b` are rejected with 400. This is what keeps
 "models are configuration, not architecture" enforceable.
 
+### Memory and skills
+
+The `memory:` block controls identity injection, conversation
+history retention, lessons (operator corrections), and the
+skills loader. Defaults are sane; the keys most operators touch:
+
+```yaml
+memory:
+  enabled: true
+  max_history_chars: 24000      # context budget for history
+  history_max_days: 90          # pruner deletes older sessions
+  max_lessons: 50               # ceiling for the lessons store
+
+  # Phase 4.10 — skills loader
+  skills_dir: skills/           # walked at boot for SKILL.md files
+  skills_enabled: true          # set false to omit the [Skills available] block
+```
+
+`skills_dir` is resolved relative to `$FITT_HOME` (default
+`$FITT_HOME/skills`) and supports `~` expansion. Operator drops
+a `SKILL.md` into a subdirectory; the loader picks it up at the
+next gateway restart and the agent sees it in the
+`[Skills available]` system-prompt block. See
+`docs/quickstart.md` "Adding a skill" for the operator
+workflow and the edit-vs-restart matrix.
+
 ### `secrets.yaml` structure
 
 ```yaml

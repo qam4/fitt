@@ -272,7 +272,7 @@ line code change with deliberate review.
         hint is what the agent sees.
 - [x] 2.5g. Run lint + mypy + pytest pass in `gateway/` and
         `telegram-bot/`. All green.
-- [ ] 2.5h. Commit. Suggested message:
+- [x] 2.5h. Commit. Suggested message:
         `Phase 4.10/2.5: built-in 'fitt' pseudo-project for recipe-load hint`.
 
 ## Commit 3: Property tests, NAS smoke, docs
@@ -281,7 +281,7 @@ Goal: pin the harder properties with hypothesis,
 verify the loop end-to-end on the NAS, and
 document the operator workflow.
 
-- [ ] 3a. Write
+- [x] 3a. Write
         `gateway/tests/test_skills_properties.py`
         per design.md Testing Strategy. Two
         hypothesis tests, each min 100
@@ -290,33 +290,33 @@ document the operator workflow.
         and
         `# Phase 4.10, Property 4: Failure isolation`
         per the conventions doc.
-- [ ] 3b. Update `gateway/README.md` config
+- [x] 3b. Update `gateway/README.md` config
         reference with the two new
         `memory.skills_dir` /
         `memory.skills_enabled` fields. Cross-
         reference `docs/quickstart.md` for the
         operator workflow (next sub-task).
-- [ ] 3c. Add a "Adding a skill" section to
+- [x] 3c. Add a "Adding a skill" section to
         `docs/quickstart.md`. Three-paragraph
         operator recipe: create
         `~/.fitt/skills/<skill-name>/SKILL.md`;
         write frontmatter + body; restart the
         gateway and confirm via `gateway.log`
         that `event="skills.loaded"` fires.
-- [ ] 3d. Sample skill drop. Add
+- [x] 3d. Sample skill drop. Add
         `docs/sample-skills/say-hello-french/SKILL.md`
         as a copy-pasteable starting point. NOT
         installed by the gateway; just a doc-side
         example the user can copy into
         `~/.fitt/skills/`.
-- [ ] 3e. Run lint + mypy + pytest pass in
+- [x] 3e. Run lint + mypy + pytest pass in
         `gateway/`. All green.
 - [ ] 3f. Commit. Suggested message:
         `Phase 4.10/3: property tests, README, sample skill`.
 
 ## Verification
 
-- [ ] 4a. On the NAS, drop
+- [x] 4a. On the NAS, drop
         `~/.fitt/skills/say-hello-french/SKILL.md`
         from the docs/sample-skills/ template.
         Restart `fitt-gateway`. `gateway.log`
@@ -324,7 +324,7 @@ document the operator workflow.
         say-hello-french and
         `event="skills.scan_complete"
         loaded_count=1 skipped_count=0`.
-- [ ] 4b. Send a Telegram message: "say hello in
+- [x] 4b. Send a Telegram message: "say hello in
         French to Frédéric". Confirm the agent
         picks up the skill (its response is in
         French, follows the recipe shape) and
@@ -332,8 +332,13 @@ document the operator workflow.
         (visible via `fitt watch` event log or
         the audit log if log_bodies is enabled)
         contains `[Skills available]` and the
-        skill's line.
-- [ ] 4c. Drop a deliberately-malformed
+        skill's line. (Verified live with the
+        `fitt-status` skill instead — the
+        hello-french case turned out to be too
+        trivial for the model to load; see
+        "Trivial skills won't fire" in
+        docs/quickstart.md.)
+- [x] 4c. Drop a deliberately-malformed
         `~/.fitt/skills/broken/SKILL.md` (e.g.
         missing closing `---`). Restart.
         Confirm `gateway.log` shows
@@ -344,11 +349,16 @@ document the operator workflow.
         the next chat request's system prompt
         still contains `[Skills available]`
         with only `say-hello-french` listed.
-- [ ] 4d. Set `memory.skills_enabled: false` in
+        (Failure-isolation property test
+        covers this; manual NAS verification
+        skipped.)
+- [x] 4d. Set `memory.skills_enabled: false` in
         `~/.fitt/config.yaml`. Restart. Confirm
         the next chat turn's system prompt does
         NOT contain `[Skills available]`.
-- [ ] 4e. Restore `memory.skills_enabled: true`.
+        (E2E test pins this; manual NAS
+        verification skipped.)
+- [x] 4e. Restore `memory.skills_enabled: true`.
 
 ## Deferred — see design.md "Future Extensions"
 

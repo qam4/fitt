@@ -1315,6 +1315,81 @@ is a per-machine thing, not a per-project thing.
 
 ---
 
+## Adding a skill
+
+A skill is a directory under `$FITT_HOME/skills/<name>/`
+containing a `SKILL.md` file. The frontmatter declares the skill's
+`name` and `description`; the body is a recipe the agent reads on
+demand when the user's request matches the description.
+
+There's a working sample under `docs/sample-skills/fitt-status/`
+in the repo. Drop it in:
+
+```bash
+mkdir -p $FITT_HOME/skills
+cp -r docs/sample-skills/fitt-status $FITT_HOME/skills/
+docker compose restart fitt-gateway
+```
+
+Confirm the loader saw it:
+
+```bash
+docker compose logs fitt-gateway 2>&1 | grep skills.loaded
+# event=skills.loaded skill_name=fitt-status ...
+```
+
+In Telegram, send "give me FITT's status" — the agent should
+load the recipe and produce a formatted status report. Tool
+calls are visible in Telegram (look for "Read", "Ran
+list_capabilities", etc.).
+
+### Authoring a SKILL.md
+
+```markdown
+---
+name: <directory-name>             # required, must match dir basename
+description: <one short sentence>  # required, capped at 80 chars in prompt
+prerequisites: []                  # optional, list of FITT tool names
+---
+
+# <Title>
+
+When <user-request-pattern>, run these tools in order:
+
+1. `<tool_name>` — what it does
+2. ...
+
+Format the result as: ...
+```
+
+Keep the description tight — the model picks skills based on it,
+and the description is the only part shipped in the system prompt
+on every request. The body is loaded on demand.
+
+### What edits take effect when
+
+| Edit | Action needed |
+|------|---------------|
+| New skill (new SKILL.md anywhere) | `docker compose restart fitt-gateway` |
+| Renamed skill directory | `docker compose restart fitt-gateway` |
+| Frontmatter `description` change | `docker compose restart fitt-gateway` (description is in the system prompt, computed at boot) |
+| SKILL.md body change | Start a new session (`/session new <name>`). The body is read on demand by the agent's `read_file` call; existing sessions cache the prior body in their conversation history. |
+| `memory.skills_enabled: false` toggle | `docker compose restart fitt-gateway` |
+
+### Trivial skills won't fire
+
+Skills whose body is just a paraphrase of the description (e.g.
+"reply in French") won't be loaded — the model already knows how
+to answer and skips the recipe call. Skills only fire when the
+recipe contains genuinely non-obvious info (specific tool calls,
+specific output formats, environment-specific knowledge).
+
+When writing a skill, ask: "what does this recipe tell the model
+that it can't already do?" If the answer is "nothing meaningful,"
+the recipe won't be used.
+
+---
+
 ## Resilience checks (5 min)
 
 On the Hub:
