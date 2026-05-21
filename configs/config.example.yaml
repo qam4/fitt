@@ -177,6 +177,17 @@ memory:
   skills_enabled: true
 
 # ------------------------------------------------------------------
+# Web search (Phase 4.11)
+# ------------------------------------------------------------------
+# The agent can call web_search(query) to fetch fresh info from
+# the web. The default backend is ddgs (DuckDuckGo via the ddgs
+# Python package; no API key required). When future providers
+# ship (SearXNG, Brave-free, Exa, ...), swap the backend name
+# here without editing code.
+web:
+  search_backend: ddgs
+
+# ------------------------------------------------------------------
 # Tools (Phase 4+)
 # ------------------------------------------------------------------
 # The tool registry picks sane defaults — reads auto-approve,

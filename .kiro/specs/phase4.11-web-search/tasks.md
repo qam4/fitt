@@ -82,7 +82,7 @@ returns three structured hits.
         `uv run ruff check src tests --fix`,
         `uv run mypy src`, `uv run pytest -q` in
         `gateway/`. All green before committing.
-- [ ] 1l. Commit. Suggested message:
+- [x] 1l. Commit. Suggested message:
         `Phase 4.11/1: web_search tool + ddgs provider`.
 
 ## Commit 2: Property tests, README, NAS smoke
@@ -91,30 +91,30 @@ Goal: pin the harder properties with hypothesis, document
 the operator workflow, verify the loop end-to-end on the
 NAS.
 
-- [ ] 2a. Write `gateway/tests/test_web_search_properties.py`
+- [x] 2a. Write `gateway/tests/test_web_search_properties.py`
         per design.md Testing Strategy. Two hypothesis
         tests, each min 100 iterations, tagged
         `# Phase 4.11, Property 2: Failure isolation`
         and `# Phase 4.11, Property 3: Limit clamping`
         per the conventions doc.
-- [ ] 2b. Update `configs/config.example.yaml` per
+- [x] 2b. Update `configs/config.example.yaml` per
         Requirement 4.4: add the `web:` block with
         `search_backend: ddgs` and one comment sentence
         explaining the field's purpose.
-- [ ] 2c. Update `gateway/README.md` config reference
+- [x] 2c. Update `gateway/README.md` config reference
         with a "Web search (Phase 4.11)" subsection
         documenting the `web.search_backend` field, the
         v1 default, and the architecture (tool name
         stable; backend is config). Cross-reference the
         `web_providers/` directory as the seam for
         future providers.
-- [ ] 2d. Add a "Web search" section to
+- [x] 2d. Add a "Web search" section to
         `docs/quickstart.md` between the skills section
         and the resilience checks. Two-paragraph
         operator note: out-of-the-box DuckDuckGo via
         `ddgs`; how to test from Telegram; how to
         switch backends later.
-- [ ] 2e. Run lint + mypy + pytest pass in `gateway/`
+- [x] 2e. Run lint + mypy + pytest pass in `gateway/`
         and `telegram-bot/`. All green.
 - [ ] 2f. Commit. Suggested message:
         `Phase 4.11/2: property tests, README, smoke`.

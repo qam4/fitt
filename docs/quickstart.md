@@ -1390,6 +1390,29 @@ the recipe won't be used.
 
 ---
 
+## Web search
+
+The agent has a `web_search` tool wired up out of the box. Ask
+questions like "what's the latest version of Python?" or "what
+happened with `<recent thing>`?" and the agent will call
+`web_search` and answer from the results. The default backend
+is DuckDuckGo via the [`ddgs`](https://pypi.org/project/ddgs/)
+PyPI package — no API key, nothing to configure for the common
+case. From Telegram, just send the question; tool calls are
+visible inline in the bot's reply (look for `Ran web_search`).
+
+Operator note: the backend is selected in `config.yaml`'s
+`web.search_backend` field (default `ddgs`). The tool name
+`web_search` and its JSON schema are stable across backends, so
+switching to a future provider (SearXNG on the hub, Brave-free,
+Exa) is a single config flip plus a `docker compose restart
+fitt-gateway`. Provider implementations live under
+`gateway/src/gateway/tools/web_providers/`; adding a new one is
+a single Python file. See the gateway README's "Web search"
+subsection for the architecture.
+
+---
+
 ## Resilience checks (5 min)
 
 On the Hub:

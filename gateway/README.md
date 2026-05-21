@@ -178,6 +178,38 @@ next gateway restart and the agent sees it in the
 `docs/quickstart.md` "Adding a skill" for the operator
 workflow and the edit-vs-restart matrix.
 
+### Web search (Phase 4.11)
+
+The agent has a `web_search(query, limit=5)` tool that returns
+a structured list of `{title, url, snippet}` results. The
+backend that serves the tool is selected by config:
+
+```yaml
+web:
+  search_backend: ddgs            # only provider in v1
+```
+
+`ddgs` is DuckDuckGo via the [`ddgs`](https://pypi.org/project/ddgs/)
+PyPI package — no API key required. The tool name and its JSON
+schema are stable across providers; switching to a future
+backend (SearXNG, Brave-free, Exa) is a config change, not a
+client change.
+
+Provider implementations live under
+`gateway/src/gateway/tools/web_providers/`. Each provider is
+one file that registers itself with the module-level
+`WEB_SEARCH_REGISTRY` at import time and inherits from the
+`WebSearchProvider` ABC. Adding a new provider is a single
+file plus the `web.search_backend` flip; no dispatcher or tool
+changes needed.
+
+If the configured backend isn't registered (typo, package
+missing), the gateway starts and `web_search` calls return a
+structured error naming the available backends. A non-string
+`web.search_backend` value fails Pydantic validation at boot
+and exits the gateway non-zero — same posture as
+`memory.skills_dir`.
+
 ### `secrets.yaml` structure
 
 ```yaml
@@ -502,6 +534,7 @@ original streaming passthrough unchanged.
 | `write_file` / `edit_file` / `git_commit` | Mutating file and VCS ops.            | `ask`            |
 | `run_tests`           | Run the project's `test_command`.                     | `ask`            |
 | `http_get`            | Gateway-local HTTP GET. Honours `deny_hosts`.         | `auto`           |
+| `web_search`          | DuckDuckGo (or other configured backend) search.      | `auto`           |
 | `mcp.<server>.<tool>` | Any tool exposed by a configured MCP server.          | `ask`            |
 
 Every tool call is recorded in the audit log (see below),
