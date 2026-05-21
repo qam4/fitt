@@ -209,6 +209,72 @@ end-to-end contract.
 - [ ] 2i. Commit. Suggested message:
         `Phase 4.10/2: wire skills loader into gateway boot + chat handler`.
 
+## Commit 2.5: Built-in `fitt` pseudo-project for the recipe-load hint
+
+Goal: fix the runtime gap discovered during NAS smoke testing
+of Commit 2 — the rendered recipe-load hint pointed at an
+absolute path, but FITT's `read_file` requires
+`project=<name> path=<rel>`. Add a built-in `fitt` pseudo-
+project rooted at `$FITT_HOME` with a hard-coded subdir
+allowlist (`skills/` only for v1) so the hint is executable
+without operator-side `projects.yaml` config.
+
+Architecturally narrow: doesn't expose secrets/, ssh/,
+audit logs, or anything else. Widening the allowlist later
+(e.g. `sessions/` for Phase 7's session search) is a one-
+line code change with deliberate review.
+
+- [x] 2.5a. In `gateway/src/gateway/tools/fileops.py`, add
+        `_FITT_BUILTIN_NAME = "fitt"`,
+        `_FITT_BUILTIN_ALLOWLIST = ("skills",)`,
+        `_maybe_resolve_builtin_fitt_project`,
+        `_path_is_in_fitt_allowlist`,
+        `_enforce_fitt_allowlist`, and
+        `_reject_fitt_for_writes`. Plumb them through
+        `_resolve_project_for_tool` so the read-side fileops
+        (`read_file`, `list_directory`) honor the allowlist
+        and the write-side (`write_file`, `edit_file`) reject
+        `project=fitt` outright. `grep_repo` and `glob_search`
+        also reject `project=fitt` because a recursive search
+        across FITT_HOME would defeat the allowlist.
+- [x] 2.5b. In `gateway/src/gateway/skills.py`, change
+        `render_skills_block` to emit
+        `(read recipe with read_file project=fitt path=<rel>)`
+        when the SKILL.md lives under `$FITT_HOME`. Falls back
+        to an absolute path when the operator points
+        `skills_dir` outside FITT_HOME (the recipe won't load,
+        but the hint stays factually accurate).
+- [x] 2.5c. Add an instruction line to the rendered
+        `[Skills available]` block: "Each skill below
+        provides a recipe for a specific task. When the
+        user's request matches a skill's description, load
+        the recipe with the read_file call shown in
+        parentheses, then follow it." Borrowed from
+        OpenClaw's `formatSkillsForPrompt`; tells the agent
+        explicitly how to use the recipe-load hint.
+- [x] 2.5d. Add `gateway/tests/test_tools_fileops.py` cases
+        covering: read_file `project=fitt` with allowlisted
+        path, rejection of non-allowlisted subdirs (secrets,
+        ssh), rejection of `..` traversal, rejection of root
+        listing (forces a subdir choice), list_directory on
+        allowlisted subdir, grep_repo / glob_search /
+        write_file / edit_file all rejected on
+        `project=fitt`.
+- [x] 2.5e. Update `gateway/tests/test_skills_render.py` for
+        the new line shape and instruction-line position.
+        Add a test for the realistic skills_dir-under-FITT_HOME
+        case (renders `project=fitt path=...`) and one for
+        the fallback case (skills_dir outside FITT_HOME →
+        absolute path).
+- [x] 2.5f. Update `gateway/tests/test_skills_e2e.py` so the
+        primary integration test puts skills_dir under
+        FITT_HOME and asserts the `project=fitt` recipe-load
+        hint is what the agent sees.
+- [x] 2.5g. Run lint + mypy + pytest pass in `gateway/` and
+        `telegram-bot/`. All green.
+- [ ] 2.5h. Commit. Suggested message:
+        `Phase 4.10/2.5: built-in 'fitt' pseudo-project for recipe-load hint`.
+
 ## Commit 3: Property tests, NAS smoke, docs
 
 Goal: pin the harder properties with hypothesis,

@@ -61,26 +61,62 @@ def test_render_empty_returns_empty_string():
     assert out == ""
 
 
-def test_render_single_skill_no_prereqs():
-    """Exact single-line format.
+def test_render_single_skill_uses_project_fitt_when_under_fitt_home(tmp_path: Path):
+    """Skill under FITT_HOME → recipe-load hint uses
+    ``project=fitt path=<rel>``.
 
-    Validates Requirement 3.3 (line shape) and 3.2 (header).
+    Validates Requirement 3.3 (line shape) and 3.2 (header)
+    plus the Phase 4.10 sub-commit decision to render via the
+    built-in fitt pseudo-project.
     """
-    skill_path = Path("/fitt/skills/say-hello/SKILL.md")
+    fitt_home = tmp_path / "fitt-home"
+    fitt_home.mkdir(exist_ok=True)
+    skill_path = fitt_home / "skills" / "say-hello" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("---\nname: say-hello\ndescription: x\n---\n")
+
     skill = _skill(
         "say-hello",
         description="Say hello in French.",
         skill_md_path=skill_path,
     )
 
-    out = render_skills_block([skill], FakeRegistry([]))
+    out = render_skills_block([skill], FakeRegistry([]), fitt_home=fitt_home)
 
-    expected = (
-        "[Skills available]\n"
+    # Header + instruction line + skill line.
+    lines = out.splitlines()
+    assert lines[0] == "[Skills available]"
+    assert "load the recipe" in lines[1]
+    assert lines[2] == (
         "- say-hello: Say hello in French. "
-        f"(read recipe with read_file {skill_path})"
+        "(read recipe with read_file project=fitt path=skills/say-hello/SKILL.md)"
     )
-    assert out == expected
+
+
+def test_render_single_skill_falls_back_to_absolute_when_outside_fitt_home(
+    tmp_path: Path,
+):
+    """Skill outside FITT_HOME → recipe-load hint uses absolute
+    path (the agent won't be able to load it via project=fitt,
+    but the hint is at least factually accurate)."""
+    fitt_home = tmp_path / "fitt-home"
+    fitt_home.mkdir(exist_ok=True)
+    # skill_path is NOT under fitt_home — it's a sibling.
+    skill_path = tmp_path / "elsewhere" / "say-hello" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("---\nname: say-hello\ndescription: x\n---\n")
+
+    skill = _skill(
+        "say-hello",
+        description="Say hello.",
+        skill_md_path=skill_path,
+    )
+
+    out = render_skills_block([skill], FakeRegistry([]), fitt_home=fitt_home)
+
+    # The absolute path appears verbatim; project=fitt does not.
+    assert str(skill_path) in out
+    assert "project=fitt" not in out
 
 
 def test_render_skill_with_prereqs_satisfied():
@@ -148,11 +184,12 @@ def test_render_skills_sorted_case_insensitive():
     out = render_skills_block(skills, FakeRegistry([]))
     lines = out.splitlines()
 
-    # Header + 3 skill lines.
+    # Header + instruction line + 3 skill lines.
     assert lines[0] == "[Skills available]"
-    assert lines[1].startswith("- apple:")
-    assert lines[2].startswith("- bee:")
-    assert lines[3].startswith("- Zebra:")
+    assert "load the recipe" in lines[1]
+    assert lines[2].startswith("- apple:")
+    assert lines[3].startswith("- bee:")
+    assert lines[4].startswith("- Zebra:")
 
 
 def test_render_skills_sorted_tie_break_by_path():

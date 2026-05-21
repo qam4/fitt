@@ -83,12 +83,21 @@ def _write_say_hello_skill(skills_dir: Path) -> Path:
 def test_skill_appears_in_system_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Phase 4.10, Requirement 7: SKILL.md drop → next request's
     system prompt sent upstream contains [Skills available] +
-    the skill description + the absolute SKILL.md path."""
+    the skill description + the recipe-load hint.
 
-    # Operator drops a SKILL.md into the configured skills_dir.
-    skills_root = tmp_path / "skills"
-    skills_root.mkdir()
-    skill_md_path = _write_say_hello_skill(skills_root)
+    The autouse ``isolate_fitt_home`` fixture redirects
+    ``FITT_HOME`` to ``tmp_path/fitt-home/``. We drop the skill
+    under ``$FITT_HOME/skills/`` so the renderer emits the
+    ``project=fitt`` recipe-load form (the realistic operator
+    layout). The recipe-load hint must therefore reference
+    ``project=fitt path=skills/say-hello-french/SKILL.md``."""
+
+    # Drop the skill under FITT_HOME so the renderer emits the
+    # project=fitt form (matches operator default).
+    fitt_home = tmp_path / "fitt-home"
+    skills_root = fitt_home / "skills"
+    skills_root.mkdir(parents=True, exist_ok=True)
+    _write_say_hello_skill(skills_root)
 
     # Build a config that points memory.skills_dir at our drop.
     cfg = build_test_config(tmp_path, memory_enabled=True)
@@ -138,15 +147,16 @@ def test_skill_appears_in_system_prompt(tmp_path: Path, monkeypatch: pytest.Monk
     assert "[Skills available]" in system_text, system_text
 
     # 2. The skill's line is present, prefixed correctly and
-    #    carrying the description (Requirement 3.3 + the
-    #    body of Requirement 7.2).
+    #    carrying the description (Requirement 3.3 + 7.2).
     assert "- say-hello-french: Say hello to someone in French." in system_text
 
-    # 3. The recipe-load hint carries the literal absolute
-    #    path of our SKILL.md (Requirement 7.3).
-    expected_hint = f"(read recipe with read_file {skill_md_path})"
-    assert expected_hint in system_text, (
-        f"expected {expected_hint!r} in system message, got:\n{system_text}"
+    # 3. The recipe-load hint uses the project=fitt form
+    #    (Phase 4.10 sub-commit + Requirement 7.3 — the path
+    #    is now FITT_HOME-relative).
+    assert (
+        "(read recipe with read_file project=fitt path=skills/say-hello-french/SKILL.md)"
+    ) in system_text, (
+        f"expected project=fitt recipe-load hint in system message, got:\n{system_text}"
     )
 
 

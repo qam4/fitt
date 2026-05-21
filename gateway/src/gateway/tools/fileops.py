@@ -27,6 +27,17 @@ Size limits: ``read_file`` caps output at 200 KB (matching
 because larger outputs blow out the chat context without adding
 signal. Tool callers should narrow queries on follow-ups rather
 than paginate, matching how the LLM actually uses these.
+
+Phase 4.10 — built-in ``fitt`` pseudo-project: the read-side
+fileops accept ``project=fitt`` as a reserved name resolving to
+``$FITT_HOME`` with a hard-coded subdir allowlist. Only entries
+in :data:`_FITT_BUILTIN_ALLOWLIST` are reachable; everything
+else returns "Path rejected." This is what makes the
+``[Skills available]`` recipe-load hint executable
+(``read_file project=fitt path=skills/<name>/SKILL.md``) without
+exposing secrets, ssh keys, or audit logs to the model. Widening
+the allowlist later (e.g. ``sessions/`` for Phase 7's session
+search) is a one-line change with deliberate review.
 """
 
 from __future__ import annotations
@@ -34,6 +45,8 @@ from __future__ import annotations
 from typing import Any
 
 from ._types import ApprovalBucket, Tool, ToolContext, ToolResult
+
+# --------------------------------------------------------------- size caps
 
 # --------------------------------------------------------------- size caps
 
@@ -176,6 +189,130 @@ _SCHEMA_EDIT_FILE = {
 # --------------------------------------------------------------- helpers
 
 
+# --------------------------------------------------------------- builtin fitt project
+
+_FITT_BUILTIN_NAME = "fitt"
+"""Reserved project name for the built-in pseudo-project. The
+operator cannot define a project with this name; the resolver
+shadows it. Used by the [Skills available] block's recipe-load
+hint so the model can call
+``read_file project=fitt path=skills/<name>/SKILL.md`` without
+operator-side projects.yaml configuration."""
+
+_FITT_BUILTIN_ALLOWLIST = ("skills",)
+"""Subdirectories of ``$FITT_HOME`` reachable via the built-in
+``fitt`` pseudo-project. Hard-coded; widening is a deliberate
+code change. Path validation in ``_resolve_project_for_tool``
+rejects anything outside this allowlist. Today: skills only.
+Phase 7+ may add ``sessions`` for cross-session search."""
+
+
+def _maybe_resolve_builtin_fitt_project(
+    project_name: str, ctx: ToolContext
+) -> tuple[Any, Any] | ToolResult | None:
+    """Return ``(project, backend)`` when the call targets the
+    built-in ``fitt`` pseudo-project, ``ToolResult`` on a
+    rejected path, or ``None`` to fall through to the regular
+    ``ProjectRegistry`` lookup.
+
+    This intercepts ``project=fitt`` before
+    ``_resolve_project_for_tool`` consults the operator's
+    ``projects.yaml`` so the name is reserved by FITT itself.
+    A user-defined project named ``fitt`` would be silently
+    shadowed by the built-in; that's intentional — the name
+    is owned by us.
+    """
+    if project_name != _FITT_BUILTIN_NAME:
+        return None
+
+    # Lazy import: the projects module imports config which
+    # imports tools indirectly. Local import keeps the dep graph
+    # clean.
+    from ..config import fitt_home
+    from ..projects import Project
+
+    home = fitt_home()
+    fitt_project = Project(
+        name=_FITT_BUILTIN_NAME,
+        path=str(home),
+        ssh_host="",  # always hub-local
+    )
+
+    if ctx.backend is None:
+        return ToolResult.error(
+            "Internal error: no execution backend is wired onto "
+            "the tool context. This is a gateway bug."
+        )
+    return fitt_project, ctx.backend
+
+
+def _path_is_in_fitt_allowlist(safe_path: str, project_path: str) -> bool:
+    """Return True when ``safe_path`` (already passed
+    ``_safe_path``'s traversal check against ``project_path``)
+    points inside one of the allowlisted FITT_HOME subdirs.
+
+    ``safe_path`` may be relative (``"skills/foo/SKILL.md"``)
+    or absolute (``"/fitt-home/skills/foo/SKILL.md"``). We
+    normalise to a relative-to-project_path form before checking
+    the first segment.
+    """
+    posix = safe_path.replace("\\", "/")
+    if posix.startswith("/"):
+        # Absolute path — strip the project_path prefix so we can
+        # reason about the subdir suffix only.
+        prefix = project_path.rstrip("/") + "/"
+        if posix == project_path:
+            relative = "."
+        elif posix.startswith(prefix):
+            relative = posix[len(prefix) :]
+        else:
+            # Shouldn't happen — _safe_path already checked this.
+            return False
+    else:
+        relative = posix
+
+    if relative in (".", ""):
+        # Listing the FITT root itself isn't allowed; force
+        # callers to pick an allowlisted subdir.
+        return False
+
+    first_segment = relative.split("/", 1)[0]
+    return first_segment in _FITT_BUILTIN_ALLOWLIST
+
+
+def _enforce_fitt_allowlist(project: Any, safe_path: str, original_path: str) -> ToolResult | None:
+    """Return a ToolResult error when ``project`` is the built-in
+    ``fitt`` pseudo-project and ``safe_path`` falls outside the
+    allowlisted subdirs. Returns ``None`` otherwise.
+
+    Read-side fileops call this after ``_safe_path`` to layer
+    the FITT-specific subdir restriction on top of the standard
+    project-root traversal check.
+    """
+    if project.name != _FITT_BUILTIN_NAME:
+        return None
+    if _path_is_in_fitt_allowlist(safe_path, project.path):
+        return None
+    return ToolResult.error(
+        f"Path rejected for built-in 'fitt' project: only "
+        f"{', '.join(_FITT_BUILTIN_ALLOWLIST)}/ subdirs are reachable "
+        f"(got {original_path!r})"
+    )
+
+
+def _reject_fitt_for_writes(project: Any) -> ToolResult | None:
+    """Return a ToolResult error when ``project`` is the built-in
+    ``fitt`` pseudo-project. Used by ``write_file`` and
+    ``edit_file`` — the built-in is read-only.
+    """
+    if project.name != _FITT_BUILTIN_NAME:
+        return None
+    return ToolResult.error(
+        "The built-in 'fitt' project is read-only. Edit files under "
+        "$FITT_HOME directly on the host or via project_shell."
+    )
+
+
 def _resolve_project_for_tool(
     args: dict[str, Any], ctx: ToolContext
 ) -> tuple[Any, Any] | ToolResult:
@@ -185,10 +322,19 @@ def _resolve_project_for_tool(
     whole point of the execution backend. What we verify here is
     that the project exists and the backend is wired onto the
     context.
+
+    ``project=fitt`` is reserved for the built-in pseudo-project
+    rooted at ``$FITT_HOME``; see
+    :func:`_maybe_resolve_builtin_fitt_project`.
     """
     project_name = args.get("project")
     if not isinstance(project_name, str) or not project_name:
         return ToolResult.error("Missing required argument: project")
+
+    builtin = _maybe_resolve_builtin_fitt_project(project_name, ctx)
+    if builtin is not None:
+        return builtin
+
     try:
         project = ctx.projects.get(project_name)
     except Exception as exc:
@@ -258,6 +404,10 @@ async def _tool_read_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if safe is None:
         return ToolResult.error(f"Path rejected (escapes project root or uses '..'): {path!r}")
 
+    rejected = _enforce_fitt_allowlist(project, safe, path)
+    if rejected is not None:
+        return rejected
+
     # Use `cat` so the same command works hub-local and via ssh.
     result = await backend.run_shell(project, ["cat", "--", safe], timeout_secs=_READ_TIMEOUT)
     if result.timed_out:
@@ -285,6 +435,10 @@ async def _tool_list_directory(args: dict[str, Any], ctx: ToolContext) -> ToolRe
     if safe is None:
         return ToolResult.error(f"Path rejected (escapes project root or uses '..'): {path!r}")
 
+    rejected = _enforce_fitt_allowlist(project, safe, path)
+    if rejected is not None:
+        return rejected
+
     # `ls -la` is the portable answer (BSD + GNU both support it).
     # `--` guards against paths starting with `-`.
     result = await backend.run_shell(project, ["ls", "-la", "--", safe], timeout_secs=_LIST_TIMEOUT)
@@ -303,6 +457,13 @@ async def _tool_grep_repo(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if isinstance(resolved, ToolResult):
         return resolved
     project, backend = resolved
+
+    if project.name == _FITT_BUILTIN_NAME:
+        return ToolResult.error(
+            "grep_repo is not supported on the built-in 'fitt' project. "
+            "Use read_file with a specific path under "
+            f"{', '.join(_FITT_BUILTIN_ALLOWLIST)}/ instead."
+        )
 
     pattern = args.get("pattern")
     if not isinstance(pattern, str) or not pattern:
@@ -338,6 +499,13 @@ async def _tool_glob_search(args: dict[str, Any], ctx: ToolContext) -> ToolResul
     if isinstance(resolved, ToolResult):
         return resolved
     project, backend = resolved
+
+    if project.name == _FITT_BUILTIN_NAME:
+        return ToolResult.error(
+            "glob_search is not supported on the built-in 'fitt' project. "
+            "Use list_directory with a specific path under "
+            f"{', '.join(_FITT_BUILTIN_ALLOWLIST)}/ instead."
+        )
 
     pattern = args.get("pattern")
     if not isinstance(pattern, str) or not pattern:
@@ -375,6 +543,10 @@ async def _tool_write_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult
     if isinstance(resolved, ToolResult):
         return resolved
     project, backend = resolved
+
+    rejected = _reject_fitt_for_writes(project)
+    if rejected is not None:
+        return rejected
 
     path = args.get("path")
     if not isinstance(path, str) or not path:
@@ -444,6 +616,10 @@ async def _tool_edit_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if isinstance(resolved, ToolResult):
         return resolved
     project, backend = resolved
+
+    rejected = _reject_fitt_for_writes(project)
+    if rejected is not None:
+        return rejected
 
     path = args.get("path")
     if not isinstance(path, str) or not path:

@@ -805,3 +805,222 @@ async def test_edit_file_read_failure_surfaces(
     assert result.is_error
     assert "No such file" in result.payload
     assert len(backend.calls) == 1
+
+
+# --------------------------------------------------------------- builtin fitt project (Phase 4.10)
+
+
+@pytest.fixture
+def fitt_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Override FITT_HOME to a tmp dir for built-in-project tests.
+
+    The autouse ``isolate_fitt_home`` fixture from conftest already
+    sets FITT_HOME to ``tmp_path/fitt-home``; we read it back rather
+    than redirecting again, so the built-in resolver and these
+    tests agree on which directory ``project=fitt`` points at.
+    """
+    import os
+
+    home = Path(os.environ["FITT_HOME"])
+    (home / "skills").mkdir(parents=True, exist_ok=True)
+    return home
+
+
+async def test_read_file_builtin_fitt_resolves_skill_path(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """``project=fitt path=skills/<name>/SKILL.md`` resolves to a
+    ``cat`` against the FITT_HOME-rooted path."""
+    skill_md = fitt_home / "skills" / "say-hello" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True, exist_ok=True)
+    skill_md.write_text("---\nname: say-hello\n---\nbody\n")
+
+    backend = FakeBackend(responses=[_ok(stdout="recipe contents")])
+    tool = tool_registry.lookup("read_file")
+    result = await tool.callable(
+        {"project": "fitt", "path": "skills/say-hello/SKILL.md"},
+        _ctx(project_registry, backend),
+    )
+    assert not result.is_error, result.payload
+    assert result.payload == "recipe contents"
+
+    assert len(backend.calls) == 1
+    call = backend.calls[0]
+    assert call["project"] == "fitt"
+    assert call["ssh_host"] == ""  # always hub-local
+    assert call["cmd"] == ["cat", "--", "skills/say-hello/SKILL.md"]
+
+
+async def test_read_file_builtin_fitt_rejects_non_allowlisted_subdir(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """``project=fitt`` with a path outside the allowlist (e.g.
+    ``secrets.yaml``) returns ``Path rejected`` and never touches
+    the backend."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("read_file")
+    result = await tool.callable(
+        {"project": "fitt", "path": "secrets.yaml"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "rejected" in result.payload.lower()
+    assert "skills" in result.payload  # mentions allowlist
+    assert backend.calls == []
+
+
+async def test_read_file_builtin_fitt_rejects_ssh_subdir(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """The ssh/ subdir holds the gateway's private key — must
+    never be reachable via the built-in fitt project."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("read_file")
+    result = await tool.callable(
+        {"project": "fitt", "path": "ssh/id_ed25519"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "rejected" in result.payload.lower()
+    assert backend.calls == []
+
+
+async def test_read_file_builtin_fitt_rejects_traversal(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """``../`` traversal is caught by the existing _safe_path
+    check, before the allowlist check ever runs. Either-way
+    rejection is the contract."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("read_file")
+    result = await tool.callable(
+        {"project": "fitt", "path": "skills/../secrets.yaml"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "rejected" in result.payload.lower()
+    assert backend.calls == []
+
+
+async def test_read_file_builtin_fitt_rejects_root_listing(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """``project=fitt path=.`` (or empty) doesn't pick a subdir
+    from the allowlist, so it's rejected. Forces the agent to
+    name a specific subdir."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("read_file")
+    result = await tool.callable(
+        {"project": "fitt", "path": "."},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "rejected" in result.payload.lower()
+    assert backend.calls == []
+
+
+async def test_list_directory_builtin_fitt_works_for_allowlisted_subdir(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """``list_directory project=fitt path=skills/`` is allowed —
+    same allowlist guard, same outcome."""
+    backend = FakeBackend(responses=[_ok(stdout="total 0\n")])
+    tool = tool_registry.lookup("list_directory")
+    result = await tool.callable(
+        {"project": "fitt", "path": "skills"},
+        _ctx(project_registry, backend),
+    )
+    assert not result.is_error, result.payload
+    assert backend.calls[0]["cmd"] == ["ls", "-la", "--", "skills"]
+
+
+async def test_grep_repo_builtin_fitt_rejected(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """grep_repo against project=fitt is unsupported: a recursive
+    grep over FITT_HOME would defeat the subdir allowlist."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("grep_repo")
+    result = await tool.callable(
+        {"project": "fitt", "pattern": "secret"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "not supported" in result.payload.lower()
+    assert backend.calls == []
+
+
+async def test_glob_search_builtin_fitt_rejected(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """glob_search against project=fitt is unsupported for the
+    same reason as grep_repo."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("glob_search")
+    result = await tool.callable(
+        {"project": "fitt", "pattern": "*.md"},
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "not supported" in result.payload.lower()
+    assert backend.calls == []
+
+
+async def test_write_file_builtin_fitt_rejected(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """write_file against project=fitt is read-only; even
+    skills/ is off limits to the agent for writes."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("write_file")
+    result = await tool.callable(
+        {
+            "project": "fitt",
+            "path": "skills/new-skill/SKILL.md",
+            "content": "---\nname: x\ndescription: y\n---\n",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "read-only" in result.payload.lower()
+    assert backend.calls == []
+
+
+async def test_edit_file_builtin_fitt_rejected(
+    tool_registry: ToolRegistry,
+    project_registry: ProjectRegistry,
+    fitt_home: Path,
+) -> None:
+    """edit_file against project=fitt is read-only too."""
+    backend = FakeBackend()
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "fitt",
+            "path": "skills/say-hello/SKILL.md",
+            "old_str": "old",
+            "new_str": "new",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "read-only" in result.payload.lower()
+    assert backend.calls == []

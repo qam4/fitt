@@ -591,6 +591,8 @@ def _dedupe_by_name(skills: list[LoadedSkill]) -> tuple[list[LoadedSkill], int]:
 def render_skills_block(
     skills: Iterable[LoadedSkill],
     tool_registry: ToolRegistry,
+    *,
+    fitt_home: Path | None = None,
 ) -> str:
     """Render the ``[Skills available]`` system-prompt block.
 
@@ -603,7 +605,17 @@ def render_skills_block(
 
     Per-skill line shape (Requirement 3.3 + 3.6 + 8.1):
 
-        - <name>: <description> (read recipe with read_file <abs_path>)[; needs: a, b][[unavailable: a]]
+        - <name>: <description> (read recipe with read_file project=fitt path=<rel>)[; needs: a, b][[unavailable: a]]
+
+    The recipe-load hint resolves the SKILL.md via the built-in
+    ``fitt`` pseudo-project (see
+    :func:`gateway.tools.fileops._maybe_resolve_builtin_fitt_project`).
+    That gives the agent a working tool call shape without
+    requiring operator-side ``projects.yaml`` configuration.
+    Falls back to an absolute path when the skill lives outside
+    ``$FITT_HOME`` — that recipe won't be loadable as-is via
+    ``project=fitt``, but the hint is at least factually
+    accurate about where the file lives.
 
     The ``; needs:`` segment appears only when the skill
     declares prerequisites; the ``[unavailable: ...]`` segment
@@ -611,10 +623,23 @@ def render_skills_block(
     missing from the live ToolRegistry. Both segments stack
     in that order on the same line, before the line's
     terminating newline.
+
+    ``fitt_home`` defaults to the gateway's configured FITT_HOME
+    when omitted (production caller); tests pass an explicit
+    ``Path`` for determinism.
     """
     skills_list = list(skills)
     if not skills_list:
         return ""
+
+    if fitt_home is None:
+        # Lazy import to avoid the gateway.config -> gateway.tools
+        # circular when this module is imported during config
+        # bootstrap.
+        from .config import fitt_home as _fitt_home
+
+        fitt_home = _fitt_home()
+    fitt_home_resolved = fitt_home.resolve()
 
     # Live tool name set for the prerequisite check
     # (Requirement 8.1). One snapshot per render; the set is
@@ -626,13 +651,22 @@ def render_skills_block(
         key=lambda s: (s.name.casefold(), str(s.skill_md_path)),
     )
 
-    lines = ["[Skills available]"]
+    lines = [
+        "[Skills available]",
+        (
+            "Each skill below provides a recipe for a specific task. "
+            "When the user's request matches a skill's description, "
+            "load the recipe with the read_file call shown in "
+            "parentheses, then follow it."
+        ),
+    ]
     for s in sorted_skills:
         # Description with embedded newlines collapsed
         # (Requirement 3.3).
         desc = s.description.replace("\r", " ").replace("\n", " ").strip()
 
-        line = f"- {s.name}: {desc} (read recipe with read_file {s.skill_md_path})"
+        recipe_hint = _format_recipe_hint(s.skill_md_path, fitt_home_resolved)
+        line = f"- {s.name}: {desc} {recipe_hint}"
 
         if s.prerequisites:
             line += "; needs: " + ", ".join(s.prerequisites)
@@ -644,3 +678,23 @@ def render_skills_block(
         lines.append(line)
 
     return "\n".join(lines)
+
+
+def _format_recipe_hint(skill_md_path: Path, fitt_home_resolved: Path) -> str:
+    """Build the ``(read recipe with ...)`` segment of a skill line.
+
+    When the skill lives under ``$FITT_HOME``, emit the
+    ``project=fitt`` form so the model can call the existing
+    ``read_file`` tool against the built-in pseudo-project.
+    Otherwise fall back to an absolute path — that recipe won't
+    be loadable as-is via the standard fileops surface, but the
+    hint is at least factually accurate about where the file
+    lives.
+    """
+    try:
+        rel = skill_md_path.resolve().relative_to(fitt_home_resolved)
+    except ValueError:
+        return f"(read recipe with read_file {skill_md_path})"
+
+    rel_posix = rel.as_posix()
+    return f"(read recipe with read_file project=fitt path={rel_posix})"
