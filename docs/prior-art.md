@@ -553,27 +553,838 @@ Wikipedia.
 
 ### Hermes Agent (Nous Research)
 
-*What:* Self-hosted, model-agnostic AI assistant.
-Runs on local machine or VPS. Terminal + messaging
-interfaces. Self-improving: repeated tasks become reusable
-skills.
-*Relevance to FITT:* the closest explicit-competitor
-shape. "Install on your server, give it your messaging
-accounts, persistent personal agent" — verbatim FITT's
-pitch. Self-improving skills are what our lessons system
-is reaching for.
-*Why not adopt (preliminary):* haven't yet dug into it
-seriously. From a skim: their skills-synthesis approach
-is interesting but their hosting story seems
-single-machine (we're two-machine cluster). Need a
-deeper read before making a call.
-*What to do:* actual evaluation on the Phase 7 memory
-work. If Hermes has genuinely solved RAG + compaction +
-skill-synthesis for a personal agent, that's a lot of
-phases of work we don't need to build.
-*Status:* [hermes-agent.ai](https://hermes-agent.ai/),
-[hermes-agent.org](https://hermes-agent.org/). Active
-development 2026.
+*What:* Self-hosted, model-agnostic AI assistant in
+Python. Runs on local machine, VPS, or serverless
+infrastructure (Modal / Daytona / Vercel Sandbox).
+Terminal (Ink TUI) + 20+ messaging surfaces (Telegram,
+Discord, Slack, WhatsApp, Signal, Email, …). MIT licensed.
+Built by Nous Research; closest explicit competitor
+to FITT in shape and stack.
+*Relevance to FITT:* very close. Same pitch ("install
+on your server, give it your messaging accounts,
+persistent personal agent"), same language, similar
+patterns. Six months further along on the
+self-improving / multi-channel / messaging-gateway axes.
+*Why not adopt:* the same reasoning as OpenClaw —
+sprawling scope (~17k tests across ~900 files,
+"~12k LOC `AIAgent` class," `cli.py` "~11k LOC")
+versus FITT's narrow Telegram + gateway + memory.
+Inheriting that codebase means inheriting much more
+than one person can maintain. Also, several of their
+opinions diverge from FITT's (no aliasing, single
+default model with `thinking`/`fastMode` knobs;
+provider profiles instead of LiteLLM; closed in-tree
+memory provider list with new ones forced to
+out-of-tree plugins).
+*Status:* [NousResearch/hermes-agent on
+GitHub](https://github.com/NousResearch/hermes-agent).
+Active development through May 2026. MIT licensed.
+
+### Hermes Agent — 2026-05-21 problem-driven audit
+
+Cloned to `.scratch/hermes-agent/` for source-level
+reading; not a fork. Same problem-driven format as
+the OpenClaw audit: each question is something FITT
+hit during development, and the entry compares how
+each project answers it.
+
+#### Q: What does "self-improving skills" actually mean?
+
+*FITT today:* `learn_*` tools — operator-correction
+captures via `lessons/<project>.md`. The agent
+references them on subsequent turns. No automatic
+review, no archival, no consolidation. One-way
+write.
+
+*Hermes:* `agent/curator.py` (~1850 lines) +
+`tools/skill_usage.py` + per-run reports.
+Mechanism:
+- Skills carry a `created_by: "agent"` provenance
+  marker. Curator only touches agent-created
+  skills; bundled and hub-installed skills are
+  off-limits.
+- `~/.hermes/skills/.usage.json` sidecar tracks
+  per-skill `use_count`, `view_count`, `patch_count`,
+  `last_activity_at`, `state`
+  (active / stale / archived), `pinned`.
+- `apply_automatic_transitions()` is a pure function
+  (no LLM): walks skill records, marks `stale` after
+  30 days idle, archives after 90 days idle.
+  Reactivates a stale skill if it's used again.
+- `run_curator_review()` then forks a separate
+  `AIAgent` against an auxiliary model (cheap one,
+  configured via `auxiliary.curator.{provider,model}`)
+  to review the candidate list. The fork has
+  `skip_memory=True` and disabled nudges so it
+  doesn't recurse. It can pin / archive /
+  consolidate / patch via `skill_manage`.
+- Pre-run snapshot via `agent/curator_backup.py`
+  (tar.gz of the skills dir). Reports written to
+  `~/.hermes/skills/.reports/` per run with a
+  rename map (old-name → umbrella) so the user can
+  see what moved where. Archive is at
+  `~/.hermes/skills/.archive/` and is fully
+  restorable. Never deletes.
+- Triggered inactivity-based: when the agent's
+  been idle long enough and the last run was more
+  than `interval_hours` ago (default 7 days),
+  `maybe_run_curator()` spawns a daemon thread.
+  No cron daemon; gateway-tick driven.
+
+*Comparison:* this is real — pure-function transitions
++ LLM-judged consolidation + recoverable archive +
+provenance-gated. Way past `learn_*`.
+
+*Borrow:* not the whole thing. FITT's gap is content,
+not architecture — we don't yet have enough lessons
+or skills for archival to matter. The pattern worth
+remembering: **provenance + sidecar telemetry + pure
+transitions + LLM judge + recoverable archive**. If
+Phase 7 (memory v1) ever needs a "stale lessons"
+sweep, this is the reference implementation. Effort
+to copy: real (multi-day). Don't until the pile is
+big enough to be a problem.
+
+#### Q: How is Honcho used for cross-session user modeling?
+
+*FITT today:* memory is markdown-per-session
+(`identity.md`, `today/<date>.md`). No structured
+user model across sessions; no semantic search; no
+"the assistant gets to know you over time" beyond
+markdown the operator wrote by hand.
+
+*Hermes:* `plugins/memory/honcho/` — a memory
+provider plugin around the [Honcho](https://github.com/plastic-labs/honcho)
+external service (plastic-labs). Implements
+`MemoryProvider` ABC with five tools surfaced to
+the model:
+- `honcho_profile` — read/write a peer's "card"
+  (curated facts).
+- `honcho_search` — semantic search, returns
+  excerpts ranked by relevance, no LLM synthesis.
+- `honcho_reasoning` — natural-language Q&A
+  against Honcho's dialectic reasoning model
+  (higher cost; explicit `reasoning_level` knob).
+- `honcho_context` — full session context
+  retrieval (summary + peer rep + recent
+  messages).
+- `honcho_conclude` — write or delete persistent
+  conclusions about a peer.
+The provider's `sync_turn()` records each
+conversation turn into Honcho non-blocking;
+`prefetch()` retrieves relevant prior context for
+the next turn's system prompt.
+
+Honcho itself is the heavy work — a separate
+project with its own dialectic reasoning model
+that builds peer representations over time. The
+Hermes plugin is a fairly thin wrapper.
+
+*Comparison:* Honcho is the kind of "user
+modeling layer" FITT would want for Phase 7
+(memory v1, cross-project recall). It solves
+a problem FITT explicitly has: "the assistant
+should learn who I am over time without me
+manually editing markdown." The fact that
+Hermes integrates with it via a 1300-line
+plugin and not by re-implementing means the
+integration cost is portable.
+
+*Borrow:* worth a real evaluation when Phase 7
+starts. Honcho is open source, has an MIT-licensed
+SDK, and runs as either a hosted service
+(`app.honcho.dev`) or self-hosted. The plugin's
+sync_turn / prefetch / system_prompt_block
+contract is exactly the shape FITT's
+`MemoryStore` would need. **Action:** when Phase 7
+opens, look at `plugins/memory/honcho/__init__.py`
+and `session.py` first. The five-tool surface
+(`profile`, `search`, `reasoning`, `context`,
+`conclude`) is a good schema even if FITT
+doesn't end up using Honcho proper. Effort to
+add Honcho-as-FITT-plugin: 1-2 days for a
+working v0; more for the same care Hermes
+gives it (reasoning-level knob, structured
+peer aliases, etc.).
+
+#### Q: Cross-session search — FTS5 + LLM summarization?
+
+*FITT today:* no cross-session search. The agent
+reads `identity.md` + today's history; older
+sessions are markdown files in
+`~/.fitt/today/<date>.md` that nothing reads after
+the day rolls over.
+
+*Hermes:* `tools/session_search_tool.py`. SQLite
+FTS5 over the `~/.hermes/sessions.db` message
+store. Three calling shapes from one tool:
+- **Discovery** — pass `query`, get top-N
+  matching sessions with a 5-message
+  anchored window around the FTS5 hit, plus
+  3-message bookends at session start/end.
+- **Scroll** — pass `session_id +
+  around_message_id`, get 5 messages either
+  side of an anchor.
+- **Browse** — no args, get recent sessions.
+Honors lineage: session continuations are deduped
+by parent so a single resumed conversation
+doesn't appear N times. Excludes the current
+session. Returns actual messages from the DB —
+no LLM call in the search itself.
+
+The README's "FTS5 + LLM summarization" claim:
+the FTS5 is the search; the LLM summarization
+is a separate feature
+(`agent/conversation_compression.py`) that
+compresses long histories into summaries when
+context budget runs low. Two distinct things;
+the README phrasing implies they're integrated,
+but reading the code, they're not — search
+returns raw messages and the agent does its own
+summarization if needed.
+
+*Comparison:* honest implementation. FITT will
+need this when Phase 7 lands. The three-shape
+contract (discovery / scroll / browse) is well-
+designed — one tool, no proliferation.
+
+*Borrow:* the schema. When FITT ships
+cross-session search, the SQLite + FTS5 +
+anchored-window pattern is the right one. One
+tool, three shapes inferred from which args are
+set. Effort: 1-2 days for an FTS5 layer over
+a future FITT message store.
+
+#### Q: Subagent spawning model — how isolated, how communicate?
+
+*FITT today:* no subagents. Cron firings reuse
+the main session. Tools run in the main process.
+
+*Hermes:* `tools/delegate_tool.py`. Spawns child
+`AIAgent` instances via `ThreadPoolExecutor`.
+Two roles:
+- `role="leaf"` (default) — focused worker.
+  Cannot call `delegate_task`, `clarify`,
+  `memory`, `send_message`, `execute_code`.
+- `role="orchestrator"` — retains
+  `delegate_task` for nested spawning. Gated
+  by `delegation.orchestrator_enabled` and
+  bounded by `delegation.max_spawn_depth`
+  (default 2).
+Two shapes: `goal=...` (single child) or
+`tasks=[...]` (parallel batch, capped by
+`max_concurrent_children`, default 3).
+Key plumbing:
+- Synchronous: parent blocks until children
+  return.  Parent interrupt cancels children.
+- Approval callbacks installed per-thread so
+  children's dangerous-command approvals
+  don't reach the parent's TUI (would
+  deadlock). Default is auto-deny;
+  `delegation.subagent_auto_approve=true`
+  for opt-in YOLO.
+- Process-global `_active_subagents` registry
+  for live spawn-tree introspection (TUI
+  observability layer reads it).
+- Children inherit MCP toolsets opt-in
+  (`inherit_mcp_toolsets`).
+The "synchronicity rule" they explicitly
+document: `delegate_task` is **not** durable.
+For long-running work that must outlive the
+turn, use `cronjob` or
+`terminal(background=True, notify_on_complete=True)`.
+
+*Comparison:* well-engineered for a single-
+process agent. Some FITT-side problems they've
+clearly hit (TUI deadlock from child approval
+prompts) don't apply to FITT yet because we
+don't have subagents.
+
+*Borrow:* not yet. FITT's deployment shape
+(Hub gateway + Compute Ollama; no Telegram-
+spawned subagents on the to-do list) makes this
+premature. **If/when** FITT ever wants
+subagents, the toolset-restriction (`leaf` blocks
+`send_message` so the child can't ping the user
+on its own) and the per-thread approval-callback
+plumbing are the patterns worth borrowing.
+Effort to ship sub-agents would be 3-5 days
+following their pattern.
+
+#### Q: Seven terminal backends?
+
+*FITT today:* `project_shell` runs locally on
+the gateway machine, or via SSH to a registered
+project's host (the Hub/Compute split). Two
+"backends" in spirit: local and SSH.
+
+*Hermes:* `tools/environments/` — `local.py`,
+`docker.py`, `ssh.py`, `singularity.py`,
+`modal.py` (Modal serverless), `daytona.py`
+(Daytona dev sandboxes), `vercel_sandbox.py`,
+`managed_modal.py`. Configured via
+`terminal.backend` in `config.yaml`. The
+"hibernates when idle" claim is real — Modal
+and Daytona are both pay-per-second sandboxed
+compute platforms. Hermes the agent can be
+running on a $5 VPS while heavy `terminal()`
+calls go to a Modal sandbox that wakes on
+demand.
+
+*Comparison:* Hermes has built up a real
+abstraction here. FITT's SSH backend covers
+the "remote execution" case (Compute) but
+nothing serverless. The Modal/Daytona/Vercel
+backends are paid services — outside Principle
+5 (no subscription).
+
+*Borrow:* maybe the SSH backend's auth path
+if Compute ever needs more polish. Modal /
+Daytona / Vercel — not for FITT. Singularity
+(HPC-style container) is potentially relevant
+if FITT ever runs on a research cluster but
+that's not the deployment story today.
+
+#### Q: How do they handle Telegram approvals?
+
+*FITT today:* one renderer per turn,
+`ApprovalPoller` owns the approval bubble,
+inline-keyboard buttons with callback_data.
+
+*Hermes:* `gateway/platforms/telegram.py` —
+`send_exec_approval()`. Inline keyboard, four
+buttons: Allow Once / Session / Always / Deny.
+Compact `callback_data` of the form
+`ea:<choice>:<approval_id>` where `approval_id`
+is a small monotonic counter (so the 64-byte
+limit is never an issue). Mapping from
+`approval_id` → `session_key` is held in
+`self._approval_state` (in-memory dict). On
+button click: validates the user is
+authorized (`_is_callback_user_authorized()`),
+edits the message in place to show the
+decision label, then calls
+`resolve_gateway_approval(session_key, choice)`
+to unblock the agent thread.
+
+*Comparison:* nearly identical to FITT's
+approval pattern. Differences:
+- Counter for `approval_id` instead of UUID,
+  which keeps `callback_data` short. (FITT
+  uses UUID; ~44 bytes for the id alone.
+  We're under the 64-byte limit but with no
+  margin if the schema grows.)
+- Per-user authorization check on every
+  click. FITT relies on chat-level filtering.
+  If a malicious user is somehow added to
+  the chat, FITT's approval is openable by
+  anyone in the chat.
+- Four-button layout (Once / Session / Always
+  / Deny) versus FITT's per-prompt button set.
+
+*Borrow:*
+- The compact `ea:<choice>:<id>` format with
+  a counter — note for the future. Pattern
+  same as the OpenClaw alias-rewrite
+  recommendation. Cheap to add.
+- The per-click `_is_callback_user_authorized`
+  check — worth a Phase 4 hardening pass. If
+  FITT's Telegram chat ever gains a second
+  user (operator's family member, etc.) the
+  approval should still be operator-only.
+  Few hours.
+
+#### Q: How do they handle upstream timeouts vs cancellation?
+
+*FITT today:* Phase 4.9.
+`asyncio.wait_for(asyncio.shield(task), timeout=300)`
+at the router layer. We orphan-and-shield (don't
+cancel the upstream call) because LiteLLM's
+`timeout=` kwarg is unreliable.
+
+*Hermes:* multi-layer.
+`hermes_cli/timeouts.py` exposes
+`get_provider_request_timeout` and
+`get_provider_stale_timeout`. Per-provider
+timeouts in config (e.g.
+`models.providers.<id>.timeoutSeconds`).
+`agent/error_classifier.py::FailoverReason`
+classifies any TimeoutError /
+APITimeoutError / connection error as
+retryable timeout. The error message they
+show is the actionable one we noted in the
+OpenClaw audit ("increase
+`models.providers.<id>.timeoutSeconds`…")
+because both projects landed on similar
+phrasing — Hermes's may be the original.
+Cancellation: they don't use LiteLLM (see
+below) so the OpenAI SDK's native timeout
+semantics apply, and the code does cancel.
+On non-streaming calls a watchdog raises
+TimeoutError after the stale threshold and
+the underlying request is closed.
+
+*Comparison:* they have real cancellation
+because they own the transport (no LiteLLM
+in between to ignore the timeout kwarg).
+Their error message UX is the same actionable
+shape OpenClaw has. Both are better than
+FITT's `upstream_silent` v0 message.
+
+*Borrow:*
+- The error-message phrasing — same as the
+  OpenClaw note. "Better-shaped operator
+  error messages" was already in the pick-
+  list; Hermes's phrasing is another data
+  point that the actionable-config-key
+  format works.
+- Provider-level timeout config keys (rather
+  than gateway-wide), so ad-hoc local Ollama
+  calls can have a longer ceiling than
+  cloud calls. FITT today has one
+  `upstream_timeout_secs`. Worth a Phase 5+
+  config split: `providers.<id>.timeout_secs`.
+  Half a day.
+
+#### Q: Do they use LiteLLM?
+
+*FITT:* yes, for everything.
+
+*Hermes:* no. `plugins/model-providers/` has
+**28 provider profiles** (anthropic, openai-codex,
+gemini, deepseek, openrouter, novita, kimi,
+nvidia, zai, xiaomi, minimax, bedrock, copilot,
+nous, opencode, gmi, huggingface, kilocode, …).
+Each is a `ProviderProfile` subclass that knows
+the provider's quirks (Anthropic's reasoning
+config, Kimi's omitted temperature, Gemini's
+thinking_config translation, OpenRouter's
+provider-preferences passthrough, Qwen's OAuth
+and message normalization, Bedrock's lack of
+`/v1/models`). Discovery is lazy at
+`providers/__init__.py._discover_providers()`,
+NOT through the general PluginManager (would
+double-instantiate).
+
+*Comparison:* same trade as OpenClaw — they paid
+for the layer themselves. Bigger surface area
+than OpenClaw because Hermes targets even more
+providers (Nous Portal, Modal, Daytona, etc.)
+out of the box. Hand-written per-provider
+quirks visible in the codebase tell the
+story: every provider has a different
+reasoning shape and Hermes serializes them
+all in profile classes.
+
+*Borrow:* nothing concrete. FITT's
+LiteLLM-as-mature-tool decision still makes
+sense for our two-provider scope. The
+provider-profile pattern is interesting if
+FITT ever moves off LiteLLM, but that's a
+~2-month migration we haven't decided to do.
+
+#### Q: What does their dashboard / web UI have?
+
+*FITT today:* no dashboard. CLI + HTTP read
+endpoints (Phase 4.8c).
+
+*Hermes:* `web/` (web app) + `hermes_cli/web_server.py`
+(FastAPI server). Notable surfaces in
+`web/src/pages/`:
+- `ChatPage` — embeds the actual `hermes --tui`
+  via xterm.js + WebSocket-PTY bridge. NOT a
+  rewrite of the chat UX. The dashboard's chat
+  is the same Ink TUI running in a remote
+  terminal.
+- Sidebar widgets (`ChatSidebar`,
+  `ModelPickerDialog`, `ToolCall`) — supporting
+  views, not a second chat surface.
+- Various supporting pages: settings, logs,
+  insights, sessions, cron, kanban.
+
+The architectural rule they document
+explicitly in AGENTS.md: **don't reimplement
+the chat experience in React. Extend the Ink
+TUI; the dashboard embeds it via PTY.**
+
+*Comparison:* clever solution. They get a
+modern web UI without building two chat
+implementations. The cost: requires a POSIX
+PTY (Windows works only via WSL2). FITT's
+two-machine cluster has Linux on the Compute
+node and Windows on the Hub; an embedded-PTY
+dashboard would only work on the Linux
+machine.
+
+*Borrow:* the architectural principle. **If
+FITT ever gets a dashboard, the chat pane
+should not be a second implementation of
+Telegram-style rendering.** Either embed a
+TUI (cross-platform issue with Windows) or
+make the dashboard the consumer-of-an-event-
+stream that the existing renderer already
+publishes. The latter fits FITT's existing
+shape better (Phase 4.8c HTTP endpoints + the
+Telegram renderer). Don't duplicate render
+logic.
+
+#### Q: How do they "talk you through setup"?
+
+*FITT today:* same as OpenClaw answer — the
+docs aren't structured for the agent to drive.
+
+*Hermes:* same answer as OpenClaw. Skills are
+markdown with prose, prerequisites, "Setup
+(once)" sections, command examples, fallback
+paths. `hermes setup` runs an interactive
+wizard for first-time provider/model/messaging
+config, but ongoing "help me set up X" comes
+from the same skills-as-markdown substrate.
+Plus `hermes claw migrate` for migrating from
+OpenClaw — a recipe-driven import.
+
+*Comparison:* same takeaway. **Content gap,
+not architecture gap.** If FITT had a
+skills loader (top of the OpenClaw pick-list),
+both projects' skills would be drop-in usable.
+
+*Borrow:* same as OpenClaw recommendation.
+Skills loader is the single highest-leverage
+change. Hermes adds an additional argument:
+**two independent projects converged on
+markdown-skills as the substrate.** Strong
+signal that this is the right shape.
+
+#### Q: How do they handle hallucinated tool calls?
+
+*FITT today:* limited handling, same as the
+OpenClaw answer.
+
+*Hermes:* `agent/tool_executor.py` +
+`agent/tool_dispatch_helpers.py` +
+`agent/tool_guardrails.py` +
+`agent/tool_result_classification.py`. They
+have a `schema_sanitizer.py` that fixes
+common malformed-schema issues before
+dispatch. `tool_guardrails.py` enforces
+toolset-level restrictions (leaf children
+can't call `send_message`, etc.).
+`error_classifier.py` distinguishes recoverable
+errors from terminal ones. Like OpenClaw,
+they've put real engineering into this.
+
+*Comparison:* both reference systems have
+defense-in-depth that FITT doesn't.
+
+*Borrow:* same conclusion as OpenClaw. If
+hallucination rate becomes operationally
+annoying, the schema-sanitize-before-dispatch
+pattern is the right shape. Until then, punt.
+
+#### Q: How do they handle long histories / context budget?
+
+*FITT today:* same as OpenClaw answer.
+Compaction not implemented.
+
+*Hermes:* `agent/conversation_compression.py`
+(`compress_context()`),
+`agent/context_compressor.py`,
+`agent/context_engine.py`,
+`agent/manual_compression_feedback.py`,
+`agent/trajectory.py` +
+top-level `trajectory_compressor.py`. They
+also have a "model feasibility" check — refuses
+to compress against a model that would
+hallucinate the summary. Slash commands
+`/compress`, `/usage`, `/insights` for
+operator-driven compaction. Curator-driven
+context-engine plugins
+(`plugins/context_engine/`) for swappable
+strategies.
+
+*Comparison:* even more elaborate than
+OpenClaw's compaction system. Real
+infrastructure.
+
+*Borrow:* same Phase 7 placeholder.
+`conversation_compression.py` is a useful
+starting reference if FITT ever needs to
+ship compaction. Trajectory compression as a
+side activity (used here for training data
+generation) is interesting but out of FITT's
+scope.
+
+#### Q: Do they have a heartbeat / proactive subsystem?
+
+*FITT today:* `cron_*` tools. Operator/agent
+schedules sessions to fire later; the agent
+runs and may call `send_message`. No
+heartbeat-shaped poll loop.
+
+*Hermes:* surprisingly, **no user-facing
+heartbeat** in the OpenClaw sense (no
+`HEARTBEAT.md` poll loop, no
+`heartbeat_respond` outcome ∈ {progress,
+no_change, done, needs_attention} contract).
+What they call "heartbeat" is internal:
+`kanban_db.heartbeat_claim()` and
+`heartbeat_worker()` are worker-liveness
+signals for the kanban dispatcher's
+multi-worker board — completely different
+domain. The proactive surface is `cron/`
++ webhook subscriptions:
+- `cron/jobs.py` + `scheduler.py` — schedule
+  formats include duration ("30m"), "every"
+  phrases ("every monday 9am"), 5-field
+  cron, ISO timestamps.
+- 3-minute hard interrupt on cron sessions,
+  catchup window, grace window — operational
+  hardening FITT mostly has too.
+- Webhook subscriptions
+  (GitHub events, generic API triggers) are
+  the "external trigger" piece FITT doesn't
+  have.
+- Pre-run scripts can inject context into
+  the prompt; `[SILENT]` response suppresses
+  delivery so the operator only gets pinged
+  when something actually changed.
+
+*Comparison:* OpenClaw's heartbeat pattern
+isn't here. FITT's cron pattern matches
+Hermes more closely (timer fires; agent
+decides whether to ping). Both projects
+treat the "wake up periodically and check
+X" use case via cron, not via a separate
+heartbeat subsystem.
+
+*Borrow:*
+- The `[SILENT]` response convention for
+  cron jobs. Cheap and powerful. FITT's
+  `send_message` is unconditional in
+  cron firings — adding a "model says
+  silent → don't notify" path costs almost
+  nothing and prevents notification
+  fatigue. Few hours.
+- Webhook subscriptions are a real Phase 6+
+  feature when FITT moves past polling. Not
+  on the critical path now.
+- The OpenClaw heartbeat schema (the
+  `outcome ∈ {progress, no_change, done,
+  needs_attention} + notify=bool +
+  priority` contract) remains the right
+  shape for FITT's eventual heartbeat —
+  Hermes doesn't disagree with it, just
+  doesn't have one.
+
+#### Q: Do they sandbox sub-agents?
+
+*FITT today:* no. Tools run on the host.
+
+*Hermes:* yes, indirectly. Subagents run in
+the same process by default (Python threads),
+but the `terminal()` tool inside them
+defaults to the per-agent
+`terminal.backend` config — which can be
+Docker, Modal, Daytona, or a sandbox.
+Direct comparison to OpenClaw's per-agent
+sandbox option:
+- OpenClaw: explicit `workspaceAccess`
+  per agent.
+- Hermes: `terminal.backend` per profile;
+  subagents inherit the parent's config
+  unless overridden.
+
+Less granular than OpenClaw's per-agent
+sandbox. Stronger than FITT's "no sandbox."
+
+*Comparison:* both reference systems offer
+sandboxing FITT doesn't have. Both pay for
+it via Docker / cloud sandbox boxes, which
+collide with FITT's Principle 5.
+
+*Borrow:* same conclusion as OpenClaw. Not
+in scope without sub-agents or a real
+operational driver.
+
+#### Q: Multi-key auth rotation per provider?
+
+*FITT today:* one key per provider in
+`secrets.yaml`.
+
+*Hermes:* `agent/credential_pool.py` +
+`agent/credential_sources.py`. Multi-key
+support with cooldown and rotation, similar
+to OpenClaw's `auth-profiles` system. Same
+trade-off: FITT's single-user scope doesn't
+need it.
+
+*Borrow:* not in scope.
+
+#### Q: How do they handle web search?
+
+*FITT today:* none.
+
+*Hermes:* `agent/web_search_provider.py`
+(ABC) + multiple providers in
+`plugins/web/`: brave-free, ddgs, searxng,
+exa, parallel, tavily, firecrawl. The
+search_backend / extract_backend split
+matches the FITT roadmap intuition (web
+search is one capability; web extract is
+another). The DDGS (DuckDuckGo HTML scrape)
+provider is the no-key path; SearXNG is the
+self-hosted one — exactly the two FITT
+identified earlier in this doc as the
+right options.
+
+*Comparison:* Hermes ships the option set
+FITT planned to build. The
+`WebSearchProvider` ABC contract
+(`search` / `extract` / `crawl` capability
+flags, plus `is_available` / `get_setup_schema`
+for `hermes tools` picker integration) is
+clean and portable.
+
+*Borrow:* the ABC shape, when FITT ships
+web search. Five method names + capability
+flags + a config-driven backend selector.
+The skills-loader path (per the OpenClaw
+pick-list) is one way; this provider-ABC
+path is another. Both are defensible. Effort
+either way: half a day.
+
+#### Q: Per-turn `thinking` level vs alias swap?
+
+*FITT today:* alias-per-role. No per-turn
+reasoning knob.
+
+*Hermes:* same as OpenClaw answer — single
+default model + per-turn `thinking` /
+`reasoning_level` knob (where the underlying
+provider supports it: Anthropic, Codex/
+o-series, DeepSeek, Gemini). The
+`agent/portal_tags.py` translates the tag
+across providers. Per-task overrides for
+auxiliary work (curator, vision, embedding,
+title generation, session_search) sit
+under `auxiliary.<task>.{provider,model,
+api_key,base_url,extra_body}`.
+
+*Comparison:* both Hermes and OpenClaw
+converged on the same answer here. FITT's
+alias-per-role is the better fit for IDE
+workflows; the per-turn `thinking` and
+auxiliary-task overrides are still worth
+borrowing in the same form OpenClaw uses.
+
+*Borrow:* same conclusion. Per-turn
+`thinking`/`reasoning_level` ~half day.
+Task-specific model overrides for
+compaction/voice/curator-style tasks ~half
+day each, lands with whatever phase needs
+the task.
+
+#### Q: Does Hermes use python-telegram-bot like FITT?
+
+*FITT:* yes.
+
+*Hermes:* yes. Same library, same callback-
+driven dispatch, same async/await model.
+Their integration is more elaborate (model
+picker UI in inline keyboards, sticker
+caching, "memory mode" for browsing past
+turns) but the foundation is the same. Two
+independent projects landed on PTB —
+another small Schelling point.
+
+*Borrow:* nothing — we're already there.
+
+#### Things FITT has that Hermes doesn't
+
+For balance:
+
+- **Aliases** as a routing concept. Hermes
+  has providers + models; FITT has
+  `fitt-default` / `fitt-smart` / `fitt-fast`
+  bound by config. Better fit for IDE
+  workflows where the user explicitly says
+  "use the smart one for this turn."
+- **Hub/Compute fallback router**.
+  Multi-machine topology with a fallback
+  contract. Hermes assumes single-host (or
+  a single sandbox per call); doesn't ladder
+  one machine to another the way FITT does.
+- **Capability-gap log** (`capability_gaps.jsonl`).
+  Hermes has rich event logging but no
+  dedicated "I'd need a tool to X" feed
+  from agent failures.
+- **HMAC-chained audit log**. Tamper-evident
+  forensic trail. Hermes has detailed
+  trajectory and event logs but not a
+  chained one.
+- **Phase 4.8 growing-bubble Telegram
+  renderer** — Hermes's Telegram renderer
+  is closer to "post one reply when
+  done." FITT's is sharper for long
+  responses and tool sequences.
+
+#### Summary
+
+The audit's takeaway: **Hermes is OpenClaw
+in Python**, with extra emphasis on the
+self-improving loop (curator + skill_usage
+sidecar + LLM-judged consolidation) and the
+serverless-backend story (Modal, Daytona,
+Vercel Sandbox). For FITT-side problems:
+- The skills-loader recommendation from the
+  OpenClaw audit is reinforced — two
+  reference systems converged on
+  markdown-skills as the substrate. Cement
+  it as the highest-leverage change.
+- Honcho-as-memory-provider is the most
+  important Phase 7 (memory v1) discovery
+  — a real cross-session user-modeling
+  service exists, with an MIT-licensed
+  Python SDK and a clean plugin pattern.
+- The `[SILENT]` cron response convention
+  is cheap and good. Worth borrowing
+  immediately — few hours of work.
+- Curator's pure-transitions + LLM-judged-
+  consolidation + recoverable-archive
+  pattern is the reference for any future
+  "stale lessons" sweep.
+- FTS5 + anchored-window session search is
+  the reference for cross-session search
+  when Phase 7 lands.
+- Provider-level timeout config keys (vs
+  one global) is the right schema for
+  Phase 5+ config split.
+
+Borrow-list updates (added at the bottom of
+the OpenClaw pick-list below):
+- `[SILENT]` cron response convention (~hours)
+- Honcho memory plugin evaluation (1-2 days)
+- FTS5 anchored-window session search
+  (1-2 days, when Phase 7 lands)
+- Provider-level timeout config keys
+  (~half day)
+- Per-click Telegram approval-button user
+  authorization (~hours)
+
+Don't borrow: the curator (too much
+machinery for FITT's current pile), the
+serverless-terminal backends (off Principle
+5), the multi-key auth rotation (not
+needed at single-user scale), the embedded-
+PTY dashboard (Windows incompatibility on
+the Hub).
+
+*Status:* [NousResearch/hermes-agent on
+GitHub](https://github.com/NousResearch/hermes-agent).
+Active development through May 2026. MIT
+licensed. Built by Nous Research; closely
+coupled to their Nous Portal model service
+but not exclusive to it.
 
 ### Beever Atlas (Votee AI + Beever AI)
 
@@ -732,6 +1543,11 @@ way.
 | "Voice / RAG / vector memory?"                   | Phase 7-8 territory                                | Real phases    | Per the roadmap |
 | "Per-turn 'think harder' without alias swap?"    | Surface `thinking` / `reasoning` level in chat request | Half day       | If a future model with adaptive thinking is on `fitt-smart` and we want per-turn control |
 | "Cheaper model for compaction / TTS / hooks?"    | Task-specific model overrides                      | Half day each  | Lands with Phase 7 (compaction) and Phase 8 (voice) — pattern worth borrowing then |
+| "Notification fatigue from cron jobs that fire even when nothing changed?" | `[SILENT]` cron response convention (Hermes audit, 2026-05-21) | Few hours | Anytime a cron firing pings even though there was nothing to say |
+| "Cross-session user modeling for the Phase 7 memory v1 question?" | Honcho memory plugin evaluation (Hermes audit) | 1-2 days for v0 | Phase 7 kickoff |
+| "How do I find what we discussed three weeks ago?" | FTS5 + anchored-window session search (Hermes audit) | 1-2 days | When Phase 7 lands and the session DB exists |
+| "Long-running provider (local Ollama) vs short-running (cloud) timeouts?" | Provider-level timeout config keys (Hermes audit) | Half day | When `upstream_silent` shape needs per-provider tuning — observed in NVIDIA queue-depth incidents |
+| "If a non-operator is added to the Telegram chat, can they approve commands?" | Per-click approval-button user authorization (Hermes audit) | Few hours | Before a second person joins the operator chat |
 
 The single highest-leverage change is the **skills
 loader**. It's small (half day), it answers a class of
