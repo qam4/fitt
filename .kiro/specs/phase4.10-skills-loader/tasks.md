@@ -126,7 +126,7 @@ the gateway yet — pure module + tests.
         `uv run ruff check src tests`, `uv run
         mypy src`, `uv run pytest -q` in
         `gateway/`. All green before committing.
-- [ ] 1n. Commit. Suggested message:
+- [x] 1n. Commit. Suggested message:
         `Phase 4.10/1: skills loader + renderer (no wiring yet)`.
 
 ## Commit 2: Wire into chat handler + config + integration test
@@ -136,7 +136,7 @@ them into the system prompt on each chat request,
 and ships an integration test that pins the
 end-to-end contract.
 
-- [ ] 2a. Add `skills_dir: Path` and
+- [x] 2a. Add `skills_dir: Path` and
         `skills_enabled: bool = True` fields to
         `MemoryConfig` in
         `gateway/src/gateway/config.py`. Default
@@ -147,7 +147,7 @@ end-to-end contract.
         `sessions_dir` (handles `~`, relative
         paths under FITT_HOME, str -> Path
         coercion).
-- [ ] 2b. In `gateway/src/gateway/app.py` (or
+- [x] 2b. In `gateway/src/gateway/app.py` (or
         wherever `create_app` instantiates the
         gateway components — check the actual
         boot path), construct a `SkillsLoader`
@@ -155,26 +155,26 @@ end-to-end contract.
         `config.memory.skills_enabled`, call
         `.scan()`, and stash the resulting list
         on `app.state.skills`.
-- [ ] 2c. In `gateway/src/gateway/chat.py`,
+- [x] 2c. In `gateway/src/gateway/chat.py`,
         compute `skills_block` alongside
         `capability_block`. When `router_mode`,
         skip the renderer (skills are
         FITT-internal, not part of router-mode
         passthrough — same posture as memory and
         capability_block today).
-- [ ] 2d. Extend `_inject_memory` to accept a
+- [x] 2d. Extend `_inject_memory` to accept a
         `skills_block: str = ""` parameter and
         concatenate parts in order
         `[capability_block, skills_block,
         ctx.system_prefix]`, dropping empty
         strings. Verify the existing system-
         prompt layering tests still pass.
-- [ ] 2e. Update `configs/config.example.yaml`
+- [x] 2e. Update `configs/config.example.yaml`
         per Requirement 4.9: add `skills_dir:
         skills/` and `skills_enabled: true`
         under the existing `memory:` block, each
         with one comment sentence explaining it.
-- [ ] 2f. Write `gateway/tests/test_skills_e2e.py`
+- [x] 2f. Write `gateway/tests/test_skills_e2e.py`
         per Requirement 7. The test creates
         `tmp_path/skills/say-hello-french/SKILL.md`
         with valid frontmatter and a non-empty
@@ -195,12 +195,12 @@ end-to-end contract.
         appears in the system message including
         the literal absolute path to the test
         SKILL.md.
-- [ ] 2g. Add a second integration test:
+- [x] 2g. Add a second integration test:
         `memory.skills_enabled: false` -> the
         captured upstream system message does
         NOT contain `[Skills available]`
         (Property 6 from design.md).
-- [ ] 2h. Run the full lint + mypy + pytest pass
+- [x] 2h. Run the full lint + mypy + pytest pass
         in `gateway/`. The existing chat handler
         tests must still pass (the
         `_inject_memory` signature change is

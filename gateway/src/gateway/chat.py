@@ -113,9 +113,10 @@ def _inject_memory(
     ctx: LoadedContext,
     *,
     capability_block: str = "",
+    skills_block: str = "",
 ) -> dict[str, Any]:
     """Return a shallow copy of ``body`` with memory (and
-    optionally a capability block) prepended.
+    optionally a capability block + skills block) prepended.
 
     * If ``capability_block`` is non-empty, it becomes the first
       part of the system prefix — before identity/lessons —
@@ -123,6 +124,11 @@ def _inject_memory(
       piece of context: it stops tool-name hallucination and
       drives the ``I'd need a tool to ...`` gap-reporting
       phrasing we hook on the reply side.
+    * If ``skills_block`` is non-empty, it goes immediately
+      after the capability block and before identity/lessons.
+      Phase 4.10: the two are conceptually paired — "what you
+      can do directly" then "what you can do via recipes" —
+      and live next to each other in the system prompt.
     * If ``ctx.system_prefix`` is non-empty, it's merged into the
       system message. If the request already has a system message,
       memory content is appended to it with a separator; otherwise
@@ -135,11 +141,13 @@ def _inject_memory(
     The original ``body`` is not mutated.
     """
     messages: list[dict[str, Any]] = list(body.get("messages") or [])
-    system_prefix = ctx.system_prefix
-    if capability_block:
-        system_prefix = (
-            capability_block if not system_prefix else f"{capability_block}\n\n{system_prefix}"
-        )
+
+    # Stack the prefix layers in order: capabilities, skills,
+    # identity+lessons. Drop empty strings so we don't end up
+    # with stray blank-line separators in the system message.
+    prefix_parts = [p for p in (capability_block, skills_block, ctx.system_prefix) if p]
+    system_prefix = "\n\n".join(prefix_parts)
+
     if not system_prefix and not ctx.history_messages:
         return body
 
@@ -1055,6 +1063,7 @@ async def chat_completions(request: Request) -> Response:
     if router_mode:
         ctx = LoadedContext(system_prefix="", history_messages=[])
         capability_block = ""
+        skills_block = ""
         request_body = parsed.to_litellm_body()
     else:
         ctx = memory.load_context(session_id)
@@ -1064,8 +1073,20 @@ async def chat_completions(request: Request) -> Response:
         capability_block = (
             build_capability_block(tool_registry) if tool_registry.list_names() else ""
         )
+        # Phase 4.10: skills block sits between capabilities and
+        # identity. Empty string when there are no skills loaded
+        # so the caller drops the block entirely (no header, no
+        # placeholder line) — see Requirement 3.4.
+        from .skills import render_skills_block
+
+        loaded_skills = getattr(request.app.state, "skills", [])
+        skills_block = render_skills_block(loaded_skills, tool_registry)
+
         request_body = _inject_memory(
-            parsed.to_litellm_body(), ctx, capability_block=capability_block
+            parsed.to_litellm_body(),
+            ctx,
+            capability_block=capability_block,
+            skills_block=skills_block,
         )
 
     # The memory'd body will be dispatched; we remember the original

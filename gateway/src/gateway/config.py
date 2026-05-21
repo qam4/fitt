@@ -144,7 +144,16 @@ class MemoryConfig(BaseModel):
     tool_output_max_inline_bytes: int = 8192
     tool_output_preview_bytes: int = 2048
 
-    @field_validator("identity_dir", "sessions_dir", mode="before")
+    # Phase 4.10 — skills loader. ``skills_dir`` is the root the
+    # SkillsLoader walks at boot for ``SKILL.md`` files
+    # (operator-authored markdown recipes). Disable the loader
+    # entirely with ``skills_enabled: false`` to revert to
+    # pre-Phase-4.10 behaviour (no ``[Skills available]`` block
+    # in the system prompt).
+    skills_dir: Path = Field(default_factory=lambda: fitt_home() / "skills")
+    skills_enabled: bool = True
+
+    @field_validator("identity_dir", "sessions_dir", "skills_dir", mode="before")
     @classmethod
     def _expand(cls, v: object) -> object:
         if isinstance(v, str):

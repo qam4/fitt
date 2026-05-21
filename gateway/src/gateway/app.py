@@ -98,6 +98,21 @@ def create_app(config: Config) -> FastAPI:
         lessons=lessons_store,
     )
 
+    # Phase 4.10 — skills loader. Walks ``skills_dir`` once at
+    # boot, parses every ``SKILL.md``, and caches the result on
+    # ``app.state.skills``. The chat handler renders the
+    # ``[Skills available]`` system-prompt block from this list
+    # on every request. Edit-and-restart contract: changes to
+    # SKILL.md files don't take effect until the next gateway
+    # boot (matches identity.md). Never raises out of scan().
+    from .skills import SkillsLoader
+
+    skills_loader = SkillsLoader(
+        skills_dir=memory_cfg.skills_dir,
+        enabled=memory_cfg.skills_enabled,
+    )
+    app.state.skills = skills_loader.scan()
+
     # Session registry: same freshness guarantee. `fitt session new`
     # from a separate shell is visible on the next request.
     app.state.session_registry = SessionRegistry(config.memory.sessions_dir)

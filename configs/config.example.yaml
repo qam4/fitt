@@ -166,6 +166,16 @@ memory:
   # drop from the decay injection. Default 90 days.
   history_max_days: 90
 
+  # Phase 4.10 — skills loader. The directory the loader walks
+  # at boot for SKILL.md files (operator-authored markdown
+  # recipes the agent reads on demand). Default $FITT_HOME/skills.
+  skills_dir: skills/
+  # Set to false to skip the loader entirely and omit the
+  # [Skills available] block from the system prompt. Useful
+  # for reverting to pre-Phase-4.10 behaviour without removing
+  # the directory.
+  skills_enabled: true
+
 # ------------------------------------------------------------------
 # Tools (Phase 4+)
 # ------------------------------------------------------------------
