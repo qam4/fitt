@@ -61,13 +61,22 @@ autonomy-modes framing (scheduled / proactive /
 reactive), the subagent orchestration model, and the
 LLM-compressed-history approach to session restarts. See
 earlier conversations for deeper analysis.
+*Cross-reference (2026-05-15):* OpenClaw's heartbeat /
+SOUL.md / TOOLS.md naming convention strongly resembles
+MeshClaw's. Whether one inspired the other or both
+converged on the same shape is unclear from outside;
+either way, the convergence is worth respecting — when
+two unrelated 2026 projects pick the same names for the
+same concepts, those names are a small Schelling point
+worth adopting.
 
 ### OpenClaw (Peter Steinberger, now OpenAI-sponsored)
 
 *What:* Self-hosted personal AI assistant in
-TypeScript. Local gateway + 20+ messaging channels
+TypeScript. Local gateway + 23 messaging channels
 (WhatsApp, Telegram, Slack, Discord, Signal, iMessage,
-Matrix, etc.) + skills system + workspace. MIT license.
+Matrix, etc.) + skills system + workspace +
+companion mac/iOS/Android apps. MIT license.
 Creator joined OpenAI Feb 2026; project moved to an
 independent foundation with OpenAI as financial sponsor.
 *Relevance to FITT:* uncomfortably close pattern match.
@@ -75,30 +84,401 @@ Same local-first, markdown-driven-config, per-session
 memory, skills-as-markdown-dirs shape we converged on
 independently. Six to twelve months further along on most
 surfaces.
-*Why not adopt:* TypeScript base; sprawling scope (20+
-channels, voice, Canvas, multi-agent routing) compared
+*Why not adopt:* TypeScript base; sprawling scope
+(channels, voice, Canvas, multi-agent routing) compared
 to FITT's narrow Telegram + gateway + memory. Opinions
 not all ones we share — OpenClaw is reactive (DMs in,
-agent out) where KITT's vision leans proactive
+agent out) where FITT's vision leans proactive
 (scheduled + heartbeat + cross-surface persistence).
 Switching means inheriting a much bigger codebase than
 one person can comfortably maintain.
-*What to borrow:*
-- **Skills system** — `SKILL.md` files in
-  `workspace/skills/<name>/`, three-tier precedence
-  (bundled < global < workspace). Cleaner than FITT's
-  current ad-hoc `identity/` approach once we want more
-  than three files.
-- **DM pairing allowlist** — unknown senders get a
-  pairing code; bot doesn't process their messages until
-  approved. Better than today's "bearer token + client
-  tag" model for future multi-channel expansion.
-- **Sandbox-for-non-main-sessions** — Docker by default,
-  SSH + OpenShell backends. Lines up with Phase 7+ "OS-
-  level agent sandbox" item already on the roadmap.
-- **Agent prompt file names** — `AGENTS.md`, `SOUL.md`,
-  `TOOLS.md` is a cleaner naming convention than FITT's
-  `user.md / soul.md / tools.md`. Low-stakes to adopt.
+
+### OpenClaw — 2026-05-15 problem-driven audit
+
+After installing OpenClaw alongside FITT on the same
+NAS, this is the source-level read. Repo cloned to
+`.scratch/openclaw/` for reading; not a fork, just a
+read-only checkout for comparison.
+
+Organized around questions FITT has actually hit
+during development. Each entry: what FITT does, what
+OpenClaw does, whether their approach is better
+worse or just different, and whether to borrow.
+
+#### Q: How do they handle Telegram approvals?
+
+*FITT today:* one renderer per turn (Phase 4.8b
+fixed the double-bubble bug); approval is a separate
+inline-keyboard message; ApprovalPoller owns the
+approval bubble lifecycle; gateway pushes
+`approval_pending` events; bot edits-in-place on
+decision.
+
+*OpenClaw:* `extensions/telegram/src/approval-*.ts`.
+Architectural pieces:
+- A `telegramApprovalNativeRuntime` built on
+  `createChannelApprovalNativeRuntimeAdapter` (a
+  generic plugin-SDK shape — channels implement
+  `presentation` + `transport` + `availability` +
+  `shouldHandle`).
+- Inline keyboard buttons sent with `callback_data`
+  payloads.
+- Telegram's hard 64-byte `callback_data` limit is
+  handled explicitly: `approval-callback-data.ts`
+  has `fitsTelegramCallbackData` and
+  `rewriteTelegramApprovalDecisionAlias` to fit
+  long approval IDs by truncation/aliasing
+  (e.g. `allow-always` → `always`).
+- "Edit reply markup" used to update buttons after
+  decision (same pattern as FITT).
+
+*Comparison:* same shape conceptually. Their
+plugin-SDK adapter is the difference — they
+abstract approval handling so any channel
+implements the same contract; FITT has hand-rolled
+Telegram-specific logic. **Worth knowing about**:
+the 64-byte callback_data limit and their alias
+rewrite pattern. FITT's approval-id is a UUID, so
+"plugin:<uuid>" → 8 + 36 = 44 bytes for the id
+alone; we'd hit the limit if we ever encoded more
+than `<id> <decision>`. Worth a note in the
+approval design doc.
+
+*Borrow:* the alias-rewrite pattern if we ever
+extend the callback payload. Don't borrow the
+plugin-SDK abstraction — it's overkill for
+single-channel.
+
+#### Q: How do they handle upstream timeouts vs cancellation?
+
+*FITT today:* Phase 4.9. Gateway-side
+`asyncio.wait_for(asyncio.shield(task), timeout=300)`.
+The `shield` keeps the orphan task alive after our
+wait_for fires; we deliberately do NOT cancel.
+LiteLLM ignores its own `timeout=` kwarg
+(observed 2026-05-13: 300s configured, took 903s
+to raise) which is why we wrap it in our own
+`wait_for` at the router layer.
+
+*OpenClaw:* uses `AbortController` / `AbortSignal`
+end-to-end. Tests like
+`anthropic-transport-stream.test.ts::"cancels
+stalled SSE body reads when the abort signal fires
+mid-stream"` and `"treats already-aborted signals
+as abort errors before reading SSE chunks"`
+confirm cancellation actually propagates to their
+custom HTTP transport and closes the upstream
+connection. They don't use LiteLLM (see below);
+they wrote their own provider transports
+(`*-transport-stream.ts`) and own the cancellation
+contract.
+
+*Comparison:* they cancel for real, we orphan-and-
+shield. Both decisions are defensible:
+- They paid for a hand-written transport layer to
+  control cancellation. Tradeoff: every provider
+  API change is theirs to track.
+- We chose LiteLLM-as-mature-tool (principle 3),
+  inheriting its bugs in exchange for not
+  maintaining the layer.
+
+*Borrow:* nothing concrete. The wait_for+shield
+contract works for our scope. **Note for the
+record**: if FITT ever moves off LiteLLM
+(unlikely), we'd inherit the cancellation power
+they have but also the maintenance cost.
+
+#### Q: Do they use LiteLLM?
+
+*FITT:* yes, for everything.
+
+*OpenClaw:* no. Direct provider SDKs (`openai`,
+`@google/genai`) plus hand-written transports for
+Anthropic and others. Their `auth-profiles` system
+manages multiple keys per provider with cooldown,
+rotation, and `markAuthProfileFailure` — features
+LiteLLM provides for free in our stack.
+
+*Comparison:* they paid for the layer; we didn't.
+A real architectural trade. Worth noting only so
+that future-FITT thinking about provider-specific
+features (auth rotation, model discovery probes)
+checks LiteLLM first before re-implementing.
+
+#### Q: What does their web UI have that a FITT dashboard would want?
+
+*FITT today:* no web UI. CLI (`fitt watch`,
+`fitt cost`), HTTP read endpoints (Phase 4.8c:
+`/v1/events`, `/v1/audit`, `/v1/capability-gaps`,
+`/v1/sessions`).
+
+*OpenClaw views (`ui/src/ui/views/`):* `overview`,
+`sessions`, `cron`, `agents`, `skills`,
+`channels.{discord,slack,telegram,...}`,
+`exec-approval`, `command-palette`, `chat`,
+`debug`, `logs`, `usage`, `usage-metrics`,
+`config`, `nodes`, `realtime-talk-*`, `dreaming`.
+About 80 view files total.
+
+*Comparison:* their UI is a real product, not just
+an admin dashboard. Includes things FITT
+specifically chose not to build (multi-channel
+config, voice WebRTC, companion-app management,
+Canvas).
+
+*Borrow if/when FITT ever builds a dashboard:*
+- `overview` with "is FITT okay right now"
+  attention items
+- `sessions` (browse history per session)
+- `cron` (list/edit)
+- `exec-approval` (browser-based approval queue)
+- `logs` (event log viewer)
+- `usage` (cost/token aggregation over time)
+
+That's 6 views. The Phase 4.8c HTTP endpoints
+already provide the API; the dashboard is a
+consumer. **Effort estimate for a v1 minimal
+dashboard**: 2-3 days. Don't build until operator-
+pain calls for it.
+
+#### Q: How do they "talk you through setup"?
+
+*FITT today:* doesn't. Operator sets up via
+docs + config files. The agent doesn't have a
+"help me configure X" capability because the
+docs aren't structured for the agent to drive.
+
+*OpenClaw:* skills include setup recipes. Example:
+`skills/gog/SKILL.md` has `Setup (once)` section
+with literal commands; the agent reads the skill
+markdown and walks the user through. The wizard
+flow (`src/wizard/`) is for first-run (channel
+config, model picker); skills cover ongoing
+"add a new thing." Per-skill metadata
+(`requires.bins`, `install.brew`) lets the agent
+say "you'd need to install gog with `brew
+install steipete/tap/gogcli`."
+
+*Comparison:* their answer is just "agent reads
+docs that were written agent-first." Same
+substrate FITT has (system prompt injection); they
+authored more content. Not a code gap, a content
+gap.
+
+*Borrow:* the pattern. If we ever want
+"FITT, help me set up X" for an X we have, write
+a markdown recipe addressed to the agent and
+inject it. ~half a day per recipe; opens up
+`gh auth login`, gog OAuth, project_shell project
+setup, etc.
+
+#### Q: How do they handle hallucinated tool calls?
+
+*FITT today:* limited handling. The agent loop
+expects structured `tool_calls`; if the model
+emits text that *looks like* a tool call but
+isn't structured, we treat it as final reply.
+This was Problem A in
+`docs/hallucinations-and-poisoning.md`.
+
+*OpenClaw:* `src/agents/pi-tool-definition-adapter.ts`
++ `pi-tools.before-tool-call.*` files. They have
+explicit before-call hooks that can repair or
+reject malformed tool calls before execution,
+and `tool-loop-detection.ts` for
+detecting loops. Plus
+`compaction.identifier-policy.test.ts` and
+`compaction.tool-result-details.test.ts` —
+serious infrastructure for tool-result cleanup
+and identifier preservation across compactions.
+
+*Comparison:* they've put real engineering into
+this; we've punted. The hallucinations doc lists
+this as Problem A and notes it's a real but
+infrequent failure mode for us.
+
+*Borrow if:* hallucinated-tool-call rate becomes
+operationally annoying. The before-call hook
+pattern (validate tool call shape before dispatch
+to the tool registry) is portable to FITT's
+agent loop with modest effort.
+
+#### Q: How do they handle long histories / context budget?
+
+*FITT today:* `MemoryStore` injects identity +
+history + lessons. Phase 5 adds decay (history
+older than N days drops from the prompt). Phase 4
+hoists tool outputs >8KB to disk artifacts.
+Compaction is not implemented.
+
+*OpenClaw:* `src/agents/compaction.*.ts` (12+
+files). They actively summarize long histories
+into compressed forms when context runs out.
+`compaction-real-conversation.ts`,
+`compaction.summarize-fallback.test.ts`,
+`compaction.tool-result-details.test.ts`. This
+is a serious feature — they're in the
+"context-engineering" deep end.
+
+*Comparison:* FITT has the easier problem (one
+user, narrow tool set, short sessions). We
+haven't hit the limit yet. They've hit it
+repeatedly enough to build a compaction system.
+
+*Borrow:* not yet. Track in Phase 7 (memory v1).
+When FITT hits the wall, look at their
+`compaction.summarize-fallback.test.ts` for the
+shape of "summarize older turns to free
+budget."
+
+#### Q: Do they have a heartbeat / proactive subsystem?
+
+*FITT today:* `cron_*` tools. Operator (or model
+via `cron_add`) schedules a session to fire later;
+the agent runs and may call `send_message` if
+something noteworthy. No heartbeat-shaped poll
+loop.
+
+*OpenClaw:* `src/auto-reply/heartbeat.ts` +
+`src/cron/heartbeat-policy.ts`. Structured:
+- Default prompt: "Read HEARTBEAT.md if it
+  exists. Follow it strictly. If nothing needs
+  attention, reply HEARTBEAT_OK."
+- Model responds with a `heartbeat_respond` tool
+  call: outcome ∈ {progress, no_change, done,
+  needs_attention}, plus `notify=true|false`,
+  optional `priority` low/normal/high.
+- The framework decides whether to actually ping
+  the user based on the model's `notify`
+  decision.
+- Default interval `30m`, configurable.
+- Filtering: `heartbeat-filter.ts` strips
+  heartbeat self-messages from the transcript
+  the next agent turn sees.
+
+*Comparison:* their model is "agent self-checks
+on a timer; only interrupts the user when it
+decides to." FITT's cron model is "agent does
+something on a timer; can call send_message
+freely." Their model is more discoverable
+(HEARTBEAT.md is the obvious place to write
+"check this every 30m") and less interrupting
+by default (the `notify=false` default makes
+it conservative).
+
+*Borrow:* the schema —
+`outcome ∈ {progress, no_change, done,
+needs_attention}` + `notify=bool` + `priority`
+— could be a thin layer on top of FITT's existing
+cron + send_message. The HEARTBEAT.md filename
+convention is a clean entry point. Effort: 1-2
+days for a real heartbeat module that wraps
+existing cron infrastructure.
+
+#### Q: Do they sandbox sub-agents?
+
+*FITT today:* no. Tools run on the host. Approval
+flow is the only defense.
+
+*OpenClaw:* `src/sandbox/` directory + per-agent
+sandbox config. Backends include Docker (default),
+SSH, OpenShell. Per-agent scope: the main agent
+runs on the host, sub-agents run in fresh sandbox
+containers. Workspace mount is
+configurable (`workspaceAccess: "none"`).
+
+*Comparison:* genuine security gap. FITT relies
+on approval-gating + the operator paying
+attention. They have defense-in-depth.
+
+*Borrow if:* we ever ship sub-agent execution.
+Today FITT doesn't have sub-agents (cron
+firings reuse the main session in the same
+process). When we do, sandboxing is the right
+default.
+
+#### Q: How do they manage multi-key auth rotation?
+
+*FITT today:* one key per provider in
+`secrets.yaml`. LiteLLM doesn't rotate. If a key
+fails, the request fails.
+
+*OpenClaw:* `src/agents/auth-profiles.*` —
+multi-key per provider, cooldown on failure,
+`markAuthProfileFailure`, automatic next-key
+selection, configurable usage stats per profile.
+`auth-profiles.cooldown-auto-expiry.test.ts` is
+a load-bearing test.
+
+*Comparison:* they need this; their users have
+multiple OAuth identities (personal + work
+GitHub Copilot, multiple OpenRouter accounts,
+etc.). FITT is single-user and rarely runs into
+key-level issues.
+
+*Borrow:* not in scope for FITT. Note for the
+record so future-FITT doesn't reinvent if a
+specific need surfaces.
+
+#### Q: What about web search, voice, RAG memory?
+
+*FITT today:* none of these.
+
+*OpenClaw:* yes to all. `src/web-search/`,
+`src/realtime-transcription/`, `src/tts/`,
+`src/memory/` (with vector search via embeddings).
+58 bundled skills, ~20 of which depend on
+external CLIs that wrap APIs.
+
+*Comparison:* these are FITT's roadmap Phase 7-8.
+Not gaps; just unbuilt.
+
+*Borrow if/when:* the skills loader (the most
+re-usable thing in this audit) makes a lot of
+their voice/search/rag plumbing portable, since
+each is mostly a CLI under the hood.
+
+#### Things FITT has that OpenClaw doesn't
+
+For balance, things in FITT that didn't have
+OpenClaw counterparts when I looked:
+
+- **Capability-gap log** (`capability_gaps.jsonl`).
+  Real-time "I'd need a tool to X" feed from
+  agent failures. They have wizard-time
+  `skills-status.test.ts` ("eligible / missing
+  requirements") which is a snapshot, not a feed.
+- **HMAC-chained audit log**. Tamper-evident
+  forensic trail. They have logs but not a
+  chained one.
+- **Hub/Compute fallback router**. Multi-machine
+  topology. Their assumption is single-host.
+- **The Phase 4.8 growing-bubble Telegram
+  renderer** is sharper than their Telegram
+  rendering, which is closer to "post one reply
+  when done."
+
+#### Summary
+
+The audit's actual takeaway: **most of the OpenClaw
+gap that bothered us isn't architectural — it's
+content (skills authored agent-first) and a few
+specific patterns worth borrowing (heartbeat
+schema, hallucinated-tool-call before-hooks,
+callback-data alias rewrite for Telegram).** Their
+hand-written provider transport is more powerful
+but is paying for a feature FITT explicitly chose
+to outsource to LiteLLM. Their web UI is real
+work (~80 views) and not on FITT's path right
+now.
+
+The borrow-list is: skills loader (~half day),
+heartbeat structured-outcome schema (1-2 days when
+trigger arrives), Telegram callback-data alias
+rewrite pattern (note for if/when we extend),
+agent-first setup recipes for existing capabilities
+(opportunistic, half-day each).
+
 *Status:* [openclaw/openclaw on
 GitHub](https://github.com/openclaw/openclaw). Active,
 247k+ stars as of March 2026. MIT licensed. Covered in
@@ -262,6 +642,42 @@ For most of these, the right FITT pattern isn't new tools
 block teaching the model to reach for `http_get` against
 known-good URLs when asked about current X. A `web_search`
 tool is the catch-all for anything without a direct API.
+
+## Opportunities pick-list (2026-05-15)
+
+Closing summary from the OpenClaw audit. Sized for the
+"opportunistic upgrades" mode FITT is now in. Each row
+ties to a specific question we've hit during FITT
+development, with rough effort. **Treat as a pick-list,
+not a backlog.** Pull one when an evening goes that
+way.
+
+| Q answered                                       | Item                                                | Effort         | Trigger condition |
+|--------------------------------------------------|-----------------------------------------------------|----------------|-------------------|
+| "How do I add web search / gmail / gh without writing a tool every time?" | Skills-as-markdown loader                           | Half day       | Next "FITT can't do X" complaint that maps to a CLI |
+| "Where does FITT-can't-do-X go in my UX?"        | Default web search (markdown skill on `http_get` + DuckDuckGo) | Half day after loader exists | Anytime you wish FITT could "just look that up" |
+| "Cron fires too often; how do I keep things quiet?" | Heartbeat structured-outcome schema (`{outcome, notify, priority}`) | 1-2 days       | "I want FITT to wake every 30m and check X" with a real X |
+| "How do I tell the user the right thing on timeout/error?" | Better-shaped operator error messages (name the config key, explain layering) | Few hours, opportunistic | Whenever an existing error path comes up; `upstream_silent` is the next candidate |
+| "If I extend approval callback data, what's the limit?" | Telegram callback-data alias rewrite (note for the future) | Note only      | If we ever encode > id+decision in the callback |
+| "Could the agent walk me through setting up <thing>?" | Agent-first setup recipes (markdown drops the agent reads) | Half day each  | When we have a concrete X worth setup-recipe content |
+| "What about hallucinated tool calls?"            | Before-tool-call validation hook                    | 1-2 days       | If hallucinated-tool-call rate becomes operationally annoying |
+| "If we ever ship sub-agents, how do we sandbox?" | Per-agent Docker sandbox                            | 3-5 days       | When sub-agents ship — not before |
+| "Operator-side dashboard?"                       | Minimal web UI over Phase 4.8c HTTP endpoints       | 2-3 days       | When the operator-grep-the-logs tax becomes annoying |
+| "Multiple OAuth keys per provider with rotation?" | Auth-profile rotation                              | n/a — LiteLLM territory | Single-user FITT doesn't need this |
+| "Voice / RAG / vector memory?"                   | Phase 7-8 territory                                | Real phases    | Per the roadmap |
+
+The single highest-leverage change is the **skills
+loader**. It's small (half day), it answers a class of
+"how do I add X" questions cheaply, and it makes
+~20 of OpenClaw's bundled skills usable in FITT
+without modification.
+
+If the loader gets built, the OpenClaw `skills/`
+directory becomes a content reservoir worth scanning
+periodically. Per-skill review is short — most are
+~50 lines of markdown — and each is independently
+adoptable. As OpenClaw adds more skills upstream,
+FITT can pull selectively.
 
 ## When to revisit this doc
 
