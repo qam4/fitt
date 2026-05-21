@@ -438,6 +438,71 @@ re-usable thing in this audit) makes a lot of
 their voice/search/rag plumbing portable, since
 each is mostly a CLI under the hood.
 
+#### Q: How do they handle model-per-task vs "one entity"?
+
+*FITT today:* clients name aliases
+(`fitt-default`, `fitt-smart`, `fitt-fast`); the
+gateway resolves the alias to a concrete model.
+The user picks per-turn (Continue lets you flip
+modes; Telegram defaults to one alias). Cron jobs
+can specify `agent_alias`. No per-turn reasoning
+knob.
+
+*OpenClaw:* one default model
+(`agents.defaults.model.primary` + optional
+`fallbacks`) handles every chat turn. The user
+doesn't pick. Per-turn knobs change *how the
+same model thinks*, not which model:
+- `thinking` / `reasoning` level
+  (minimal/low/medium/high/xhigh) for adaptive-
+  thinking models (Sonnet 4.5+, o-series).
+- `fastMode` boolean for "skip the heavy
+  thinking on this turn." Resolves session >
+  agent > config-per-model > default.
+
+Tiny task-specific model overrides for non-chat
+work:
+- `agents.defaults.compaction.memoryFlush.model`
+  — cheaper model just for context summarization.
+- `channels.<channel>.tts.summaryModel` — voice
+  summary generation.
+- `hooks.gmail.model` — Gmail-watcher hooks.
+
+No per-tool model routing. Calling `gog calendar
+create` and `read_file` both go through the chat
+model.
+
+*Comparison:* different philosophies for different
+deployments.
+- OpenClaw: "one entity, framework hides the rest."
+  Right for messaging UX where the user shouldn't
+  know what model is doing the work.
+- FITT: "user names a role; gateway resolves."
+  Right for IDE / developer workflows where
+  explicit fast-vs-smart toggling is desirable.
+
+Both are defensible for their target audience.
+Don't change FITT's aliasing model.
+
+*Worth borrowing:*
+- **Per-turn `thinking` / `reasoning` level.**
+  When the underlying model supports adaptive
+  thinking (current Anthropic, Codex/o-series),
+  letting the user say "think harder this turn"
+  without changing model is more powerful than
+  alias-swapping. ~half a day to surface in the
+  request body. Note: needs LiteLLM to pass it
+  through verbatim, which it does for known
+  fields.
+- **Task-specific model overrides
+  (compaction.model, tts.model).** When FITT
+  eventually ships compaction (Phase 7) or voice
+  (Phase 8), follow this convention: separate
+  model knob per task, defaulting to the primary
+  alias but overridable. Saves cost on
+  housekeeping (don't burn Sonnet credits on a
+  50-token summary) without complicating chat.
+
 #### Things FITT has that OpenClaw doesn't
 
 For balance, things in FITT that didn't have
@@ -665,6 +730,8 @@ way.
 | "Operator-side dashboard?"                       | Minimal web UI over Phase 4.8c HTTP endpoints       | 2-3 days       | When the operator-grep-the-logs tax becomes annoying |
 | "Multiple OAuth keys per provider with rotation?" | Auth-profile rotation                              | n/a — LiteLLM territory | Single-user FITT doesn't need this |
 | "Voice / RAG / vector memory?"                   | Phase 7-8 territory                                | Real phases    | Per the roadmap |
+| "Per-turn 'think harder' without alias swap?"    | Surface `thinking` / `reasoning` level in chat request | Half day       | If a future model with adaptive thinking is on `fitt-smart` and we want per-turn control |
+| "Cheaper model for compaction / TTS / hooks?"    | Task-specific model overrides                      | Half day each  | Lands with Phase 7 (compaction) and Phase 8 (voice) — pattern worth borrowing then |
 
 The single highest-leverage change is the **skills
 loader**. It's small (half day), it answers a class of
