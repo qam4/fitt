@@ -33,9 +33,30 @@ class FakeBot:
 
 
 class FakeGateway:
-    def __init__(self, deltas: list[str], aliases: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        deltas: list[str],
+        aliases: list[str] | None = None,
+        details: list[dict[str, Any]] | None = None,
+    ) -> None:
         self._deltas = deltas
         self._aliases = aliases or ["fitt-default", "fitt-smart", "fitt-fast"]
+        # Default: build details from the alias list with a stable
+        # backend/model shape that matches the gateway's
+        # /v1/models response. Tests that need the alias-only
+        # fallback path can pass details=[].
+        if details is None:
+            details = [
+                {
+                    "id": a,
+                    "object": "model",
+                    "fitt_backend": "ollama" if "fast" in a else "openrouter",
+                    "fitt_resolved_model": f"{a}-model",
+                    "fitt_fallback": None,
+                }
+                for a in self._aliases
+            ]
+        self._details = details
         self.seen_calls: list[dict[str, Any]] = []
 
     async def chat(
@@ -51,6 +72,9 @@ class FakeGateway:
 
     async def list_aliases(self) -> list[str]:
         return self._aliases
+
+    async def list_alias_details(self) -> list[dict[str, Any]]:
+        return self._details
 
 
 def _services(
@@ -310,3 +334,98 @@ async def test_model_switch_unknown(tmp_path: Path) -> None:
     )
     assert svc.prefs.get(100).alias == "fitt-default"
     assert "Unknown alias" in bot.sent[0][1]
+
+
+async def test_model_list_shows_concrete_model_and_backend(tmp_path: Path) -> None:
+    """Phase 7 visibility: /model surfaces the concrete model and
+    backend each alias resolves to. Closes the granite-style "I
+    don't know what model just answered" gap without ssh'ing into
+    the hub.
+    """
+    gw = FakeGateway(
+        deltas=[],
+        aliases=["fitt-default", "fitt-smart"],
+        details=[
+            {
+                "id": "fitt-default",
+                "object": "model",
+                "fitt_backend": "ollama",
+                "fitt_resolved_model": "granite3.3:8b",
+                "fitt_fallback": None,
+            },
+            {
+                "id": "fitt-smart",
+                "object": "model",
+                "fitt_backend": "openrouter",
+                "fitt_resolved_model": "anthropic/claude-sonnet-4.5",
+                "fitt_fallback": "fitt-default-fallback",
+            },
+        ],
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_model_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="model", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "fitt-default → granite3.3:8b (ollama)" in text
+    assert "fitt-smart → anthropic/claude-sonnet-4.5 (openrouter)" in text
+    assert "fallback: fitt-default-fallback" in text
+    assert "(current)" in text  # marks current alias
+
+
+async def test_model_list_falls_back_when_extensions_missing(tmp_path: Path) -> None:
+    """Older gateway responses (no fitt_resolved_model /
+    fitt_backend) shouldn't break the command — degrade to the
+    alias-only display."""
+    gw = FakeGateway(
+        deltas=[],
+        aliases=["fitt-default"],
+        details=[{"id": "fitt-default", "object": "model"}],
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_model_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="model", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "fitt-default" in text
+    # No "→" because the extensions weren't available.
+    assert "→" not in text
+
+
+async def test_model_switch_confirms_with_concrete_model(tmp_path: Path) -> None:
+    """Switching alias should confirm with the concrete model
+    so the user sees what they're now talking to without a
+    follow-up /model call."""
+    gw = FakeGateway(
+        deltas=[],
+        aliases=["fitt-default", "fitt-smart"],
+        details=[
+            {
+                "id": "fitt-default",
+                "fitt_backend": "ollama",
+                "fitt_resolved_model": "granite3.3:8b",
+            },
+            {
+                "id": "fitt-smart",
+                "fitt_backend": "openrouter",
+                "fitt_resolved_model": "anthropic/claude-sonnet-4.5",
+            },
+        ],
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_model_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="model", command_args=["fitt-smart"]),
+        svc,
+    )
+    assert svc.prefs.get(100).alias == "fitt-smart"
+    text = bot.sent[0][1]
+    assert "anthropic/claude-sonnet-4.5" in text
+    assert "openrouter" in text

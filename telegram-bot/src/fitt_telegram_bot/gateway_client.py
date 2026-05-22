@@ -79,7 +79,28 @@ class GatewayClient:
     # ---------- public API ----------------------------------------
 
     async def list_aliases(self) -> list[str]:
-        """GET /v1/models (no auth needed but send token anyway)."""
+        """GET /v1/models (no auth needed but send token anyway).
+
+        Returns just the alias names. For richer per-alias detail
+        (concrete model, backend, fallback), use
+        :meth:`list_alias_details`."""
+        details = await self.list_alias_details()
+        return [d["id"] for d in details if isinstance(d, dict) and "id" in d]
+
+    async def list_alias_details(self) -> list[dict[str, Any]]:
+        """GET /v1/models, returning the full per-alias detail list.
+
+        Each entry carries the gateway's non-OpenAI extensions
+        (``fitt_backend``, ``fitt_resolved_model``, ``fitt_fallback``)
+        alongside the standard ``id``. Unknown clients ignore the
+        extensions; FITT's own bot uses them for the ``/model``
+        command's per-alias display so an operator on Telegram
+        can see "fitt-default → granite3.3:8b (ollama)" without
+        ssh'ing into the hub.
+
+        Empty list on transport failure — same posture as
+        :meth:`list_aliases` (a logged warning is the only
+        side effect)."""
         async with httpx.AsyncClient(timeout=10.0) as client:
             try:
                 r = await client.get(f"{self._base}/v1/models", headers=self._headers)
@@ -92,7 +113,7 @@ class GatewayClient:
                 )
                 return []
         data = r.json().get("data", [])
-        return [m["id"] for m in data if isinstance(m, dict) and "id" in m]
+        return [m for m in data if isinstance(m, dict)]
 
     async def list_pending_approvals(self, client: str | None = None) -> list[dict[str, Any]]:
         """GET /v1/approvals/pending[?client=...].

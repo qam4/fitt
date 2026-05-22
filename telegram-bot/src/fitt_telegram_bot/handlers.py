@@ -256,19 +256,40 @@ async def handle_model_command(
     services: Services,
 ) -> None:
     current = services.prefs.get(update.chat_id)
-    aliases = await services.gateway.list_aliases()
-    if not aliases:
+    details = await services.gateway.list_alias_details()
+    if not details:
         await bot.send_message(
             chat_id=update.chat_id,
             text="Could not fetch aliases from the gateway.",
         )
         return
 
+    aliases = [d["id"] for d in details if "id" in d]
+
     if not update.command_args:
+        # No arg: list aliases with concrete model + backend so the
+        # operator can see what each alias actually resolves to.
+        # Phase 7 visibility work — closes the "I don't know which
+        # model just answered" gap. The gateway already exposes
+        # ``fitt_resolved_model`` and ``fitt_backend`` per alias on
+        # ``/v1/models``; we just hadn't been rendering them.
         lines = ["*Aliases:*"]
-        for a in aliases:
-            marker = " (current)" if a == current.alias else ""
-            lines.append(f"- {a}{marker}")
+        for d in details:
+            alias_id = d.get("id", "?")
+            model = d.get("fitt_resolved_model")
+            backend = d.get("fitt_backend")
+            fallback = d.get("fitt_fallback")
+            marker = " (current)" if alias_id == current.alias else ""
+            if model and backend:
+                line = f"- {alias_id} → {model} ({backend}){marker}"
+            else:
+                # Older gateways that don't surface the extensions:
+                # degrade to the alias-only display rather than
+                # erroring out.
+                line = f"- {alias_id}{marker}"
+            if fallback:
+                line += f"\n  fallback: {fallback}"
+            lines.append(line)
         lines.append("")
         lines.append("Switch with /model <alias>.")
         await bot.send_message(chat_id=update.chat_id, text="\n".join(lines))
@@ -282,10 +303,16 @@ async def handle_model_command(
         )
         return
     services.prefs.set_alias(update.chat_id, target)
-    await bot.send_message(
-        chat_id=update.chat_id,
-        text=f"Switched this chat to alias '{target}'.",
-    )
+    # Confirm the switch with the concrete model the new alias
+    # resolves to, so the user sees what they're now talking to.
+    target_detail = next((d for d in details if d.get("id") == target), {})
+    target_model = target_detail.get("fitt_resolved_model")
+    target_backend = target_detail.get("fitt_backend")
+    if target_model and target_backend:
+        text = f"Switched this chat to alias '{target}' → {target_model} ({target_backend})."
+    else:
+        text = f"Switched this chat to alias '{target}'."
+    await bot.send_message(chat_id=update.chat_id, text=text)
 
 
 # ---------- /start, /help -----------------------------------------

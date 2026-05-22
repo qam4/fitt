@@ -41,6 +41,52 @@ async def test_list_aliases_tolerates_error() -> None:
     assert aliases == []
 
 
+async def test_list_alias_details_carries_fitt_extensions() -> None:
+    """Phase 7 visibility: /model needs the concrete model and
+    backend per alias so the operator can see what each alias
+    resolves to. The gateway's /v1/models response carries those
+    fields as ``fitt_*`` extensions; the client must surface them
+    intact rather than dropping to alias names."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "fitt-default",
+                            "object": "model",
+                            "fitt_backend": "ollama",
+                            "fitt_resolved_model": "granite3.3:8b",
+                            "fitt_fallback": None,
+                        },
+                        {
+                            "id": "fitt-smart",
+                            "object": "model",
+                            "fitt_backend": "openrouter",
+                            "fitt_resolved_model": "anthropic/claude-sonnet-4.5",
+                            "fitt_fallback": "fitt-default",
+                        },
+                    ],
+                },
+            )
+        )
+        details = await _client().list_alias_details()
+    assert len(details) == 2
+    assert details[0]["id"] == "fitt-default"
+    assert details[0]["fitt_resolved_model"] == "granite3.3:8b"
+    assert details[0]["fitt_backend"] == "ollama"
+    assert details[1]["fitt_fallback"] == "fitt-default"
+
+
+async def test_list_alias_details_tolerates_error() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/models").mock(side_effect=httpx.ConnectError("boom"))
+        details = await _client().list_alias_details()
+    assert details == []
+
+
 async def test_chat_streams_deltas() -> None:
     sse = (
         b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
