@@ -479,12 +479,40 @@ def create_app(config: Config) -> FastAPI:
     async def _stop_history_pruner() -> None:  # pragma: no cover - lifespan hook
         await app.state.history_pruner.stop()
 
+    # Phase 7 Slice 7.1: per-binding context-window discovery.
+    # Discovers each bound model's effective context window
+    # at boot and caches the result for the lifetime of the
+    # process. See gateway/context_window.py for per-backend
+    # probe details. Best-effort — a probe failure stores
+    # tokens=None for that binding but doesn't block startup.
+    # Operators re-run discovery via `fitt context refresh`
+    # without a process restart.
+    from .context_window import ContextWindowCache
+
+    app.state.context_windows = ContextWindowCache()
+
+    @app.on_event("startup")
+    async def _populate_context_windows() -> None:  # pragma: no cover - lifespan hook
+        await app.state.context_windows.populate(
+            config,
+            timeout_s=config.server.context_probe_timeout_s,
+        )
+
     # Boot-time alias tool-call reliability probe (Principle 11).
     # Fires one canary tool-call request per alias and logs an
     # ERROR per binding that narrates instead of emitting real
     # tool_calls. See gateway/alias_probe.py. Disabled via
     # ``server.boot_probe_enabled = false`` for tests that don't
     # want network traffic at startup.
+    #
+    # Phase 7 Slice 7.1: results also stash on
+    # ``app.state.alias_probe_results`` (alias -> ProbeResult)
+    # so the ``/v1/aliases`` endpoint can surface "last probe"
+    # detail. Empty dict when probing is disabled or an
+    # infrastructure failure prevented results landing.
+    app.state.alias_probe_results = {}
+    app.state.alias_probe_ran_at = None
+
     @app.on_event("startup")
     async def _run_boot_probe() -> None:  # pragma: no cover - lifespan hook
         if not config.server.boot_probe_enabled:
@@ -508,6 +536,13 @@ def create_app(config: Config) -> FastAPI:
                 extra={"error": f"{type(exc).__name__}: {exc}"},
             )
             return
+
+        # Phase 7 Slice 7.1: persist results for the
+        # ``/v1/aliases`` endpoint to surface.
+        import time as _time
+
+        app.state.alias_probe_ran_at = _time.time()
+        app.state.alias_probe_results = {r.alias: r for r in results}
 
         for r in results:
             if r.status == "ok":
@@ -604,6 +639,7 @@ def create_app(config: Config) -> FastAPI:
         )
 
     # Routers - imported lazily to keep import graph acyclic.
+    from .aliases_endpoint import router as aliases_router
     from .approvals_endpoint import router as approvals_router
     from .events_endpoint import router as events_router
     from .health import router as health_router
@@ -612,6 +648,7 @@ def create_app(config: Config) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(models_router)
+    app.include_router(aliases_router)
     app.include_router(approvals_router)
     app.include_router(events_router)
     app.include_router(mcp_router)

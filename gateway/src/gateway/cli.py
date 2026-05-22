@@ -1676,5 +1676,142 @@ def watch_cmd(session_id: str, config_file: Path | None) -> None:
     sys.exit(run_watch(session_id, cfg.memory.sessions_dir))
 
 
+# --------------------------------------------------------------- fitt context
+
+
+@main.group("context")
+def context_group() -> None:
+    """Inspect and refresh per-binding context windows.
+
+    Phase 7 Slice 7.1: the gateway discovers each model's
+    effective context window at boot. These commands surface
+    the cache and re-run discovery without a process restart
+    (e.g. after raising Ollama's ``OLLAMA_CONTEXT_LENGTH`` on
+    a satellite)."""
+
+
+@context_group.command("list")
+def context_list() -> None:
+    """Print the discovered context window for every binding."""
+    import httpx
+
+    try:
+        r = httpx.get(
+            f"{_mcp_gateway_url()}/v1/aliases",
+            headers={
+                "Authorization": f"Bearer {_mcp_bearer_token()}",
+                "X-FITT-Client": "cli",
+            },
+            timeout=10.0,
+        )
+        r.raise_for_status()
+    except httpx.HTTPError as e:
+        _console.print(f"[red]Could not reach gateway: {e}[/red]")
+        sys.exit(1)
+
+    body = r.json()
+    table = Table(title="Per-binding context windows")
+    table.add_column("Alias", style="cyan")
+    table.add_column("Model")
+    table.add_column("Backend")
+    table.add_column("Context", justify="right")
+    table.add_column("Source")
+
+    for entry in body.get("aliases", []):
+        primary = entry.get("primary", {})
+        cw = entry.get("context_window")
+        if cw is None:
+            tokens = "[dim](unknown)[/dim]"
+            source = "[dim]—[/dim]"
+        elif cw.get("tokens") is None:
+            tokens = "[red](failed)[/red]"
+            source = cw.get("source", "?")
+        else:
+            tokens = f"{cw['tokens']:,}"
+            source = cw.get("source", "?")
+            # Highlight ollama's 2048 default — that's the
+            # granite-style "operator forgot to raise it" case.
+            if source == "default":
+                tokens = f"[yellow]{tokens}[/yellow]"
+        table.add_row(
+            entry.get("id", "?"),
+            primary.get("model", "?"),
+            primary.get("backend", "?"),
+            tokens,
+            source,
+        )
+
+    _console.print(table)
+
+
+@context_group.command("refresh")
+@click.option(
+    "--alias",
+    default=None,
+    help=(
+        "Refresh only the given alias's primary model. Without this flag, refreshes every binding."
+    ),
+)
+def context_refresh(alias: str | None) -> None:
+    """Re-run context-window discovery against the live gateway.
+
+    Use this after changing a backend's config (Ollama
+    ``OLLAMA_CONTEXT_LENGTH``, OpenRouter context_length
+    metadata change) when you want the gateway to pick up the
+    new value without restarting."""
+    import httpx
+
+    cfg = load_config(default_config_path(), default_secrets_path())
+    body: dict[str, str] = {}
+    if alias is not None:
+        # CLI takes an alias for the operator-friendly UX;
+        # internally the cache keys by model_id, so resolve.
+        try:
+            chain = cfg.resolve_alias(alias)
+        except KeyError:
+            _console.print(f"[red]Unknown alias: {alias}[/red]")
+            sys.exit(1)
+        body["model_id"] = chain[0].id
+
+    try:
+        r = httpx.post(
+            f"{_mcp_gateway_url()}/v1/internal/context-refresh",
+            json=body,
+            headers={
+                "Authorization": f"Bearer {_mcp_bearer_token()}",
+                "X-FITT-Client": "cli",
+            },
+            timeout=30.0,  # discovery can take a moment
+        )
+        r.raise_for_status()
+    except httpx.HTTPError as e:
+        _console.print(f"[red]Could not reach gateway: {e}[/red]")
+        sys.exit(1)
+
+    payload = r.json()
+    if "error" in payload:
+        err = payload["error"]
+        _console.print(f"[red]{err.get('type', 'error')}:[/red] {err.get('message', '?')}")
+        sys.exit(1)
+
+    refreshed = payload.get("refreshed", [])
+    table = Table(title="Refreshed context windows")
+    table.add_column("Model id", style="cyan")
+    table.add_column("Tokens", justify="right")
+    table.add_column("Source")
+    table.add_column("Detail")
+    for entry in refreshed:
+        tokens = (
+            f"{entry['tokens']:,}" if entry.get("tokens") is not None else "[red](unknown)[/red]"
+        )
+        table.add_row(
+            entry.get("model_id", "?"),
+            tokens,
+            entry.get("source", "?"),
+            entry.get("detail", ""),
+        )
+    _console.print(table)
+
+
 if __name__ == "__main__":
     main()

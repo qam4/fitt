@@ -95,6 +95,15 @@ class ServerConfig(BaseModel):
     # until a live Telegram session surfaced it).
     boot_probe_enabled: bool = True
     boot_probe_timeout_s: float = 10.0
+    # Phase 7 Slice 7.1: per-binding context-window discovery
+    # at boot. Each backend probe (Ollama /api/show, OpenAI-
+    # shape /v1/models, Anthropic lookup table) gets up to
+    # this many seconds before declaring the binding's window
+    # unknown. Five seconds is enough for healthy local Ollama
+    # and cloud-edge endpoints; the boot doesn't wait longer
+    # than ``probe_count * timeout`` worst case (probes run
+    # concurrently). See gateway/context_window.py.
+    context_probe_timeout_s: float = 5.0
 
 
 class LoggingConfig(BaseModel):
