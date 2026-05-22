@@ -605,3 +605,75 @@ async def test_chat_bot_read_timeout_distinct_from_connect_failure() -> None:
     msg = deltas[0]
     assert "didn't respond in time on the bot side" in msg
     assert "Configuration drift" in msg or "read-timeout" in msg
+
+
+# --------------------------------------------------------------- captures
+
+
+async def test_list_recent_captures_returns_payload() -> None:
+    """The /captures endpoint returns ``{"session_key": ...,
+    "captures": [...]}``; the client unwraps to the list."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/sessions/main/captures").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "session_key": "main",
+                    "captures": [
+                        {"turn_id": "t1", "model_used": "granite3.3:8b"},
+                    ],
+                },
+            ),
+        )
+        captures = await _client().list_recent_captures("main", limit=1)
+    assert len(captures) == 1
+    assert captures[0]["turn_id"] == "t1"
+
+
+async def test_list_recent_captures_passes_limit() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.get(
+            "http://127.0.0.1:8080/v1/sessions/main/captures",
+        ).mock(
+            return_value=httpx.Response(200, json={"session_key": "main", "captures": []}),
+        )
+        await _client().list_recent_captures("main", limit=5)
+    assert route.called
+    assert route.calls.last.request.url.params.get("limit") == "5"
+
+
+async def test_list_recent_captures_empty_on_transport_error() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/sessions/main/captures").mock(
+            side_effect=httpx.ConnectError("boom"),
+        )
+        captures = await _client().list_recent_captures("main")
+    assert captures == []
+
+
+async def test_get_capture_returns_dict_on_200() -> None:
+    payload = {"turn_id": "t1", "alias": "fitt-default"}
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/sessions/main/captures/t1").mock(
+            return_value=httpx.Response(200, json=payload),
+        )
+        cap = await _client().get_capture("main", "t1")
+    assert cap == payload
+
+
+async def test_get_capture_returns_none_on_404() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/sessions/main/captures/missing").mock(
+            return_value=httpx.Response(404, json={"detail": {"error": {}}}),
+        )
+        cap = await _client().get_capture("main", "missing")
+    assert cap is None
+
+
+async def test_get_capture_returns_none_on_transport_error() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/sessions/main/captures/t1").mock(
+            side_effect=httpx.ConnectError("boom"),
+        )
+        cap = await _client().get_capture("main", "t1")
+    assert cap is None

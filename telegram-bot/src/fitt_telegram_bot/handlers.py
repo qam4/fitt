@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from gateway.sessions import (
     DuplicateSessionId,
@@ -49,8 +49,17 @@ class Services:
 class SenderBot(Protocol):
     """What we need from python-telegram-bot's ``Bot`` object."""
 
-    async def send_message(self, *, chat_id: int, text: str) -> SentMessage: ...
-    async def edit_message_text(self, *, chat_id: int, message_id: int, text: str) -> object: ...
+    async def send_message(
+        self, *, chat_id: int, text: str, parse_mode: str | None = None
+    ) -> SentMessage: ...
+    async def edit_message_text(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        parse_mode: str | None = None,
+    ) -> object: ...
 
 
 class SentMessage(Protocol):
@@ -347,8 +356,129 @@ async def handle_help(bot: SenderBot, update: IncomingUpdate) -> None:
             "/session new <id> [name] - create a new session\n"
             "/model - list aliases\n"
             "/model <alias> - switch alias\n"
+            "/lastturn - show detail for the most recent turn\n"
             "/help - this message\n"
             "\nPhoto messages get multimodal analysis. Voice is not "
             "wired up yet."
         ),
     )
+
+
+# ---------- /lastturn ---------------------------------------------
+
+
+async def handle_lastturn_command(
+    bot: SenderBot,
+    update: IncomingUpdate,
+    services: Services,
+) -> None:
+    """Phase 7 Slice 7.3: surface per-turn detail without
+    leaving Telegram.
+
+    Closes the granite-style debugging loop: the operator hits
+    a surprising reply, types ``/lastturn``, sees what the
+    model actually saw — alias / model / prompt size /
+    context-window fill / finish reason / tool calls / latency.
+    A 30-second answer to "what just happened" instead of an
+    ssh-into-container plus six-tab grep.
+
+    Reads the most recent capture for the chat's session via
+    /v1/sessions/<s>/captures?limit=1. If capture was off for
+    the originating client (router-mode / coding-agent), no
+    capture exists; we say so."""
+    prefs = services.prefs.get(update.chat_id)
+    captures = await services.gateway.list_recent_captures(
+        prefs.session_id,
+        limit=1,
+    )
+    if not captures:
+        await bot.send_message(
+            chat_id=update.chat_id,
+            text=(
+                f"No recent captured turn for session '{prefs.session_id}'.\n"
+                "\n"
+                "Either no turn has run yet in this session, capture is "
+                "disabled (traceability config), or the originating client "
+                "was a coding-agent (which doesn't capture by default)."
+            ),
+        )
+        return
+    cap = captures[0]
+    text = _format_lastturn(cap)
+    await bot.send_message(chat_id=update.chat_id, text=text, parse_mode="HTML")
+
+
+def _format_lastturn(cap: dict[str, Any]) -> str:
+    """Render a captured turn summary as Telegram HTML.
+
+    Layout is phone-friendly: short lines, key metrics
+    grouped, warnings flagged, the granite case (5400 prompt
+    tokens, narration warning) is read at a glance.
+    """
+    import html as _html
+
+    turn_id = str(cap.get("turn_id", "?"))
+    short_id = turn_id[:12] if len(turn_id) > 12 else turn_id
+    alias = cap.get("alias", "?")
+    model = cap.get("model_used", "?")
+    backend = cap.get("backend", "?")
+    prompt = int(cap.get("prompt_tokens") or 0)
+    completion = int(cap.get("completion_tokens") or 0)
+    window = cap.get("context_window")
+    pct = cap.get("prompt_pct_of_window")
+    finish_reason = cap.get("finish_reason") or "?"
+    fallback = bool(cap.get("fallback_used"))
+    narration_warning = bool(cap.get("narration_warning"))
+    iterations = int(cap.get("iterations") or 0)
+    tool_calls_count = int(cap.get("tool_calls_count") or 0)
+    status = cap.get("status", "ok")
+
+    # Latency: derived from started_at / finished_at.
+    latency_ms: int | None = None
+    started_at = cap.get("started_at")
+    finished_at = cap.get("finished_at")
+    if isinstance(started_at, (int, float)) and isinstance(finished_at, (int, float)):
+        latency_ms = int((finished_at - started_at) * 1000)
+
+    lines: list[str] = []
+    lines.append(f"<b>Turn {_html.escape(short_id)}</b>")
+    lines.append(
+        f"alias <code>{_html.escape(str(alias))}</code> → "
+        f"<code>{_html.escape(str(model))}</code> "
+        f"({_html.escape(str(backend))})"
+    )
+
+    # Context fill — the granite case's load-bearing line.
+    if window:
+        pct_str = f"{pct:.1f}%" if isinstance(pct, (int, float)) else "?"
+        if isinstance(pct, (int, float)) and pct >= 80:
+            pct_str = f"⚠ <b>{pct_str}</b>"
+        lines.append(f"prompt {prompt:,} / window {window:,} ({pct_str})")
+    else:
+        lines.append(f"prompt {prompt:,} (window unknown)")
+
+    lines.append(f"completion {completion:,} tokens")
+    if latency_ms is not None:
+        lines.append(f"latency {latency_ms} ms")
+
+    # Status + finish_reason — when status != ok the operator
+    # wants to see why immediately.
+    if status == "ok":
+        lines.append(f"finish_reason <code>{_html.escape(str(finish_reason))}</code>")
+    else:
+        lines.append(f"⚠ status <code>{_html.escape(str(status))}</code>")
+
+    if fallback:
+        lines.append("(i) fallback used (primary backend failed)")
+
+    if narration_warning:
+        lines.append(
+            "⚠ narration warning: shape suggests the model narrated a tool "
+            "call rather than emitting one (granite-style; check the "
+            "dispatched prompt size and the bound model)"
+        )
+
+    if iterations or tool_calls_count:
+        lines.append(f"iterations {iterations}, tool calls {tool_calls_count}")
+
+    return "\n".join(lines)

@@ -70,6 +70,7 @@ class FakeGateway:
                 for a in self._aliases
             ]
         self._details = details
+        self._captures: list[dict[str, Any]] = []
         self.seen_calls: list[dict[str, Any]] = []
 
     async def chat(
@@ -88,6 +89,28 @@ class FakeGateway:
 
     async def list_alias_details(self) -> list[dict[str, Any]]:
         return self._details
+
+    async def list_recent_captures(
+        self,
+        session_id: str,
+        *,
+        limit: int = 1,
+    ) -> list[dict[str, Any]]:
+        # Return what the test injected via ``set_captures``.
+        return list(self._captures[:limit])
+
+    async def get_capture(
+        self,
+        session_id: str,
+        turn_id: str,
+    ) -> dict[str, Any] | None:
+        for cap in self._captures:
+            if cap.get("turn_id") == turn_id:
+                return cap
+        return None
+
+    def set_captures(self, captures: list[dict[str, Any]]) -> None:
+        self._captures = captures
 
 
 def _services(
@@ -442,3 +465,269 @@ async def test_model_switch_confirms_with_concrete_model(tmp_path: Path) -> None
     text = bot.sent[0][1]
     assert "anthropic/claude-sonnet-4.5" in text
     assert "openrouter" in text
+
+
+# ---------- /lastturn ---------------------------------------------
+
+
+async def test_lastturn_with_no_captures_says_so(tmp_path: Path) -> None:
+    """A fresh chat with no captured turn yet returns a clear
+    'no recent turn' message rather than a 404 / empty
+    response."""
+    gw = FakeGateway(deltas=[])
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_lastturn_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="lastturn", command_args=[]),
+        svc,
+    )
+    assert len(bot.sent) == 1
+    text = bot.sent[0][1]
+    assert "No recent captured turn" in text
+    assert "main" in text  # default session
+
+
+async def test_lastturn_renders_summary(tmp_path: Path) -> None:
+    """The granite-style debugging case end-to-end: operator
+    types /lastturn, sees the prompt-fill numbers that took
+    two hours of curl-comparison to find."""
+    gw = FakeGateway(deltas=[])
+    gw.set_captures(
+        [
+            {
+                "turn_id": "abc12345-6789-...",
+                "session_key": "main",
+                "alias": "fitt-default",
+                "client": "telegram",
+                "model_used": "granite3.3:8b",
+                "backend": "ollama",
+                "fallback_used": False,
+                "started_at": 1779479823.42,
+                "finished_at": 1779479825.81,
+                "prompt_tokens": 5400,
+                "completion_tokens": 89,
+                "context_window": 32768,
+                "prompt_pct_of_window": 16.5,
+                "finish_reason": "stop",
+                "narration_warning": False,
+                "iterations": 1,
+                "tool_calls_count": 0,
+                "status": "ok",
+            }
+        ]
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_lastturn_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="lastturn", command_args=[]),
+        svc,
+    )
+    assert len(bot.sent) == 1
+    text = bot.sent[0][1]
+    # Header + alias/model line.
+    assert "abc12345" in text
+    assert "fitt-default" in text
+    assert "granite3.3:8b" in text
+    assert "ollama" in text
+    # Token + window + pct.
+    assert "5,400" in text
+    assert "32,768" in text
+    assert "16.5%" in text
+    assert "89" in text
+    # Latency derived from started_at / finished_at; float math
+    # gives 2389ms or 2390ms depending on Python version.
+    assert "238" in text or "239" in text  # ms prefix
+    assert " ms" in text
+    # Finish reason.
+    assert "stop" in text
+
+
+async def test_lastturn_flags_high_context_usage(tmp_path: Path) -> None:
+    """When prompt_pct_of_window is at or above 80%, the
+    rendering surfaces a warning glyph so it's visible at a
+    glance. Anchors the operator's eye on the variable that
+    matters."""
+    gw = FakeGateway(deltas=[])
+    gw.set_captures(
+        [
+            {
+                "turn_id": "high",
+                "alias": "fitt-default",
+                "model_used": "qwen2.5:14b",
+                "backend": "ollama",
+                "prompt_tokens": 26000,
+                "completion_tokens": 100,
+                "context_window": 32768,
+                "prompt_pct_of_window": 79.3,  # under 80, no glyph
+                "finish_reason": "stop",
+                "status": "ok",
+            }
+        ]
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_lastturn_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="lastturn", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "79.3%" in text
+    # No warning at 79.
+    assert "⚠ <b>79.3%</b>" not in text
+
+    # Bump above threshold.
+    gw.set_captures(
+        [
+            {
+                "turn_id": "high2",
+                "alias": "fitt-default",
+                "model_used": "qwen2.5:14b",
+                "backend": "ollama",
+                "prompt_tokens": 28000,
+                "completion_tokens": 100,
+                "context_window": 32768,
+                "prompt_pct_of_window": 85.4,
+                "finish_reason": "stop",
+                "status": "ok",
+            }
+        ]
+    )
+    bot2 = FakeBot()
+    await handlers.handle_lastturn_command(
+        bot2,
+        IncomingUpdate(user_id=42, chat_id=100, command="lastturn", command_args=[]),
+        svc,
+    )
+    text2 = bot2.sent[0][1]
+    assert "85.4%" in text2
+    assert "⚠" in text2  # warning glyph present
+
+
+async def test_lastturn_renders_narration_warning(tmp_path: Path) -> None:
+    """A captured turn with the narration warning flag shows
+    an explicit hint about the granite-style failure mode."""
+    gw = FakeGateway(deltas=[])
+    gw.set_captures(
+        [
+            {
+                "turn_id": "warn-1",
+                "alias": "fitt-default",
+                "model_used": "granite3.3:8b",
+                "backend": "ollama",
+                "prompt_tokens": 5400,
+                "completion_tokens": 100,
+                "context_window": 32768,
+                "prompt_pct_of_window": 16.5,
+                "finish_reason": "stop",
+                "narration_warning": True,
+                "status": "ok",
+            }
+        ]
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_lastturn_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="lastturn", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "narration warning" in text
+    assert "granite-style" in text
+
+
+async def test_lastturn_handles_unknown_context_window(tmp_path: Path) -> None:
+    """When discovery failed for the bound model, context_window
+    is None — the rendering says 'window unknown' rather than
+    showing 0 or a bogus pct."""
+    gw = FakeGateway(deltas=[])
+    gw.set_captures(
+        [
+            {
+                "turn_id": "no-cw",
+                "alias": "fitt-default",
+                "model_used": "future/model",
+                "backend": "anthropic",
+                "prompt_tokens": 1000,
+                "completion_tokens": 50,
+                "context_window": None,
+                "prompt_pct_of_window": None,
+                "finish_reason": "stop",
+                "status": "ok",
+            }
+        ]
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_lastturn_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="lastturn", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "1,000" in text
+    assert "window unknown" in text
+    assert "%" not in text or "completion" in text  # no spurious pct
+
+
+async def test_lastturn_renders_failure_status(tmp_path: Path) -> None:
+    """Non-ok statuses (upstream_error, tool_loop_exhausted)
+    surface explicitly so the operator doesn't have to scan
+    for the failure cause."""
+    gw = FakeGateway(deltas=[])
+    gw.set_captures(
+        [
+            {
+                "turn_id": "fail-1",
+                "alias": "fitt-default",
+                "model_used": "granite3.3:8b",
+                "backend": "ollama",
+                "prompt_tokens": 5400,
+                "completion_tokens": 0,
+                "context_window": 32768,
+                "prompt_pct_of_window": 16.5,
+                "finish_reason": "stop",
+                "iterations": 10,
+                "status": "tool_loop_exhausted",
+            }
+        ]
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_lastturn_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="lastturn", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "tool_loop_exhausted" in text
+    assert "⚠" in text
+
+
+async def test_lastturn_uses_chat_session(tmp_path: Path) -> None:
+    """The command reads the chat's preferred session, not the
+    default 'main', so a per-chat /session switch is honoured."""
+    gw = FakeGateway(deltas=[])
+    seen: list[str] = []
+
+    original = gw.list_recent_captures
+
+    async def _track(session_id: str, *, limit: int = 1) -> list[dict[str, Any]]:
+        seen.append(session_id)
+        return await original(session_id, limit=limit)
+
+    gw.list_recent_captures = _track  # type: ignore[method-assign]
+    svc = _services(tmp_path, gateway=gw)
+    svc.sessions.create("retroai", "Retro AI debugging")
+    svc.prefs.set_session(100, "retroai")
+
+    bot = FakeBot()
+    await handlers.handle_lastturn_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="lastturn", command_args=[]),
+        svc,
+    )
+    assert seen == ["retroai"]

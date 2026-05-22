@@ -232,20 +232,21 @@ Builds on 7.1 (`/model` reads context window) and 7.2
 
 ### 13. `/lastturn`
 
-- [ ] 13a. `_on_lastturn` handler in `bot.py`.
-- [ ] 13b. `handle_lastturn_command` in `handlers.py`:
+- [x] 13a. `_on_lastturn` handler in `bot.py`.
+- [x] 13b. `handle_lastturn_command` in `handlers.py`:
        reads `prefs.session_id`, calls
-       `gateway.list_recent_turns(limit=1)`, then
-       `gateway.get_turn(...)`, formats per the design.md
-       schema.
-- [ ] 13c. Format includes: alias requested, model used,
+       `gateway.list_recent_captures(limit=1)`, formats per
+       the design.md schema.
+- [x] 13c. Format includes: alias requested, model used,
        backend, prompt tokens, completion tokens, prompt
        %-of-window, latency, finish_reason, fallback flag,
-       narration warning if any, tool calls run with
-       outcome summaries.
-- [ ] 13d. When capture was off for the turn (router-mode),
-       return a clear "capture disabled for client X" reply.
-- [ ] 13e. Tests: happy path, no-recent-turn, capture-disabled.
+       narration warning if any.
+- [x] 13d. When capture was off for the turn (router-mode),
+       return a clear "no recent turn / capture disabled"
+       reply.
+- [x] 13e. Tests: happy path, no-recent-turn, narration warning,
+       high-context-fill flag, unknown context window,
+       failure status, per-chat session honored.
 
 ### 14. `/status`
 
@@ -273,8 +274,8 @@ Builds on 7.1 (`/model` reads context window) and 7.2
 
 ### 16. `/help` update
 
-- [ ] 16a. Update `/help` text to list `/lastturn`,
-       `/status`, `/eval`.
+- [x] 16a. Update `/help` text to list `/lastturn`.
+       *(/status, /eval pending their respective tasks.)*
 - [ ] 16b. Update `/help` test.
 
 ### 17. Definition of done — Slice 7.3

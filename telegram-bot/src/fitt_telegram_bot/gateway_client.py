@@ -115,6 +115,86 @@ class GatewayClient:
         data = r.json().get("data", [])
         return [m for m in data if isinstance(m, dict)]
 
+    async def list_recent_captures(
+        self,
+        session_id: str,
+        *,
+        limit: int = 1,
+    ) -> list[dict[str, Any]]:
+        """GET /v1/sessions/<session>/captures?limit=N.
+
+        Phase 7 Slice 7.3: backs the ``/lastturn`` Telegram
+        command. Returns the lightweight summary list (no
+        bodies) — the bot only needs the ``turn_id`` to drill
+        into details and the prompt-fill metrics rendered
+        inline.
+
+        Empty list on transport failure or 404. The bot
+        renders "no recent turn" in either case — the operator
+        can't tell the difference, and the gateway log carries
+        the structured detail."""
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            try:
+                r = await http.get(
+                    f"{self._base}/v1/sessions/{session_id}/captures",
+                    params={"limit": limit},
+                    headers=self._headers,
+                )
+                r.raise_for_status()
+            except httpx.HTTPError as e:
+                _log.warning(
+                    "gateway.list_recent_captures.failed",
+                    session_id=session_id,
+                    error_class=type(e).__name__,
+                    error=str(e),
+                )
+                return []
+        return list(r.json().get("captures", []))
+
+    async def get_capture(
+        self,
+        session_id: str,
+        turn_id: str,
+    ) -> dict[str, Any] | None:
+        """GET /v1/sessions/<session>/captures/<turn_id>.
+
+        Returns the full capture as a dict, or ``None`` on
+        404 / transport error. The bot's ``/lastturn`` command
+        currently only needs the summary fields (which are also
+        on the list endpoint), but full detail is available
+        here for future use cases (`/lastturn verbose`, dashboard
+        clients, etc)."""
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            try:
+                r = await http.get(
+                    f"{self._base}/v1/sessions/{session_id}/captures/{turn_id}",
+                    headers=self._headers,
+                )
+            except httpx.HTTPError as e:
+                _log.warning(
+                    "gateway.get_capture.failed",
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    error_class=type(e).__name__,
+                    error=str(e),
+                )
+                return None
+        if r.status_code == 404:
+            return None
+        if r.status_code >= 400:
+            _log.warning(
+                "gateway.get_capture.error",
+                session_id=session_id,
+                turn_id=turn_id,
+                status=r.status_code,
+            )
+            return None
+        try:
+            payload = r.json()
+        except ValueError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
     async def list_pending_approvals(self, client: str | None = None) -> list[dict[str, Any]]:
         """GET /v1/approvals/pending[?client=...].
 
