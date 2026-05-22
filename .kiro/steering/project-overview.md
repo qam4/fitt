@@ -163,16 +163,28 @@ Firewall on the Hub).
 
 0. Bootstrap (Ollama + IDE + local LLM) - DONE
 1. Gateway v0 (OpenAI-compatible HTTP daemon, alias routing,
-   Ollama + OpenRouter) - IN AT-HOME VERIFICATION
-2. Memory v0 (identity + today's conversation log as markdown)
-3. Telegram + Open WebUI (phone/browser interfaces)
-4. Agentic tools (via MCP, approval-gated)
-5. Retro-AI integration (launch/monitor RL training via FITT)
-6. Autonomy (cron + heartbeat)
-7. Memory v1 (RAG, compaction, cross-project)
-8. Voice (Faster-Whisper STT + Piper/Kokoro TTS) - optional
-9. Home Assistant agent ("Alexa-like" half of the vision)
-10. Hardening - ongoing
+   Ollama + OpenRouter) - DONE
+2. Memory v0 (identity + today's conversation log as markdown) - DONE
+3. Telegram + Open WebUI (phone/browser interfaces) - DONE
+4. Agentic tools (via MCP, approval-gated) - DONE
+4.5. Cron + proactive notifications - DONE
+4.6. End-to-end test harness - DONE
+4.7. project_shell tool - DONE
+4.8. Visibility proxies (per-turn event stream, Telegram
+     live-turn renderer, fitt watch CLI) - DONE
+4.9. Upstream timeout discipline - DONE
+4.10. Skills loader - DONE
+4.11. Web search tool - DONE
+5. Lessons + decaying history - CODE DONE, live validation pending
+6. Spec-runner (RESHAPED — see roadmap; FITT not a coding agent)
+7. Visibility & traceability (active — context discovery, /model
+   commands, Telegram markdown renderer, dashboard v0)
+8. Compaction (sessions full enough that this earns its keep)
+9. Memory v1 (RAG, vector recall, cross-project)
+10. Voice (Faster-Whisper STT + Piper/Kokoro TTS) - optional
+11. Home Assistant agent ("Alexa-like" half of the vision)
+12+. Opportunistic upgrades — single bullets, each landing when
+     daily friction justifies it
 
 ## Guiding principles (from the roadmap)
 

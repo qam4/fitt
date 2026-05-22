@@ -33,6 +33,106 @@ doc.
 
 ---
 
+## Granite 3.3 narrates tool calls under FITT's full system prompt
+
+**First observed:** 2026-05-22. **Tag:** model-fit, medium pain.
+Cross-references `docs/choosing-a-model.md` (system-prompt-size
+as a model-fit axis) and motivates the Phase 7 visibility work.
+
+`granite3.3:8b` is bound to `fitt-default` on Ollama. Direct
+hit against `localhost:11434/api/chat` with a single tool +
+no system prompt: clean structured `tool_calls` response,
+141-token prompt, 15-token completion, ~2s. Hit through FITT's
+gateway with FITT's full system prompt (capability block,
+identity, lessons, skills, no history yet — fresh session):
+narration in YAML/JSON shape inside `message.content`, no
+`tool_calls` field, 5405-token prompt, 103-token completion.
+Same model, same Ollama backend, same wire format. The only
+load-bearing variable: prompt size, ~38× larger.
+
+**The router-mode (`X-FITT-Client: coding-agent`) test pinned
+it.** Through the gateway with FITT's prompt-injection bypassed
+and a single user-supplied tool: clean `tool_calls`, 159-token
+prompt. So the model is fine; FITT's system prompt is what
+flips it.
+
+**Cost:** every Telegram tool-use turn against this binding
+narrates instead of dispatching. The agent loop sees no real
+`tool_calls` and treats the narrated text as the assistant's
+final reply. The user gets a model claiming it ran a tool with
+no actual execution — exactly the Problem C (self-deception)
+shape the hallucinations doc warned about, surfaced via a
+different failure path (model-fit, not regex-narration).
+
+The boot probe (`alias_probe`) didn't catch this because it
+fires a 159-token canary; the model passes there. Same data
+shape Phase 7's realistic-prompt eval flag is meant to surface.
+Same data shape no eval today reports.
+
+**Root cause framing.** Models advertised as "supports tool
+calling" pass abstract benchmarks at minimal prompt size.
+Discipline degrades with scale. Smaller models (≤12B) lose
+structured-output adherence faster than larger ones — the
+post-training that teaches "emit `tool_calls`" is fighting the
+post-training that teaches "follow long system prompts." The
+literature (see `docs/hallucinations-and-poisoning.md` on the
+"lost in the middle" effect) frames this as context-window
+degradation; for FITT's purposes it shows up well before the
+window's ceiling, around 4-6K tokens of system prompt for
+8B-class models. The choosing-a-model doc treats this as the
+operator-controllable knob; this entry is the concrete
+incident.
+
+**Mitigations, ordered.**
+
+1. **Route `fitt-default` to a model that handles long prompts
+   with tools.** Per the choosing-a-model doc, `qwen3:14b` /
+   `llama3.1:8b-instruct` / `mistral-nemo:12b` are documented
+   to handle multi-thousand-token system prompts cleanly; cloud
+   models (Claude Haiku, GPT-4o-mini) handle them at any size.
+   This is the right answer when reliable tool calling matters
+   and is what a future Phase-7-informed binding decision should
+   default to.
+2. **Phase 7 surfaces this failure mode by default.** The
+   per-turn traceability capture (Slice 7.2) logs the
+   `prompt_tokens`, `context_window`, and `prompt_pct_of_window`
+   for every turn. The Telegram `/model` command surfaces the
+   same. An operator hits this case again, sees "5405 tokens on
+   a 32k-window model, narrated, finish_reason=stop, no
+   tool_calls," and the diagnosis is a glance instead of an
+   evening.
+3. **Realistic-prompt eval** (deferred to Phase 7+ opportunistic).
+   `fitt eval alias <name> --realistic` runs the eval suite with
+   FITT's actual injected prompt rather than the bare canary.
+   The diff between bare and realistic runs is the diagnostic.
+4. **Compact-prompt mode for small models** (Phase 7+
+   opportunistic). `tools.compact_capability_block: true` skips
+   the prose trailer in the capability block and renders only
+   the tool list. Bandage for binding to small models without
+   a swap.
+
+**Note on Ollama `num_ctx`.** Operator had set
+`OLLAMA_CONTEXT_LENGTH=256k` (the maximum granite supports), so
+the prompt reached the model intact rather than being silently
+truncated at the default 2048. This *isn't* the bug — but it's
+the discoverability gap Phase 7's context-awareness slice
+(7.1) addresses: FITT today has no awareness of whether `num_ctx`
+is at default, at the operator's override, or at the
+architecture ceiling. Without that, compaction (Phase 8) can't
+know when to fire.
+
+**Observation worth pinning:** the bug was diagnosed in roughly
+two hours of conversation that involved reading source for
+`chat.py`, `agent_loop.py`, `router.py`, `capabilities.py`, and
+`alias_probe.py`, plus three direct curl tests, plus
+ssh-into-container. Phase 7's whole reason for existing is to
+turn that two-hour debugging session into a 30-second
+dashboard glance plus a `/model` command. The work is
+load-bearing for the project's "I'm a programmer, I want to see
+what goes wrong" posture (project lead, 2026-05-22).
+
+---
+
 ## Narration shape-check fired on every chit-chat turn
 
 **First observed:** 2026-05-12. **Rolled back:** 2026-05-12.

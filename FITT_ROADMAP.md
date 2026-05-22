@@ -52,14 +52,29 @@ Phase 0 (manual) ─┐
                   │                             │                    │
                   │                             │                    └─► Phase 5 (lessons + decay)
                   │                             │                         │
-                  │                             │                         └─► Phase 6 (spec-runner)
+                  │                             │                         └─► Phase 6 (spec-runner; reshaped — see note)
                   │                             │
-                  │                             ├─► Phase 7 (vector memory, admin UI)
-                  │                             ├─► Phase 8 (voice, home assistant)
-                  │                             └─► Phase 9+ (subagents, heartbeat, parallel)
+                  │                             ├─► Phase 7 (visibility & traceability)
+                  │                             │     │
+                  │                             │     └─► Phase 8 (compaction)
+                  │                             │           │
+                  │                             │           └─► Phase 9 (memory v1: vector / RAG / cross-project)
+                  │                             │
+                  │                             ├─► Phase 10 (voice)
+                  │                             ├─► Phase 11 (home assistant)
+                  │                             └─► Phase 12+ (opportunistic: subagents, heartbeat, parallel, ...)
 ```
 
-Phases 7-9+ land opportunistically, driven by friction from daily use.
+Phase 7 is the active one — visibility-and-traceability earned its slot from the
+2026-05 granite-narration / context-discovery debugging session, where we found
+ourselves ssh'ing into containers to grep logs. Phases 8 and 9 follow as
+sub-arcs of "memory done right," each landing when daily friction justifies it.
+Phases 10, 11, and 12+ remain genuinely opportunistic.
+
+The visibility / compaction / memory-v1 split (was a single bundled "Phase 7 —
+vector memory, admin UI") happened 2026-05-22 after the conversation that
+surfaced the granite case made it clear these are three independent threads
+with different urgency. See Phase 7's Why-now section for the trail.
 
 ---
 
@@ -677,7 +692,7 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects
 
 - **No allowlist.** Empirical evidence in the industry (the "granular `Bash(...)` patterns fail on compound commands" post-mortem from Claude Code's user community, early 2026) shows granular allowlists fail on compound commands (`cd /repo && git fetch && git log | head`) because the classifier sees the whole string. Settings drift — every "always allow" click adds a new entry — makes the allowlist reconverge on the broken state. Deny list is the primitive; allowlist is abandoned.
 - **No pattern-based "safe command" classification.** Cursor's CVE in 2026 (shell built-ins bypassing the allowlist via env-var poisoning) showed that command-string classifiers cannot capture execution context: `export LD_PRELOAD=...` never looks like a command, and poisoned environment turns subsequent "trusted" commands into RCE vectors. Our deny list is deliberately narrow and we document that narrowness; we do not ship a classifier that claims to know which commands are safe.
-- **No sandbox in v0.** Listed in Phase 7+ as its own 2–3 week item. Sandbox is the correct long-term answer but it's operating-system-specific work (Landlock + seccomp on Linux, Seatbelt on macOS, WSL2 on Windows) and it doesn't belong bundled into Phase 4.7.
+- **No sandbox in v0.** Listed in Phase 12+ as its own 2–3 week item. Sandbox is the correct long-term answer but it's operating-system-specific work (Landlock + seccomp on Linux, Seatbelt on macOS, WSL2 on Windows) and it doesn't belong bundled into Phase 4.7.
 - **No interactive commands.** `BatchMode=yes` already on for SSH; locally no TTY. `vim`, `sudo` with password prompt, anything wanting a pty hangs and times out. Documented in the tool description so the model knows not to try.
 - **No background processes.** `communicate()` waits for EOF on stdout/stderr. A daemon detached with `&` keeps the tool blocked for the full timeout. If the user wants a long-running daemon, they don't want it through FITT.
 
@@ -694,7 +709,7 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects
 
 ## Phase 4.8 — Visibility Proxies (Spec-driven, ~1 weekend)
 
-**Goal:** Make what FITT is doing visible, without waiting for the full admin dashboard (Phase 7+). Ship small, cheap surfaces for the same data the dashboard will eventually render, in order of phone/IDE reach. Closes Problem D (invisibility) from `docs/hallucinations-and-poisoning.md` for the single-user case the author actually lives in.
+**Goal:** Make what FITT is doing visible, without waiting for the full admin dashboard (now Phase 7). Ship small, cheap surfaces for the same data the dashboard will eventually render, in order of phone/IDE reach. Closes Problem D (invisibility) from `docs/hallucinations-and-poisoning.md` for the single-user case the author actually lives in.
 
 **Why now, why as its own phase:** the full dashboard is a 2–3 weekend project; the reliability work of 2026-05-10 made it clear that the author is flying blind on several axes (tool results, claim mismatches, gap reports, approval state) and re-deriving what happened from `docker compose exec` into a remote shell is the friction that makes `fitt inbox` unused in practice. The proxies are each a few hours, each independently useful, each reusable when the dashboard lands (they read the same files).
 
@@ -708,18 +723,18 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects
 **Deferred to post-v1:**
 
 - **Telegram `/inbox` historical browser.** Originally sub-phase 4.8e as a paged reader over `events.jsonl`; reshaped around the live renderer instead. Add back if scrolling past turns on the phone becomes an actual daily friction.
-- **HTML viewer / barebone dashboard.** Originally sub-phase 4.8e. Deferred to Phase 7+ as part of the real admin dashboard — the daily phone surface is Telegram (live-turn renderer) and splitting a stepping-stone HTML viewer from the eventual editable dashboard would mean maintaining two viewers for the same data.
+- **HTML viewer / barebone dashboard.** Originally sub-phase 4.8e. Deferred to Phase 7 as part of the real admin dashboard — the daily phone surface is Telegram (live-turn renderer) and splitting a stepping-stone HTML viewer from the eventual editable dashboard would mean maintaining two viewers for the same data.
 
 **Scope boundaries:**
 
 - No writes from HTTP. Read-only surface. Writes still go through chat / CLI.
 - No authentication beyond the bearer token that already exists. No per-event ACLs.
 - No rotation knob for `turns/<date>.jsonl` in this phase. Same posture as `events.jsonl` and `audit.jsonl` — append-only, history pruner handles retention via the shared `memory.history_max_days` setting.
-- No dashboard. The real `$FITT_HOME` admin UI with edit capability, config diffing, session browser, and live turn view is Phase 7+. This phase is the "can I see what FITT is doing right now, on my phone" floor.
+- No dashboard. The real `$FITT_HOME` admin UI with edit capability, config diffing, session browser, and live turn view is Phase 7. This phase is the "can I see what FITT is doing right now, on my phone" floor.
 
 **Prerequisites:** Phase 4 (event log), Phase 4.5 (events.jsonl persistence), Phase 4.7 (tool-call events with enough structure to render).
 
-*Full spec: `.kiro/specs/phase4.8-visibility-proxies/` (promoted 2026-05-11; reshaped 2026-05-12 around a MeshClaw-inspired growing-bubble Telegram live-turn renderer after reading MeshClaw's Slack gateway source). Four sub-phases: 4.8a backend + subscribe hook → 4.8c HTTP endpoints + SSE → 4.8b Telegram live-turn renderer → 4.8d `fitt watch` CLI. HTML viewer (former 4.8e) deferred to Phase 7+ as part of the real admin dashboard. Total ~6 days focused work; sub-phases ship piecemeal.*
+*Full spec: `.kiro/specs/phase4.8-visibility-proxies/` (promoted 2026-05-11; reshaped 2026-05-12 around a MeshClaw-inspired growing-bubble Telegram live-turn renderer after reading MeshClaw's Slack gateway source). Four sub-phases: 4.8a backend + subscribe hook → 4.8c HTTP endpoints + SSE → 4.8b Telegram live-turn renderer → 4.8d `fitt watch` CLI. HTML viewer (former 4.8e) deferred to Phase 7 as part of the real admin dashboard. Total ~6 days focused work; sub-phases ship piecemeal.*
 
 ---
 
@@ -740,7 +755,7 @@ The honest one-sentence framing lives in the spec verbatim: *"Phase 4.7 protects
   - Total history budget capped at ~6000 chars.
 - **History pruning.** Nightly task deletes `history/YYYY-MM-DD.md` files older than `memory.history_max_days` (default 90, configurable).
 
-**Out of scope (deferred to Phase 7+):**
+**Out of scope (deferred to Phase 8 / 9):**
 
 - Vector embeddings / semantic search.
 - Episodic memory with similarity retrieval.
@@ -772,7 +787,21 @@ Until this ships, the workaround is to start a fresh session when poisoning happ
 
 ## Phase 6 — Spec-Runner: Unattended Coding (Spec-driven, ~1-2 weekends)
 
-**Goal:** Hand FITT a `tasks.md` and walk away. It walks unchecked tasks in order, each one in its own session, commits per task, stops on first blocker. Works overnight.
+> **Reshape note (2026-05-15, captured here 2026-05-22).** The
+> project-overview steering file is now explicit that FITT is
+> not a coding agent. Phase 6 as originally framed ("FITT writes
+> code from a spec") shouldn't ship in that shape. If revisited,
+> it should be reshaped to "FITT hands tasks to OpenCode (or
+> another dedicated coding CLI) and monitors progress" — the
+> orchestrator-wraps-coding-CLI pattern from MeshClaw / Hermes
+> rather than the build-a-coder pattern. The spec under
+> `.kiro/specs/phase6-spec-runner/` predates this decision and
+> describes the original framing; treat it as historical context,
+> not as the work to do. The phase number stays vacated rather
+> than re-purposed so the trail of "what happened to Phase 6"
+> stays discoverable.
+
+**Goal (original; superseded — see reshape note above):** Hand FITT a `tasks.md` and walk away. It walks unchecked tasks in order, each one in its own session, commits per task, stops on first blocker. Works overnight.
 
 **Key work:**
 
@@ -813,34 +842,559 @@ to hurt enough to shape one.
 
 ---
 
-## Phase 7+ — Opportunistic upgrades
+## Phase 7 — Visibility & Traceability (Spec-driven, ~3-5 weekends)
 
-Features we know we'll want eventually but shouldn't pre-build. Each one lands when daily friction justifies it.
+**Goal:** Make what FITT is doing visible while it's happening,
+AND make what FITT did fully reconstructable after the fact.
+Stop debugging by ssh-into-container plus log-grep. As a
+programmer building FITT, the operator should be able to trace
+any surprising behaviour back to its exact dispatched prompt,
+exact response, exact tool calls, exact context size — without
+leaving Telegram or the dashboard.
 
-- **`web_search` tool.** Triggered — "is it going to rain tomorrow," "what's the latest LLM model," "how did [team] do today." `http_get` covers known-URL cases but not open-ended search. For FITT's no-subscription constraint (Principle 5) the path of least resistance is DuckDuckGo's Instant Answers API (no key, works against wttr.in-style endpoints) as v0; upgrade to self-hosted SearXNG (Docker container, aggregates Google/Bing/DuckDuckGo/etc. without upstream keys) when v0 shows its limits. v0 is an afternoon of work; SearXNG upgrade is another afternoon plus a compose entry. Not blocked on reliability floor — `web_search(query)` is a read-only, structured-IO tool, safer than `project_shell` on every axis. Deferred now only because 2026-05-10 reliability work should settle into daily use first per Principle 9. See docs/prior-art.md for the search-service options.
-- **Current-facts nudge in capability block.** Lightweight prompting addition: "When the request is about current events, recent releases, weather, sports, or anything that might be newer than your training data, reach for a tool first." Won't eliminate stale-training-data answers but reduces the rate at which the model confidently answers "the latest model is GPT-4o" from 2025 training cutoff. Minutes of work. Free to try. Lands with or alongside `web_search`.
-- **OS-level agent sandbox.** Triggered by "I want to use `trust_session` on `project_shell` without reading every command." Linux: Landlock + seccomp directly (same stack Cursor uses in their 2026 rollout). macOS: `sandbox-exec` with a dynamic Seatbelt profile. Windows: punt or run the gateway under WSL2 and reuse the Linux path. Sandbox's job is to flip Phase 4.7's honest-but-uncomfortable threat model: "even if the model runs `rm -rf ~`, it can't actually touch `~`." This is the real security boundary; Phase 4.7's deny list is a floor, not a boundary. 2–3 weeks of focused work, operating-system-specific, and genuinely security-critical — too big to bundle into any earlier phase.
-- **Telegram message formatting.** Triggered — model replies render raw markdown verbatim on the phone (`**in 5 minutes**` arrives with asterisks intact) because Telegram doesn't speak CommonMark, we don't pass a `parse_mode`, and neither of Telegram's own dialects (Markdown legacy / MarkdownV2 / HTML) matches what models emit. Planned fix: CommonMark → Telegram HTML via `markdown-it-py`, whitelist-sanitised to Telegram's allowed tag set (`<b>`, `<i>`, `<code>`, `<pre>`, `<a>`, `<blockquote>`, `<tg-spoiler>`), applied in `streaming.py`'s `_flush` and in the event-push formatter. HTML not MarkdownV2 because a half-written `<b>` degrades gracefully under streaming edits while half-written `*…*` crashes the parser for the whole message. Cosmetic, so scheduled here rather than in an earlier phase; a few hours when we want to land it.
-- **Vector / semantic memory.** Triggered by "the agent consistently forgets things older than a week." Add embeddings (local Ollama model on a satellite), SQLite + FAISS, migrate markdown to structured memory.
-- **Admin dashboard.** Triggered by "I can see what FITT did yesterday but only if I SSH into the NAS and read six JSONL files." A FastAPI + Jinja/HTMX dashboard over `$FITT_HOME`, covering both the config files (`config.yaml`, `secrets.yaml`, `projects.yaml`, `cron.json`) and the live runtime state (`events.jsonl`, `audit.jsonl`, `capability_gaps.log`, per-session `history/*.md`, and the per-turn event stream once Phase 4.8 ships it). Live turn view as the centerpiece: model reasoning, tool calls, approvals pending, results — in one pane while the turn is in flight. Browse + edit from a phone browser on Tailscale. Inspired by MeshClaw's dashboard: the hub's state stops being buried in files the operator has to grep and becomes visible. Deferred here because it's big; Phase 4.8 ships user-visible proxies (CLI, Telegram, HTTP, static HTML) piecemeal while it waits.
-- **Subagents / parallel execution.** Triggered by "I want FITT to research X while executing Y." Add background task spawning with result injection.
-- **Heartbeat loop.** Triggered by "I want FITT to pick up self-written TODOs." Self-directed behavior; 60-second loop picks up tasks from a queue the agent writes to.
-- **Replan in spec-runner.** Triggered by "the runner stops too often on solvable blockers." LLM-driven revision of remaining tasks after a failure.
-- **Self-review in spec-runner.** Triggered by "executor committed broken code and marked task done." Independent reviewer session reads git diff.
-- **Cross-machine SSH fleet management.** Triggered by "adding a new satellite is fiddly." Automated tailnet discovery, capability probing, auto-registration.
-- **Voice (Phase 8 in the old numbering).** Triggered by "I want hands-free." Whisper STT + Piper/Kokoro TTS.
-- **Home automation (Phase 9 in the old numbering).** Triggered by "I want my AI to control my house." Home Assistant MCP + approval-gated physical-world actions.
+**Why now, why as its own phase.** The 2026-05-22 granite-narration
+debugging session crystallised the gap. Granite 3.3 8B was bound
+to `fitt-default`. Telegram users got narrated JSON ` ```json{"name":
+"web_search", ...}``` ` instead of real `tool_calls`. To diagnose,
+we had to: read source for the chat handler and agent loop, ssh
+into the hub, run curl directly against Ollama, run curl through
+the gateway with `coding-agent` mode to bypass FITT's prompt,
+compare token counts (159 bare vs 5400 with FITT's system prompt)
+to discover the system-prompt size was the load-bearing variable.
+None of that should be the daily-debugging path. The same
+session also revealed FITT has no awareness of per-binding
+context windows (Ollama's `num_ctx` lives outside the gateway;
+operators can set it to 256k as the user did, or leave it at
+2048 default, and FITT can't tell you which). Both are
+visibility gaps that compound: future compaction (Phase 8) needs
+context-window awareness as a foundation, and any future model
+swap needs traceability to know whether the swap actually
+helped.
 
-- Secondary compute node: desktop's 3070 as Ollama fallback.
-- Backups: nightly snapshot of memory + audit log to NAS.
-- Weekly audit log review.
-- Cost-cap enforcement middleware if provider-dashboard limits ever prove insufficient.
-- Optional custom dashboard at `localhost:7777` (only if Open WebUI turns out not to cover what you want).
-- Multi-project context improvements.
-- Skills system if markdown grows unwieldy.
-- Regression-test harness for agent behavior (record/replay common prompts across model upgrades).
-- Productization decision.
-- **Self-evolving skills (speculative):** synthesise new skill files from recurring corrections or tool-call sequences. Revisit after Phases 4–6 produce enough usage data to tell whether there are real patterns worth codifying vs. noise. May never be worth it for single-user use; flagged here so we notice if it becomes obvious.
+Phase 4.8 already shipped *live* visibility (per-turn event stream,
+Telegram live-turn renderer, `fitt watch` CLI, `/v1/events` SSE).
+This phase extends the same data substrate two new directions:
+*traceability* (per-turn capture of dispatched prompt, response,
+context size — replayable after the fact) and *operator surfaces*
+that don't require ssh (Telegram commands and a real dashboard).
+
+**Key work, in dependency order:**
+
+- **Slice 7.1 — Context awareness.** Discover and surface
+  per-binding context window. For Ollama, query `POST /api/show`
+  for each bound model and parse the effective `num_ctx`
+  parameter (the modelfile's setting if any; the architecture
+  ceiling otherwise). For OpenAI-shape providers (OpenRouter,
+  NIM, Groq), query `/v1/models` for `context_length`. For
+  Anthropic, ship a small lookup table keyed on family. Cache
+  results per-binding, refresh on gateway boot. Fail loud
+  (Principle 11) when discovery fails — operator should see
+  "context window unknown for model X" in the logs at boot, not
+  silently get a default. Per-turn token measurement uses
+  `usage.prompt_tokens` from the upstream response (already
+  available, free); pre-dispatch counting via
+  `litellm.token_counter()` lands when Phase 8 compaction needs
+  it, not now. Half a day to a day. Foundation for everything
+  below.
+
+- **Slice 7.2 — Per-turn traceability capture.** Extend Phase 4.8's
+  TurnLog to record, per turn: the full dispatched message list
+  (system + history + user, post-injection); the upstream
+  response object; the tool-call chain (planned, executed,
+  approved/rejected); `prompt_tokens`, `completion_tokens`,
+  `finish_reason`, `model_used`, `fallback_used`,
+  `context_window`, `prompt_pct_of_window`. Storage policy:
+  bodies persist as a sidecar JSON next to the turn's JSONL
+  events, retention-bound by the existing `memory.history_max_days`
+  history pruner. Privacy: optional `traceability.enabled` config
+  (default off when secrets are in the request body, e.g.
+  router-mode IDE clients pasting tokens; default on for
+  Telegram / cron). Every turn is replayable: `fitt turn show
+  <turn_id>` dumps the full chain in order. A day or two.
+
+- **Slice 7.3 — Telegram operator commands.** `/model` (current
+  alias bindings; last-turn detail; warnings), `/lastturn` (full
+  chain detail for the most-recent turn in this chat),
+  `/status` or `/health` (system-level — MCP servers, cron,
+  pruner cadences, gateway uptime), `/eval <alias>` (kicks the
+  existing eval harness for an alias and posts the report
+  inline). Each command surfaces the data Slice 7.2 captured,
+  in a phone-readable shape. Plus the always-on bit: render the
+  concrete model used in the existing turn-finished footer (the
+  gateway already sets `X-FITT-Backend`; bot drops it today). 1-2
+  days for the commands; few minutes for the footer.
+
+- **Slice 7.4 — Telegram markdown renderer.** CommonMark →
+  Telegram HTML via `markdown-it-py`, whitelist-sanitised to
+  Telegram's allowed tag set (`<b>`, `<i>`, `<code>`, `<pre>`,
+  `<a>`, `<blockquote>`, `<tg-spoiler>`), applied in
+  `streaming.py`'s `_flush` and in the event-push formatter.
+  HTML not MarkdownV2 because a half-written `<b>` degrades
+  gracefully under streaming edits while a half-written `*…*`
+  crashes the MarkdownV2 parser for the whole message.
+  Independent of the rest of the slice — could ship first if
+  someone has half a day and a phone full of asterisks.
+
+- **Slice 7.5 — Dashboard v0.** FastAPI + HTMX over the existing
+  Phase 4.8c HTTP endpoints (`/v1/events`, `/v1/audit`,
+  `/v1/turns`, `/v1/sessions`, `/v1/capability-gaps`) plus the
+  new traceability endpoints from Slice 7.2. Read-only at v0;
+  edit support deferred to a follow-up phase when the read-only surface
+  has earned its keep. Six core views per the OpenClaw audit's
+  borrow-list: `overview` (is FITT okay right now), `aliases`
+  (binding state, last probe, last eval, context window, recent
+  dispatches), `turns` (per-session turn browser with full
+  per-turn detail from Slice 7.2 — the centerpiece for
+  traceability), `tools` (registered tools, per-client buckets,
+  invocation history), `cron` (jobs, next/last firing, outcome),
+  `audit` (filtered tail of `audit.jsonl`). Plus a `gaps` page
+  for the capability-gap log and a `health` page for MCP /
+  pruner / event-pruner status. Live SSE-backed turn view reuses
+  the existing `TurnLog.subscribe` infrastructure (Phase 4.8b)
+  rather than reimplementing renderer logic — same architectural
+  rule Hermes documented as "don't reimplement the chat
+  experience; reuse the event stream." Tailscale-only by default,
+  bearer-auth (or session cookie issued from a small login
+  page). 2-3 weekends for the dashboard alone — the bulk of
+  this phase's calendar time.
+
+**Slice ordering rationale.** 7.1 is prerequisite for the
+context-window display in 7.3, 7.5, and for Phase 8's compaction
+trigger. 7.2 is prerequisite for the per-turn detail in 7.3 and
+for the dashboard's `turns` view. 7.3 and 7.4 are independent of
+each other — pick whichever scratches the day's itch first. 7.5
+depends on everything above for the data; everything above is
+useful even without 7.5 shipping (Telegram commands cover the
+phone case; the dashboard covers the desk-debug case). Ship the
+slices independently as they're ready.
+
+**Architectural rules captured during design:**
+
+- **Don't duplicate render logic.** Hermes documented this as the
+  one architectural rule worth borrowing from their dashboard:
+  "the chat pane should not be a second implementation of the
+  Telegram-style rendering." Dashboard is a consumer of the
+  event stream the Telegram renderer publishes, not a parallel
+  implementation. See docs/prior-art.md for the full reasoning.
+- **Same data, two surfaces.** Telegram commands and dashboard
+  views read from the same gateway endpoints. New surfaces should
+  add new endpoints to that catalogue, not split into per-surface
+  data acquisition.
+- **No new chat surface.** The dashboard is explicitly an
+  operator pane, not a third chat client (Telegram and Open
+  WebUI cover that). Resist the bloat.
+- **Programmer-grade traceability.** Per-turn capture is the load-
+  bearing piece. A complaint of the form "this Telegram reply
+  looked weird" must be traceable to its exact dispatched body,
+  exact response, exact tool calls — within seconds, not minutes.
+
+**Scope boundaries:**
+
+- **No edit support in dashboard v0.** Read-only. Editing
+  `config.yaml`, `secrets.yaml`, `projects.yaml`, `cron.json`,
+  identity files, lessons through the UI is a follow-up
+  once the read-only surface has earned its weight.
+- **No realistic-prompt eval harness in this phase.** The granite
+  case taught us the eval should be runnable with FITT's actual
+  system prompt to surface size-sensitive failures. That's a
+  follow-up extension to the existing `alias_eval`, not part of
+  Phase 7's scope. Tracked in the opportunistic list below.
+- **No live config reload.** Today's restart-to-pick-up-config
+  posture is fine for v0. Hot reload is its own can of worms
+  (validation, atomic application, error recovery) and can wait.
+- **No multi-tenant auth.** Single-user posture; the dashboard
+  trusts whoever's on the tailnet with a bearer token. Per-user
+  authorization (matters when a second person joins the operator
+  Telegram chat — see Hermes-audit borrow-list) is a small
+  follow-up, not a Phase 7 blocker.
+
+**Prerequisites:** Phase 4 (event log), Phase 4.5 (events.jsonl
+persistence), Phase 4.7 (project-aware tool-call events), Phase
+4.8 (per-turn event stream + SSE endpoint). Effectively
+everything that ships per-turn detail today; Phase 7 adds capture
++ traceability + operator surfaces on top.
+
+*Full three-file spec to be written under
+`.kiro/specs/phase7-visibility-traceability/` when this phase
+starts, in the same shape as Phase 4.8's spec.*
+
+---
+
+## Phase 8 — Compaction (Spec-driven, ~1 weekend)
+
+**Goal:** Stop today's history from quietly blowing past the
+context window over a long session. Adopt the
+proven Claude Code / Cursor / OpenClaw / Hermes pattern: when a
+session's history passes a threshold, summarize the older half
+into a `# Compacted <date>` system block and keep only the tail
+verbatim.
+
+**Why this phase exists separately.** It's been documented in
+`docs/hallucinations-and-poisoning.md` (action item 5: 40KB
+threshold, `# Compacted <date>` section, `memory.compaction_prompt`
+config, `fitt-fast` for summarization, "biggest Problem B win")
+and in `docs/prior-art.md` (OpenClaw and Hermes both have it,
+both audits identify it as the pattern worth porting once FITT
+needs it) since spring 2026. It was always part of the bundled
+"Phase 7 — vector memory + admin UI" line. Splitting it out into
+its own phase 2026-05-22 makes its prerequisite chain explicit
+(Phase 7's context-window discovery is what tells compaction
+when to fire) and keeps the inline draft from being lost as a
+single bullet in an opportunistic list. Compaction earns its
+slot when sessions actually fill up day-over-day — not yet, but
+soon enough that the design shouldn't keep drifting through
+docs.
+
+**Key work:**
+
+- **Threshold trigger.** Use Phase 7.1's per-binding context
+  window as ground truth. Default trigger at the smaller of
+  ~95% of context window (Claude Code's heuristic) or 40KB of
+  raw history (the hallucinations doc's earlier number, useful
+  as a pre-context-aware floor). Operator override via
+  `memory.compaction_threshold_pct`. Skip compaction when the
+  bound model's context window is unknown — fail loud rather
+  than guess.
+- **Summarization call.** Use the alias bound to
+  `auxiliary.compaction.model` (default: `fitt-fast`); if
+  unbound, use the same alias as the originating turn. Pattern
+  from Hermes's `auxiliary.<task>.{provider,model}` shape (see
+  prior-art.md borrow-list). Don't burn `fitt-smart` credits on
+  summarization.
+- **Operator-customizable prompt.**
+  `memory.compaction_prompt` config field with an opinionated
+  default: "preserve decisions, file paths, identifiers, user
+  corrections, lessons; summarize tool results down to outcome
+  + key argument; drop chitchat." Claude Code / Cursor users
+  universally override the default; ship something opinionated
+  rather than generic.
+- **Model feasibility check.** Hermes has this and we should
+  too: refuse to compact against a model that fails the eval
+  harness's basic comprehension cases (an over-quantized 8B
+  model will hallucinate the summary). If the configured
+  `auxiliary.compaction.model` doesn't pass, fall back to the
+  primary alias and log loudly.
+- **`# Compacted <date>` storage shape.** History markdown grows
+  a top section that holds the rolling compacted summary; the
+  recent tail stays verbatim below it. Operator-readable; greppable;
+  recoverable (a compaction backup tar lands at
+  `$FITT_HOME/sessions/<key>/compacted-backups/` mirroring
+  Hermes's recoverable-archive pattern).
+- **Lessons interaction.** Lessons are operator-curated;
+  compaction is automatic. They share the same storage shape
+  (markdown bullets) but different trust levels. Compaction
+  must NOT touch the `[Learned corrections]` block or
+  identity files. Lessons take precedence in the dispatched
+  prompt.
+- **Tool-output disk-persistence (already shipped 2026-05-11).**
+  Phase 4 hoists tool outputs >8KB to `artifacts/<date>/`. Cite
+  here as the prerequisite that lets compaction NOT need to
+  preserve verbatim tool payloads — the artifacts on disk are
+  the ground truth, summaries can drop the in-context preview.
+- **Manual `/compact` command.** Telegram + CLI surface for
+  operator-driven compaction (Cursor and Hermes both ship this).
+  `fitt session compact <session>` from the CLI; `/compact`
+  Telegram command on the active chat's session. Useful when
+  the operator wants to start a fresh long task without a
+  restart.
+
+**Scope boundaries:**
+
+- **No trajectory compression for training data.** Hermes does
+  this; it's out of FITT's scope.
+- **No swappable context-engine plugins.** Hermes has them;
+  single-user FITT doesn't need plugin shape over a config
+  field.
+- **No per-tool compaction policy.** Coarse: the whole older
+  half summarises with one prompt. Per-tool fine-tuning ("never
+  compact `cron_*` tool calls; always compact `read_file`
+  results") is a Phase 8.x follow-up if compaction loses
+  load-bearing context.
+
+**Prerequisites:** Phase 7.1 (context-window discovery; without
+it the trigger is guessing). Phase 4 tool-output disk-persistence
+(already shipped) so compaction doesn't have to preserve verbatim
+tool payloads.
+
+**References:**
+- `docs/hallucinations-and-poisoning.md` action item 5 — the
+  full design rationale and Claude Code's five-layer cascade.
+- `docs/prior-art.md` OpenClaw audit (`compaction.*.ts`,
+  12+ files) and Hermes audit (`conversation_compression.py`,
+  model feasibility check) for reference implementations.
+- `docs/observed-issues.md` for the symptom log that motivates
+  this work.
+
+*Full three-file spec to be written under
+`.kiro/specs/phase8-compaction/` when this phase starts.*
+
+---
+
+## Phase 9 — Memory v1: Vector / RAG / Cross-Project (Spec-driven, ~3 weekends)
+
+**Goal:** "The agent consistently forgets things older than a
+week" stops being true. Add structured cross-session recall so
+"remember when we discussed X two weeks ago" actually works,
+and so cross-project queries ("what did I learn about
+deployment last month, in any project") return useful results.
+
+**Why this phase exists separately.** Was the original Phase 7
+("vector memory + admin UI"). Split off from the dashboard
+work 2026-05-22 because the dashboard had real urgency from the
+visibility gap (Phase 7) and vector memory is much bigger ML work
+that should land when daily friction shows up — not be gated
+on the dashboard. Reading prior-art.md surfaced two specific
+candidate substrates worth evaluating before building from scratch.
+
+**Key work:**
+
+- **Substrate evaluation: Honcho.** First step before code is
+  written. Honcho is an open-source cross-session user-modeling
+  service (plastic-labs, MIT license, hosted or self-hosted)
+  with an explicit `MemoryProvider` ABC contract that Hermes
+  ships a clean plugin against. The five-tool surface
+  (`profile`, `search`, `reasoning`, `context`, `conclude`) is
+  the right schema for FITT regardless of whether we use
+  Honcho proper. v0 evaluation: spin up Honcho self-hosted,
+  point a FITT plugin at it, check whether it answers
+  "remember when we discussed X" usefully on real session
+  data. 1-2 days. If yes: adopt with FITT-side wrapper. If no:
+  fall back to home-grown FTS5 + embeddings.
+- **Fallback substrate: SQLite + FTS5 + embeddings.** Hermes's
+  `tools/session_search_tool.py` is the reference: SQLite FTS5
+  for keyword search with anchored windows (3-shape API:
+  discovery / scroll / browse), plus a separate embeddings
+  layer for semantic similarity. The two layers complement
+  each other — keyword for "the exact phrase," semantic for
+  "the gist." Lands as a FITT-internal substrate if Honcho
+  doesn't fit. 1-2 weekends.
+- **Embedding model selection.** Local Ollama embedding model
+  on a Compute satellite (Principle 5 — no subscription).
+  Default: `nomic-embed-text` or `all-minilm`. The choice
+  matters for retrieval quality but is a config knob, not
+  architecture. Evaluation as part of the v0 substrate work.
+- **Cross-project recall.** Sessions today are scoped per
+  named session under `$FITT_HOME/sessions/<id>/`. Phase 9
+  adds optional cross-session retrieval: "search across all
+  sessions for X" returns results scoped by session metadata.
+  Keeps single-session reads fast; cross-session is opt-in
+  per query.
+- **Migration path.** Existing markdown history must remain the
+  ground truth and stay readable. The vector layer is an index
+  on top, not a replacement. A re-index script (offline, not
+  blocking) walks existing history files and populates the
+  index. Re-indexing is idempotent.
+
+**Scope boundaries:**
+
+- **No real-time embedding on every turn.** Async background
+  task, runs after turn persistence completes. A small
+  retrieval-quality lag is fine; blocking the chat path on
+  embeddings is not.
+- **No cross-user.** Single-user FITT; cross-user separation
+  is not a memory problem here.
+- **No automatic summary regeneration.** Compaction (Phase 8)
+  handles in-session summarisation. Phase 9's vector layer
+  reads what compaction wrote.
+
+**Prerequisites:** Phase 8 compaction (compaction's `# Compacted
+<date>` summaries are what Phase 9 indexes for older sessions;
+without compaction Phase 9 indexes 30 days of verbatim tool
+output and gets noisy retrievals).
+
+**References:**
+- `docs/prior-art.md` Hermes audit on Honcho integration shape
+  + FTS5 anchored-window session search pattern.
+- `docs/prior-art.md` Beever Atlas section — knowledge-graph
+  alternative substrate; deferred until multi-surface data
+  justifies the graph shape.
+
+*Full three-file spec to be written under
+`.kiro/specs/phase9-memory-v1/` when this phase starts.*
+
+---
+
+## Phase 10 — Voice (was Phase 8)
+
+Triggered by "I want hands-free." Whisper STT + Piper/Kokoro
+TTS. See the `FITT_PRD.md` original vision for the longer
+sketch; this section gets a proper inline draft when the phase
+becomes the active one.
+
+Borrow from prior-art.md: Hermes's task-specific model overrides
+pattern — `channels.<channel>.tts.summaryModel` for "the model
+that generates voice-friendly summaries" so cheap models do
+the housekeeping.
+
+---
+
+## Phase 11 — Home Assistant (was Phase 9)
+
+Triggered by "I want my AI to control my house." Home Assistant
+MCP integration + approval-gated physical-world actions
+("turn on the lights" goes through the same approval flow as
+"edit this file"). Likely the biggest day-to-day payoff of the
+roadmap, per the project-overview steering. Inline draft fills
+in when the phase becomes active.
+
+---
+
+## Phase 12+ — Opportunistic upgrades
+
+Features we know we'll want eventually but shouldn't pre-build.
+Each one lands when daily friction justifies it. Items below
+are organised by source (operator-observed friction, audits of
+reference systems, latent items from earlier phases).
+
+Where an item has a captured design (effort estimate, trigger
+condition), it lives here with a one-line summary and a
+cross-reference. The original docs are the source of truth;
+this list is the index.
+
+### Operator-observed friction (from `docs/observed-issues.md`)
+
+- **Cheerleading / success theater.** Add to the system prompt a
+  "report what actually happened, including failures; no victory
+  laps" instruction. Minutes of work; partial impact (research
+  says prompting alone doesn't eliminate this but reduces
+  magnitude). 2026-05-10. Free to try with the next prompt
+  iteration.
+- **Capability false-negative ("I can't provide weather
+  forecasts").** Model refuses a capability it has. Mostly
+  model-level; mitigations: restructure capability block to
+  read as "here's what you CAN do," add a domain-mention
+  pre-hook. 2026-05-10.
+- **Telegram approval prompt floats between messages after
+  decision.** Cosmetic; delete the approval message after
+  decision rather than edit in place. Few minutes. Low urgency.
+- **Telegram double-message for interactive `project_shell`
+  calls.** A `tool_executed.suppress_on_interactive` config
+  knob would collapse the redundant pair. Few hours.
+- **Granite-style narration under large system prompt
+  (2026-05-22).** Small models lose tool-call discipline well
+  before context limit when system prompt grows past a few
+  thousand tokens. Surfaced by Phase 7's traceability work
+  (token measurement makes the failure visible); deeper
+  fixes (compact-prompt mode for small models, alias-specific
+  prompt templates) are real follow-up work but not on
+  Phase 7's critical path. See `docs/observed-issues.md`.
+
+### Items observed in OpenClaw / Hermes audits
+
+Captured during the 2026-05-15 OpenClaw audit and 2026-05-21
+Hermes audit. Full pick-list with effort and trigger conditions
+in `docs/prior-art.md` (search for "Opportunities pick-list"
+and "Borrow-list updates").
+
+- **Skills-as-markdown loader.** Single highest-leverage
+  opportunistic change per both audits. Half day; opens up ~20
+  of OpenClaw's MIT-licensed skills as drop-in content.
+- **Default web search via skills loader.** Half day after the
+  loader exists; replaces the per-tool web search work.
+  *(Note: superseded by Phase 4.11's web_search tool, but the
+  skills-loader path remains valid as a parallel content
+  reservoir.)*
+- **Heartbeat structured-outcome schema.** OpenClaw's `outcome ∈
+  {progress, no_change, done, needs_attention} + notify=bool +
+  priority` contract on top of FITT's existing cron + send_message.
+  1-2 days; trigger when "wake every 30m and check X" with a real X
+  shows up.
+- **Better-shaped operator error messages.** Both audits flagged
+  this. Name the config key in the error, explain layering,
+  give the actionable fix. Few hours per error path; opportunistic.
+  Next candidates: `upstream_silent` shape, `no_backend_available`.
+- **Per-turn `thinking` / `reasoning_level` knob.** Surface in
+  request body for adaptive-thinking models (current Anthropic,
+  o-series). Half day. LiteLLM passes known fields through.
+- **Task-specific model overrides.** `auxiliary.<task>.{provider,
+  model,api_key}` pattern from Hermes; cheaper model for
+  housekeeping (compaction, voice, embeddings). Half day each;
+  lands with the phase that needs the task. Phase 8 compaction
+  is the first opportunity.
+- **`[SILENT]` cron response convention.** Model-controllable
+  notification suppression for cron jobs that fire when
+  nothing changed. Few hours. Borrowed from Hermes audit,
+  2026-05-21.
+- **Per-click Telegram approval-button user authorization.** Hermes
+  has this; FITT relies on chat-level filtering. Few hours; ship
+  before a second person joins the operator chat.
+- **Provider-level timeout config keys.** `providers.<id>.timeout_secs`
+  rather than one global. Half day; Phase 5+ config split.
+  Trigger: `upstream_silent` shape needs per-provider tuning.
+- **Telegram callback-data alias rewrite.** Note for the future;
+  64-byte limit isn't a problem yet but would be if the schema
+  grows. OpenClaw audit + Hermes audit both flagged the pattern.
+- **Honcho memory plugin evaluation.** 1-2 days; lands with
+  Phase 9 memory v1 evaluation (cross-referenced there).
+- **FTS5 anchored-window session search.** Phase 9 reference
+  implementation; cross-referenced there.
+- **Before-tool-call validation hook.** Schema-sanitize-before-
+  dispatch pattern from both audits. 1-2 days; trigger when
+  hallucinated-tool-call rate becomes operationally annoying.
+- **Per-agent Docker sandbox.** Both audits ship this. 3-5 days;
+  trigger when sub-agents ship — not before.
+- **Subagents / parallel execution.** 3-5 days. Trigger by "I
+  want FITT to research X while executing Y." Hermes's
+  `delegate_tool.py` has the reference shape (leaf vs
+  orchestrator roles, per-thread approval callbacks).
+
+### Latent items from earlier phase scope-boundaries
+
+- **Realistic-prompt eval mode.** Extend `alias_eval` to construct
+  the system prompt the way live chat does (capability block,
+  identity, lessons, skills). The diff between bare and realistic
+  runs surfaces granite-style "model is fine in isolation, fails
+  under FITT's prompt" failures. Half day to a day. Captured
+  during the Phase 7 design conversation; lands as a `--realistic`
+  flag on `fitt eval alias`.
+- **Prompt-budget eval mode.** `--prompt-budget <tokens>` on
+  `fitt eval` runs the suite at multiple synthetic prompt sizes
+  to learn the model's graceful-degradation curve. Useful;
+  novel; not blocking. Half day after `--realistic` lands.
+- **Compact-prompt mode for small models.** `tools.compact_capability_block:
+  true` config flag that skips the capability block's prose
+  trailer and renders only the tool list. Mitigation for the
+  granite case below the prompt-size threshold without changing
+  models. Half day; ship if Phase 7's traceability shows
+  small-model bindings consistently failing on prompt size.
+- **Replan in spec-runner.** Triggered by "the runner stops too
+  often on solvable blockers." LLM-driven revision of remaining
+  tasks after a failure. Tied to Phase 6's reshape decision;
+  if Phase 6 is reshaped to "FITT hands tasks to OpenCode,"
+  replan moves to OpenCode's surface, not FITT's.
+- **Self-review in spec-runner.** Same Phase 6 dependency.
+- **Cross-machine SSH fleet management.** Triggered by "adding a
+  new satellite is fiddly." Automated tailnet discovery,
+  capability probing, auto-registration.
+- **OS-level agent sandbox.** Triggered by "I want
+  `trust_session` on `project_shell` without reading every
+  command." Linux Landlock + seccomp; macOS Seatbelt; Windows
+  punt. 2-3 weeks of focused work, security-critical, OS-specific.
+- **Cost-cap enforcement middleware** if provider-dashboard
+  limits ever prove insufficient.
+- **Backups: nightly snapshot of memory + audit log to NAS.**
+- **Weekly audit log review.**
+- **Secondary compute node:** desktop's 3070 as Ollama fallback.
+- **Multi-project context improvements.**
+- **Regression-test harness for agent behavior** (record/replay
+  common prompts across model upgrades).
+- **Productization decision.** Revisit end of Phase 11.
+- **Self-evolving skills (speculative).** Synthesise new skill
+  files from recurring corrections or tool-call sequences.
+  Hermes's curator (`agent/curator.py`, ~1850 lines) is the
+  reference if this ever earns its keep. Pattern worth knowing:
+  provenance + sidecar telemetry + pure transitions + LLM judge
+  + recoverable archive.
+- **Dashboard edit support** (Phase 7 follow-up). Editing
+  `config.yaml`, `secrets.yaml`, `projects.yaml`, `cron.json`,
+  identity files, lessons through the dashboard UI. Real work
+  (validation, atomic writes, hot reload, error recovery).
+  Lands once Phase 7's read-only surface has earned its keep.
+- **Current-facts nudge in capability block.** "When the request
+  is about current events, recent releases, weather, sports, or
+  anything that might be newer than your training data, reach for
+  a tool first." Minutes of work. Lower priority now that
+  Phase 4.11's web_search ships.
 
 ---
 
@@ -868,14 +1422,16 @@ FITT's architecture has two testable layers:
 | 4.7   | 5 hrs        | 1 weekend     |
 | 4.8   | 6 hrs        | 1 weekend     |
 | 5     | 10 hrs       | 1–2 weekends  |
-| 6     | 6 hrs        | 1 weekend     |
-| 7     | 20 hrs       | 3 weekends    |
-| 8     | 14 hrs       | 2–3 weekends  |
-| 9     | 16 hrs       | 2–3 weekends  |
-| 10    | ongoing      | —             |
+| 6     | (reshape pending — see Phase 6 note) | — |
+| 7     | 24 hrs       | 3–5 weekends  |
+| 8     | 10 hrs       | 1 weekend     |
+| 9     | 20 hrs       | 3 weekends    |
+| 10    | 14 hrs       | 2–3 weekends  |
+| 11    | 16 hrs       | 2–3 weekends  |
+| 12+   | ongoing      | —             |
 
 **To useful MVP (Phases 0–4):** ~6 weekends of focused work.
-**To full vision (Phases 0–9):** ~15 weekends of focused work, plus 2-week "live with it" gaps between phases = 6–9 months calendar.
+**To full vision (Phases 0–11):** ~18 weekends of focused work, plus 2-week "live with it" gaps between phases = 8–11 months calendar.
 
 Expect calendar time to stretch 2–3x. Real life happens.
 

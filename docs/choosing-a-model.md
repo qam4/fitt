@@ -98,7 +98,93 @@ Signals:
   context gives you ~64K of usable working context for
   reliable tool-calling. A 256K model gives you ~128K.
 
-### 3. Architecture signal: dense vs MoE
+### 3. Tool-calling discipline under FITT's actual system prompt
+
+Distinct from criterion 2 (which is about *message list* growth
+across turns). This one is about *system prompt* size on turn 1.
+
+The model's tool-calling abstract benchmarks (BFCL, model card
+tests) all use minimal system prompts. FITT injects ~1-5K
+tokens of capability block + identity + skills + lessons before
+the user's message ever arrives. Models advertised as "supports
+tool calling" can pass a 200-token canary cleanly and lose
+discipline at 5K — the post-training that teaches "emit
+`tool_calls`" fights the post-training that teaches "follow
+long instructions." The discipline that drops first is the
+one we care about.
+
+Observed: granite3.3:8b on 2026-05-22 emitted clean
+`tool_calls` against Ollama directly (141 prompt tokens) and
+narrated JSON inside `message.content` against the same model
+through FITT (5400 prompt tokens). Same backend, same wire
+format, only the system prompt size changed. Documented as the
+incident entry in `docs/observed-issues.md`.
+
+Inflection points by parameter count, observed in our use:
+
+- **≤8B models**: discipline starts wobbling around 4-6K
+  tokens of system prompt. Granite 3.3 8B narrates
+  reliably above ~5K. Treat 8B-class as "fine for chat-only
+  aliases or for tool turns when the system prompt is
+  trimmed."
+- **12-14B models** (qwen3:14b, mistral-nemo:12b): more
+  resilient; we've seen them hold through 8-10K-token
+  prompts.
+- **30B+ dense or MoE-with-agentic-training**: hold reliably
+  through FITT's full 5-10K-token prompts in our
+  observations to date.
+- **Cloud frontier** (Claude, GPT-4o family): no observed
+  ceiling at FITT's prompt sizes.
+
+How to check before binding:
+
+1. **Bare check.** Direct curl against the backend with a
+   minimal prompt and one tool. Confirms the model can
+   tool-call at all. The boot probe (`alias_probe`) does this
+   automatically.
+2. **Realistic check.** The same alias hit through the FITT
+   gateway with the user's actual workload (a typical
+   Telegram-style "search the web for X" prompt). The diff
+   between bare and realistic is the diagnostic. As of Phase
+   7 (visibility & traceability) the per-turn capture makes
+   this visible after the fact; an explicit
+   `fitt eval alias <name> --realistic` flag is in the
+   opportunistic backlog.
+3. **Approximate the budget.** FITT's typical injected
+   system prompt is 4-6K tokens with the default capability
+   block, identity, and ~10 lessons. Add per-skill and
+   per-MCP-tool overhead; subtract if you've trimmed.
+   Compare to the model's observed inflection point.
+
+What this rules out, in practice, for FITT's
+agent-shaped aliases (`fitt-default`, `fitt-smart`):
+
+- 8B models bound to aliases that flow through Telegram
+  / cron / tool turns. Use them for chat-only aliases
+  (`fitt-fast` for short-question paraphrasing) where
+  tool-calling isn't required.
+- Models advertised as "specially designed function call
+  format" without explicit OpenAI-compatible coverage —
+  cumulative with criterion 1's flag.
+
+Mitigations short of a rebind:
+
+- **Compact-prompt mode** (Phase 7+ opportunistic).
+  `tools.compact_capability_block: true` skips the prose
+  trailer in the capability block, rendering only the tool
+  list. Buys back ~500-1500 tokens.
+- **Trim identity / lessons.** Phase 5's lessons store
+  caps at 50 entries; that's already a lot. If your
+  identity files are over 1K tokens, ask whether all of it
+  is load-bearing.
+- **Per-alias system-prompt overrides** (not yet shipped).
+  A future config option could let small-model aliases
+  receive a slim variant of the prompt while
+  large-model aliases get the full one. Worth
+  considering when the realistic-eval data shows the
+  decision is forced by binding, not preference.
+
+### 4. Architecture signal: dense vs MoE
 
 Dense models tend to be more consistent about structured
 output format than MoE models with sparse activation. The
@@ -129,7 +215,7 @@ Rule of thumb applied to FITT:
 third category. Qwen3-Coder is the second. The recommendation
 trail in the hallucinations doc under-weighted this distinction.
 
-### 4. Reasoning capacity
+### 5. Reasoning capacity
 
 For `fitt-smart` specifically, the orchestrator role needs
 enough reasoning to handle multi-step tasks: understanding
@@ -145,7 +231,7 @@ are plenty if they tool-call cleanly.
 
 For `fitt-default`, somewhere in between.
 
-### 5. Availability and cost profile
+### 6. Availability and cost profile
 
 Under FITT's no-subscription constraint:
 
@@ -172,7 +258,7 @@ Rate limits matter more than cost for FITT's usage pattern
 that rate-limits at 10 RPM is less useful than a slightly
 more expensive one at 100 RPM.
 
-### 6. Licensing
+### 7. Licensing
 
 For the "shareable by construction" principle, check the
 license. Most open-weight models (Llama, Qwen, DeepSeek,
@@ -307,7 +393,7 @@ decision time. Corrected candidate list below:
 
 | Model | Arch | Context | Function calling advertised | Risk |
 |---|---|---|---|---|
-| `deepseek-ai/deepseek-v4-flash` | MoE 284B/13B-active | 1M | "Native function calling (128 parallel calls)." Pre-tuned adapters for Claude Code, OpenCode, OpenClaw. Blog tagline: "a million-token context that agents can actually use." | Low. MIT license. Explicit agentic post-training (the MoE-agentic distinction from Criterion 3). Lighter than V4-Pro so better Telegram latency. |
+| `deepseek-ai/deepseek-v4-flash` | MoE 284B/13B-active | 1M | "Native function calling (128 parallel calls)." Pre-tuned adapters for Claude Code, OpenCode, OpenClaw. Blog tagline: "a million-token context that agents can actually use." | Low. MIT license. Explicit agentic post-training (the MoE-agentic distinction from Criterion 4). Lighter than V4-Pro so better Telegram latency. |
 | `deepseek-ai/deepseek-v4-pro` | MoE 1.6T/49B-active | 1M | Same V4 family; "Open-source SOTA in Agentic Coding benchmarks." | Low-to-medium. Same family win, but 1.6T total means slower and likely harder-rate-limited on NIM free tier. Save for heavy work if V4-Flash falls short. |
 | `qwen/qwen3-coder-480b-a35b-instruct` | MoE 480B/35B-active | 256K | "Supports function calling and tool choice." "Specially designed function call format." | Medium. Claims look good but "specially designed format" is exactly the phrase that bit us last time with the Qwen family. |
 | `meta/llama-3_3-70b-instruct` | Dense 70B | 128K | Long track record of OpenAI-compatible tool calls. | Low. Conservative dense default. Less sparkle on reasoning than the MoE candidates but more predictable format adherence. |
@@ -432,17 +518,28 @@ post-training, native OpenAI-compatible function calling
 - Criterion 2 (long-context reliability): 1M stated
   context, ~500K usable per the 50% rule. Plenty for
   FITT's sessions.
-- Criterion 3 (MoE + agentic post-training): explicit. Not
+- Criterion 3 (system-prompt discipline): not directly
+  evaluated at swap time; criterion was added 2026-05-22
+  after the granite incident showed it matters as a
+  separate axis. V4-Flash's 13B active params would put
+  it in the "wobbly under 5K-token system prompts"
+  bucket per the inflection-point heuristic, so the
+  cloud-routing posture (`fitt-smart` is OpenRouter,
+  not local) is what makes the binding safe — the
+  effective behaviour is more like the cloud-frontier
+  bucket than the 8B-class one. Revisit if a future
+  binding moves V4-Flash on-prem.
+- Criterion 4 (MoE + agentic post-training): explicit. Not
   the Qwen3-Next "MoE general reasoning without agentic
   training" anti-pattern.
-- Criterion 4 (reasoning): 13B active is below the 35B
+- Criterion 5 (reasoning): 13B active is below the 35B
   rule-of-thumb minimum, but V4-Flash's agentic post-
   training compensates on the agentic-specific workload
   that matters for `fitt-smart`. Revisit if reasoning
   feels thin during the two-week trial.
-- Criterion 5 (cost): free tier on NIM, same posture as the
+- Criterion 6 (cost): free tier on NIM, same posture as the
   previous binding.
-- Criterion 6 (license): MIT. Cleaner than Qwen's weight
+- Criterion 7 (license): MIT. Cleaner than Qwen's weight
   license.
 
 **Verification path:**
