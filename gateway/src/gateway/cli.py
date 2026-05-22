@@ -1813,5 +1813,180 @@ def context_refresh(alias: str | None) -> None:
     _console.print(table)
 
 
+# --------------------------------------------------------------- fitt turn
+
+
+@main.group("turn")
+def turn_group() -> None:
+    """Inspect captured turns (Phase 7 Slice 7.2).
+
+    Each tool-using turn writes a sidecar JSON capturing the
+    dispatched message list, the upstream response, the tool-
+    call chain, and prompt-fill metrics. ``fitt turn list``
+    shows the recent ones for a session; ``fitt turn show``
+    pulls up the full body for one turn id."""
+
+
+@turn_group.command("list")
+@click.argument("session", default="main")
+@click.option(
+    "--limit",
+    "-n",
+    type=int,
+    default=20,
+    help="Number of recent turns to show (default 20).",
+)
+def turn_list(session: str, limit: int) -> None:
+    """Print recent captured turns for SESSION."""
+    import httpx
+
+    try:
+        r = httpx.get(
+            f"{_mcp_gateway_url()}/v1/sessions/{session}/captures",
+            params={"limit": limit},
+            headers={
+                "Authorization": f"Bearer {_mcp_bearer_token()}",
+                "X-FITT-Client": "cli",
+            },
+            timeout=10.0,
+        )
+        r.raise_for_status()
+    except httpx.HTTPError as e:
+        _console.print(f"[red]Could not reach gateway: {e}[/red]")
+        sys.exit(1)
+
+    captures = r.json().get("captures", [])
+    if not captures:
+        _console.print(
+            f"[dim]No captured turns for session {session!r}. "
+            f"Either traceability is disabled, the session is new, "
+            f"or all turns came from a coding-agent client (which "
+            f"doesn't capture by default).[/dim]"
+        )
+        return
+
+    table = Table(title=f"Recent captures in session {session}")
+    table.add_column("Turn id", style="cyan")
+    table.add_column("When", style="dim")
+    table.add_column("Model")
+    table.add_column("Prompt", justify="right")
+    table.add_column("Window %", justify="right")
+    table.add_column("Tools", justify="right")
+    table.add_column("Status")
+    for entry in captures:
+        from datetime import datetime as _dt
+
+        ts = entry.get("started_at")
+        when = _dt.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else "?"
+        pct = entry.get("prompt_pct_of_window")
+        pct_str = f"{pct:.0f}%" if isinstance(pct, (int, float)) else "—"
+        if isinstance(pct, (int, float)) and pct > 80:
+            pct_str = f"[yellow]{pct_str}[/yellow]"
+        warn = "⚠" if entry.get("narration_warning") else ""
+        status = entry.get("status", "?")
+        status_styled = f"[red]{status}[/red]" if status != "ok" else f"[green]{status}[/green]"
+        table.add_row(
+            entry.get("turn_id", "?")[:12],
+            when,
+            entry.get("model_used", "?"),
+            f"{entry.get('prompt_tokens', 0):,}",
+            pct_str,
+            f"{entry.get('tool_calls_count', 0)}{warn}",
+            status_styled,
+        )
+    _console.print(table)
+
+
+@turn_group.command("show")
+@click.argument("turn_id")
+@click.option(
+    "--session",
+    default="main",
+    help="Session containing the turn (default: main).",
+)
+def turn_show(turn_id: str, session: str) -> None:
+    """Print the full capture for TURN_ID, including the
+    dispatched messages, response, and tool calls.
+
+    Use ``fitt turn list`` to find a turn id; the X-FITT-Turn-Id
+    header on chat responses also carries it."""
+    import json as _json
+
+    import httpx
+
+    try:
+        r = httpx.get(
+            f"{_mcp_gateway_url()}/v1/sessions/{session}/captures/{turn_id}",
+            headers={
+                "Authorization": f"Bearer {_mcp_bearer_token()}",
+                "X-FITT-Client": "cli",
+            },
+            timeout=10.0,
+        )
+        if r.status_code == 404:
+            _console.print(
+                f"[red]Capture not found:[/red] turn {turn_id!r} in session {session!r}.\n"
+                f"[dim]The turn may not exist, may be too old to be retained, "
+                f"or capture may have been disabled for the originating client.[/dim]"
+            )
+            sys.exit(1)
+        r.raise_for_status()
+    except httpx.HTTPError as e:
+        _console.print(f"[red]Could not reach gateway: {e}[/red]")
+        sys.exit(1)
+
+    cap = r.json()
+    _console.print(f"[bold cyan]Turn {cap.get('turn_id')}[/bold cyan]")
+    _console.print(
+        f"  alias={cap.get('alias')} → model={cap.get('model_used')} ({cap.get('backend')})"
+    )
+    cw = cap.get("context_window") or 0
+    pct = cap.get("prompt_pct_of_window") or 0
+    _console.print(f"  prompt={cap.get('prompt_tokens'):,} / window={cw:,} ({pct:.1f}%)")
+    _console.print(
+        f"  finish_reason={cap.get('finish_reason')} "
+        f"iterations={cap.get('iterations')} "
+        f"status={cap.get('status')}"
+    )
+    if cap.get("narration_warning"):
+        _console.print(
+            "  [yellow]⚠ narration warning: shape suggests model narrated "
+            "a tool call instead of emitting one[/yellow]"
+        )
+    _console.print()
+
+    tool_calls = cap.get("tool_calls", [])
+    if tool_calls:
+        _console.print(f"[bold]Tool calls ({len(tool_calls)}):[/bold]")
+        for tc in tool_calls:
+            ok = tc.get("ok")
+            icon = "✅" if ok else "❌"
+            args_str = _json.dumps(tc.get("args", {}))[:120]
+            summary = (tc.get("result_summary", "") or "")[:80]
+            _console.print(f"  {icon} {tc.get('tool_name')}({args_str}) → {summary}")
+        _console.print()
+
+    _console.print("[bold]Dispatched messages:[/bold]")
+    for msg in cap.get("dispatched_messages", []):
+        role = msg.get("role", "?")
+        content = msg.get("content")
+        if isinstance(content, str):
+            preview = content[:200] + ("..." if len(content) > 200 else "")
+        else:
+            preview = "(non-text content)"
+        # Escape role brackets so Rich doesn't interpret them as
+        # markup tags.
+        _console.print(f"  \\[{role}] {preview}")
+    _console.print()
+
+    response = cap.get("response", {})
+    choices = response.get("choices", [])
+    if choices:
+        msg = choices[0].get("message", {})
+        content = msg.get("content") or ""
+        _console.print("[bold]Final response:[/bold]")
+        _console.print(f"  {content[:500]}")
+
+
 if __name__ == "__main__":
     main()

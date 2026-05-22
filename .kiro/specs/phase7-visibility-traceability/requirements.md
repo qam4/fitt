@@ -178,7 +178,7 @@ lookup rather than a multi-source reconstruction.
   `memory.history_max_days` setting. The history pruner
   extends to sweep `turns/<YYYY-MM-DD>/` directories on
   the same window.
-- **2.7** A new endpoint `GET /v1/sessions/<session>/turns/<turn_id>`
+- **2.7** A new endpoint `GET /v1/sessions/<session>/captures/<turn_id>`
   returns the captured detail as JSON. Bearer auth.
   Read-only. Returns 404 with a clear message when the
   turn id doesn't exist or capture was disabled for that
@@ -297,7 +297,7 @@ six-tab grep workflows.
     dispatches" (count + average prompt size + any
     narration warnings) for the last 24 hours.
   - `/dashboard/turns` — per-session turn browser. Reads
-    `/v1/sessions/<session>/turns/<turn_id>` (Slice 7.2).
+    `/v1/sessions/<session>/captures/<turn_id>` (Slice 7.2).
     The centerpiece for traceability — one click on a
     turn row expands the full chain: dispatched system
     + history + user, response, tool calls, finish
@@ -439,7 +439,7 @@ sense locally; only ordering constraint is data-flow:
   Half day to a day.
 - **Slice 7.2 — Per-turn traceability capture.** Builds
   on 7.1 (uses context_window in captured records).
-  Adds the sidecar JSON store, the `/v1/sessions/.../turns/<id>`
+  Adds the sidecar JSON store, the `/v1/sessions/.../captures/<id>`
   endpoint, the `fitt turn show` CLI, history-pruner
   extension. 1-2 days.
 - **Slice 7.3 — Telegram operator commands.** Builds

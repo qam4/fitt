@@ -33,6 +33,35 @@ doc.
 
 ---
 
+## Skills property test flaky on hypothesis "no" alphabet
+
+**First observed:** 2026-05-22 during Phase 7/7.2 development.
+**Tag:** flaky test, low pain.
+
+`tests/test_skills_properties.py::test_property_scan_failure_isolation`
+fails reproducibly when hypothesis generates a skill named
+`"no"`. The skills loader rejects the skill (logged
+`skills.skipped`) even though the SKILL.md is well-formed. The
+test asserts every valid name lands; the rejection breaks the
+assertion.
+
+Reproduces on clean `main` without any of Slice 7.2's changes,
+so this is a pre-existing skills-loader bug surfaced by
+hypothesis's seeded shrinking, not a Slice 7.2 regression.
+
+**Cost:** Low. The full test suite passes ~99% of the time;
+only when hypothesis happens to seed the `"no"` example does
+it fail. CI will fail intermittently; local devs may not see
+it for weeks.
+
+**Fix plan:** investigate why the skills loader rejects a
+skill named `"no"`. Likely a `bool(name)` vs
+`name == "no"` mistake in the skill validator. Half hour to
+locate; another half hour to fix and add a regression test.
+Not blocking Phase 7.
+
+---
+
 ## Granite 3.3 narrates tool calls under FITT's full system prompt
 
 **First observed:** 2026-05-22. **Tag:** model-fit, medium pain.

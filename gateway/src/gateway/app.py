@@ -498,6 +498,21 @@ def create_app(config: Config) -> FastAPI:
             timeout_s=config.server.context_probe_timeout_s,
         )
 
+    # Phase 7 Slice 7.2: per-turn traceability capture. Sidecar
+    # JSON per turn under
+    # ``sessions/<key>/turns/<YYYY-MM-DD>/<turn_id>.json``
+    # alongside Phase 4.8's events JSONL. The agent loop fills
+    # a TurnCaptureBuilder during the turn; chat.py / cron_runner
+    # finalise it at turn-finished time and fire-and-forget the
+    # async write. Privacy gate via traceability.default_capture
+    # (config) — agent-mode clients capture by default; coding-
+    # agent opts in.
+    from .turn_capture import TurnCaptureStore
+
+    app.state.turn_capture = TurnCaptureStore(
+        sessions_dir=config.memory.sessions_dir,
+    )
+
     # Boot-time alias tool-call reliability probe (Principle 11).
     # Fires one canary tool-call request per alias and logs an
     # ERROR per binding that narrates instead of emitting real
@@ -645,6 +660,7 @@ def create_app(config: Config) -> FastAPI:
     from .health import router as health_router
     from .mcp_endpoint import router as mcp_router
     from .models_endpoint import router as models_router
+    from .turn_capture_endpoint import router as turn_capture_router
 
     app.include_router(health_router)
     app.include_router(models_router)
@@ -652,6 +668,7 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(approvals_router)
     app.include_router(events_router)
     app.include_router(mcp_router)
+    app.include_router(turn_capture_router)
 
     try:
         from .chat import router as chat_router

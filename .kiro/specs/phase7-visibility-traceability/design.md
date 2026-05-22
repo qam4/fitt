@@ -16,7 +16,7 @@ matching the slice decomposition:
 |                                                            |
 |  Slice 7.2 — per-turn capture                              |
 |    turn_capture.py          — sidecar JSON store           |
-|    turn_capture_endpoint.py — GET /v1/sessions/.../turns   |
+|    turn_capture_endpoint.py — GET /v1/sessions/.../captures|
 |                               /<turn_id>                   |
 |    chat.py                  — wire capture into the loop   |
 |    history_pruner.py        — extend sweep to turns/<date> |
@@ -334,7 +334,7 @@ for the rollback rationale we're respecting.
 
 ### `gateway/turn_capture_endpoint.py` (Slice 7.2)
 
-`GET /v1/sessions/<session>/turns/<turn_id>` returns the
+`GET /v1/sessions/<session>/captures/<turn_id>` returns the
 captured JSON verbatim. Errors:
 
 - `404` if the file doesn't exist (turn never ran, never
@@ -342,11 +342,19 @@ captured JSON verbatim. Errors:
   `{"error": {"type": "not_found", "message": "...", "detail": "<reason>"}}`.
 - `403` if bearer-auth fails (existing middleware).
 
-`GET /v1/sessions/<session>/turns?limit=N&since=<ts>` (also
+`GET /v1/sessions/<session>/captures?limit=N&since=<ts>` (also
 new) returns a list of recent turn ids with their summary
 fields (alias, model_used, started_at, prompt_tokens,
 finish_reason, narration_warning) but not the full bodies.
 For dashboard listings.
+
+**Path naming note.** Phase 4.8c already serves
+`GET /v1/sessions/<id>/turns` for the per-event stream
+(turn lifecycle events from `gateway.turns`). Slice 7.2's
+captures sit at `/captures` to avoid collision — same
+per-turn id space, different on-disk shape (sidecar JSON vs
+JSONL events). Two distinct paths so the dashboard / CLI can
+hit each independently.
 
 ### `dashboard/__init__.py` and friends (Slice 7.5)
 
@@ -392,8 +400,8 @@ Page-by-page rendering:
   alias. Polls every 60s.
 - **Turns** — list view at `/dashboard/turns/<session>`,
   detail view at `/dashboard/turns/<session>/<turn_id>`. List
-  hits `/v1/sessions/<s>/turns?limit=50`. Detail hits
-  `/v1/sessions/<s>/turns/<turn_id>` and renders the captured
+  hits `/v1/sessions/<s>/captures?limit=50`. Detail hits
+  `/v1/sessions/<s>/captures/<turn_id>` and renders the captured
   detail in a structured form. For an active session, the
   list view SSE-subscribes to
   `/v1/sessions/<s>/turns/stream` (Phase 4.8c) and prepends
@@ -478,7 +486,7 @@ Applied at three call sites:
 
 See above.
 
-### `/v1/sessions/<session>/turns/<turn_id>` response
+### `/v1/sessions/<session>/captures/<turn_id>` response
 
 Returns the `TurnCapture` JSON verbatim. Schema:
 
@@ -523,7 +531,7 @@ Returns the `TurnCapture` JSON verbatim. Schema:
 }
 ```
 
-### `/v1/sessions/<session>/turns?limit=N` response
+### `/v1/sessions/<session>/captures?limit=N` response
 
 Lightweight summary list:
 
@@ -638,7 +646,7 @@ versioning, race conditions on simultaneous read-write).
 HTTP endpoint is the contract.
 
 This forces some new endpoints to land in Slice 7.2 / 7.5
-that we'd otherwise punt: `/v1/sessions/<s>/turns?limit=N`,
+that we'd otherwise punt: `/v1/sessions/<s>/captures?limit=N`,
 `/v1/eval/<alias>`, `/v1/status`. All small.
 
 ### D6. HTMX over SPA

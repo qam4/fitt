@@ -211,22 +211,34 @@ class HistoryPruner:
             turns_dir = session_dir / "turns"
             if turns_dir.is_dir():
                 for f in turns_dir.iterdir():
-                    if not f.is_file() or f.suffix != ".jsonl":
-                        continue
-                    try:
-                        file_day = date.fromisoformat(f.stem)
-                    except ValueError:
-                        # Not a YYYY-MM-DD file; leave it alone.
-                        continue
-                    if file_day < cutoff_day:
+                    if f.is_file() and f.suffix == ".jsonl":
+                        # Phase 4.8 events JSONL.
                         try:
-                            f.unlink()
-                            removed += 1
-                        except OSError as e:
-                            _log.warning(
-                                "history.pruner.unlink_failed",
-                                extra={"file": str(f), "error": str(e)},
-                            )
+                            file_day = date.fromisoformat(f.stem)
+                        except ValueError:
+                            # Not a YYYY-MM-DD file; leave it alone.
+                            continue
+                        if file_day < cutoff_day:
+                            try:
+                                f.unlink()
+                                removed += 1
+                            except OSError as e:
+                                _log.warning(
+                                    "history.pruner.unlink_failed",
+                                    extra={"file": str(f), "error": str(e)},
+                                )
+                    elif f.is_dir():
+                        # Phase 7 Slice 7.2 capture sidecars live in
+                        # ``turns/<YYYY-MM-DD>/<turn_id>.json``.
+                        # Sweep over-age day directories in full.
+                        try:
+                            day_day = date.fromisoformat(f.name)
+                        except ValueError:
+                            # Not a date-named directory; could be
+                            # an operator-placed thing. Leave it.
+                            continue
+                        if day_day < cutoff_day:
+                            removed += _remove_tree(f)
         return removed
 
     def _load_anchor(self) -> float:

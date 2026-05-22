@@ -617,6 +617,10 @@ async def _run_tool_loop(
     events: Any = None,
     push_channel_available: bool = True,
     artifact_store: Any = None,
+    context_windows: Any = None,
+    turn_capture_store: Any = None,
+    traceability_default_capture: list[str] | None = None,
+    traceability_enabled: bool = True,
 ) -> Response:
     """Dispatch, execute tool calls, re-dispatch, repeat, then return.
 
@@ -931,6 +935,100 @@ async def _run_tool_loop(
         final_reply_len=len(assistant_text or ""),
     )
 
+    # Phase 7 Slice 7.2: per-turn traceability capture.
+    # Fire-and-forget on the asyncio loop so the chat handler
+    # returns its response without waiting on disk IO. Privacy
+    # gate via traceability config — coding-agent skips by
+    # default. ``tool_calls_for_memory`` is the structured tool
+    # chain Phase 5 already accumulates; we wrap each entry as a
+    # CapturedToolCall (the additional decision/duration data
+    # isn't currently threaded through the agent loop, so v0
+    # captures the structural detail and leaves
+    # decision/duration as best-effort defaults; future commit
+    # can extend AgentLoopResult to carry them).
+    if turn_capture_store is not None and _turn_id is not None:
+        from .turn_capture import (
+            CapturedToolCall,
+            TurnCaptureBuilder,
+            should_capture,
+        )
+
+        if should_capture(
+            client=tool_ctx.client,
+            config_default=traceability_default_capture or [],
+            enabled=traceability_enabled,
+        ):
+            cw_tokens: int | None = None
+            if context_windows is not None and model_used is not None:
+                cw = context_windows.get(model_used.backend, model_used.id)
+                if cw is not None:
+                    cw_tokens = cw.tokens
+            finish_reason = None
+            response_dict = response_to_dict(response_obj) or {}
+            choices = response_dict.get("choices")
+            if isinstance(choices, list) and choices:
+                first = choices[0]
+                if isinstance(first, dict):
+                    fr = first.get("finish_reason")
+                    if isinstance(fr, str):
+                        finish_reason = fr
+            # Narration warning (D4 in design.md): post-hoc
+            # classifier flag, never gates anything.
+            from .capabilities import is_tool_use_expected_but_none
+
+            tools_were_offered = bool(request_body.get("tools")) or "tool_choice" in request_body
+            narration_warning = is_tool_use_expected_but_none(
+                assistant_text or "",
+                tools_were_offered=tools_were_offered,
+                finish_reason=finish_reason,
+                had_real_tool_calls=bool(result.tool_calls_for_memory),
+            )
+
+            captured_tool_calls: list[CapturedToolCall] = []
+            for idx, tc in enumerate(result.tool_calls_for_memory or []):
+                captured_tool_calls.append(
+                    CapturedToolCall(
+                        call_id=f"call-{idx}",
+                        tool_name=tc.tool_name,
+                        args=tc.args,
+                        decision=tc.result_status if tc.result_status != "ok" else "auto",
+                        decision_detail="",
+                        duration_ms=0,
+                        ok=tc.result_status == "ok",
+                        result_summary=(tc.result_summary or "")[:300],
+                        artifact_path=None,
+                        iteration=idx,
+                    )
+                )
+
+            builder = TurnCaptureBuilder(
+                turn_id=_turn_id,
+                session_key=session_id,
+                alias=parsed.model,
+                client=tool_ctx.client,
+                started_at=started,
+            )
+            builder.dispatched_messages = list(result.messages or [])
+            builder.response = response_dict
+            builder.tool_calls = captured_tool_calls
+            builder.model_used = model_used.id if model_used is not None else "(unknown)"
+            builder.backend = model_used.backend if model_used is not None else "(unknown)"
+            builder.fallback_used = result.fallback_used
+            builder.prompt_tokens = result.in_tokens
+            builder.completion_tokens = result.out_tokens
+            builder.context_window = cw_tokens
+            builder.finish_reason = finish_reason
+            builder.narration_warning = narration_warning
+            builder.iterations = result.iterations
+            builder.status = result.status
+            try:
+                turn_capture_store.write_async(builder.build())
+            except RuntimeError:
+                # Not on a running loop — shouldn't happen in
+                # the chat handler path, but defensive. Skip
+                # capture rather than crashing the turn.
+                _log.debug("turn_capture.no_running_loop")
+
     cost = (
         estimate_cost(model_used, result.in_tokens, result.out_tokens)
         if model_used
@@ -1164,6 +1262,10 @@ async def chat_completions(request: Request) -> Response:
             events=getattr(request.app.state, "events", None),
             push_channel_available=_push_channel_available(request),
             artifact_store=getattr(request.app.state, "artifact_store", None),
+            context_windows=getattr(request.app.state, "context_windows", None),
+            turn_capture_store=getattr(request.app.state, "turn_capture", None),
+            traceability_default_capture=list(cfg.traceability.default_capture),
+            traceability_enabled=cfg.traceability.enabled,
         )
 
     # Phase 4.9: wrap the dispatch in a shielded ``wait_for``

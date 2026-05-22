@@ -187,6 +187,47 @@ class WebSearchConfig(BaseModel):
     search_backend: str = "ddgs"
 
 
+class TraceabilityConfig(BaseModel):
+    """Phase 7 Slice 7.2 — per-turn capture.
+
+    Each tool-using turn writes a sidecar JSON under
+    ``sessions/<session>/turns/<YYYY-MM-DD>/<turn_id>.json``
+    capturing the dispatched message list, the upstream
+    response, the tool-call chain, and prompt-fill metrics.
+    The sibling ``<YYYY-MM-DD>.jsonl`` file (Phase 4.8) keeps
+    the per-event lifecycle stream; the new sidecar holds the
+    bodies that don't fit cheaply in a tail-grepable line.
+
+    Capture is gated per client tag. Default-on for agent-mode
+    clients (``telegram``, ``webui``, ``cli``, ``ide`` not
+    routed as ``coding-agent``); default-off for router-mode
+    (``coding-agent``) because those clients pass user code,
+    secrets, and tokens through their own system prompts and
+    the thin-router contract says FITT shouldn't persist them.
+    Operators override via ``default_capture`` — the list of
+    client tags that get captured.
+
+    See ``.kiro/specs/phase7-visibility-traceability/design.md``
+    for the storage shape and decision D3 rationale.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    """Master switch. ``false`` disables capture entirely
+    regardless of per-client defaults. Useful for tests and
+    for the privacy-paranoid operator who'd rather have nothing
+    written to disk."""
+
+    default_capture: list[str] = Field(default_factory=lambda: ["telegram", "webui", "cli", "ide"])
+    """Per-client default. Lists the client tags whose turns
+    capture by default. Defaults match the design.md
+    ``_CAPTURE_BY_DEFAULT`` set: agent-mode clients capture,
+    coding-agent doesn't. Operators add ``coding-agent`` here
+    if they want their IDE-agent traffic captured (and accept
+    the secrets-in-bodies risk that implies)."""
+
+
 class Config(BaseModel):
     """Top-level configuration loaded from config.yaml."""
 
@@ -210,6 +251,12 @@ class Config(BaseModel):
     # the active provider; the agent's tool-call code path is
     # stable across the swap.
     web: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    # Phase 7 Slice 7.2 — per-turn traceability capture. Sidecar
+    # JSON per turn under ``sessions/<s>/turns/<date>/<id>.json``
+    # for after-the-fact reconstruction. Privacy default: on for
+    # agent-mode clients, off for coding-agent; operator
+    # override via ``traceability.default_capture``.
+    traceability: TraceabilityConfig = Field(default_factory=TraceabilityConfig)
     # ``tools:`` block is Phase 4+: per-tool approval buckets,
     # wildcards for MCP, per-client overrides. Shape is
     # intentionally loose at the Config layer (any mapping) and
