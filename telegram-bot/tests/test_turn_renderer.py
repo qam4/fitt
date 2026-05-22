@@ -61,6 +61,7 @@ class _FakeBot:
         text: str,
         reply_markup: Any = None,
         disable_notification: bool = False,
+        parse_mode: str | None = None,
     ) -> _SentMessage:
         self._next_id += 1
         self.calls.append(
@@ -82,6 +83,7 @@ class _FakeBot:
         message_id: int,
         text: str,
         reply_markup: Any = None,
+        parse_mode: str | None = None,
     ) -> None:
         self.calls.append(
             _BotCall(
@@ -457,7 +459,11 @@ async def test_reply_tokens_land_in_stream_bubble_after_tool() -> None:
     clock.advance(MIN_STREAM_EDIT_INTERVAL_S + 0.1)
     await r.append_reply_text("foo bar.")
     last = bot.edits()[-1]
-    assert "Here's what I found:" in last.text
+    # Phase 7 Slice 7.4: the bubble is rendered as Telegram
+    # HTML, so the apostrophe is escaped to &#x27;. The
+    # textual content still appears in the edit; only the
+    # encoding changed.
+    assert "Here&#x27;s what I found:" in last.text
     assert "foo bar." in last.text
 
 

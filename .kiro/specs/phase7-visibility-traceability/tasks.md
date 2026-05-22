@@ -277,45 +277,50 @@ Independent. Could ship first if half a day appears.
 
 ### 18. Renderer module
 
-- [ ] 18a. `telegram-bot/src/fitt_telegram_bot/markdown_render.py`:
+- [x] 18a. `telegram-bot/src/fitt_telegram_bot/markdown_render.py`:
        `markdown_to_telegram_html(text: str) -> str`.
-- [ ] 18b. Walk the `markdown_it.MarkdownIt("commonmark")`
+- [x] 18b. Walk the `markdown_it.MarkdownIt("commonmark")`
        token stream; map permitted tokens to allowed
        Telegram HTML tags; drop wrappers for unpermitted
        tokens.
-- [ ] 18c. Escape `&`, `<`, `>` in non-tag text content.
-- [ ] 18d. Add `markdown-it-py` to `telegram-bot/pyproject.toml`
+- [x] 18c. Escape `&`, `<`, `>` in non-tag text content.
+- [x] 18d. Add `markdown-it-py` to `telegram-bot/pyproject.toml`
        dependencies.
 
 ### 19. Apply at every emission point
 
-- [ ] 19a. `streaming.py::_flush` — convert before
+- [x] 19a. `streaming.py::_flush` — convert before
        `edit_message_text`.
-- [ ] 19b. `turn_renderer.py::_flush_stream_bubble_if_due` —
+- [x] 19b. `turn_renderer.py::_flush_stream_bubble_if_due` —
        convert before edit.
 - [ ] 19c. Approval prompt body (`approval.py`) — convert
        if it includes user-visible model text.
+       *Deferred — current approval prompt is bot-authored
+       text only ("🔐 edit_file → confirm?"); no LLM
+       content surface yet.*
 - [ ] 19d. Command response constructors that include model
        output (today: `/lastturn` (Slice 7.3), and any future
        command).
+       *Deferred to Slice 7.3 since the `/lastturn` command
+       is what introduces model output to command responses.*
 
 ### 20. Tests
 
-- [ ] 20a. Per-supported-tag tests (bold, italic, code,
+- [x] 20a. Per-supported-tag tests (bold, italic, code,
        pre, link, blockquote, spoiler).
-- [ ] 20b. Per-unsupported-tag tests (h1-h6, lists, tables —
+- [x] 20b. Per-unsupported-tag tests (h1-h6, lists, tables —
        confirm graceful degradation to text).
-- [ ] 20c. Hypothesis property test pinning P4: every
+- [x] 20c. Hypothesis property test pinning P4: every
        prefix of a CommonMark doc converts to valid
        Telegram HTML. Min 100 iterations.
-- [ ] 20d. Regression test: the 2026-05-22 user complaint
+- [x] 20d. Regression test: the 2026-05-22 user complaint
        ("model replies render `**bold**` literally") fails
        before this slice, passes after.
 
 ### 21. Definition of done — Slice 7.4
 
-- [ ] 21a. Tasks 18a-20d complete.
-- [ ] 21b. Standard test/lint/typecheck cycle green.
+- [x] 21a. Tasks 18a-20d complete (19c, 19d deferred).
+- [x] 21b. Standard test/lint/typecheck cycle green.
 - [ ] 21c. Live validation: send a chat message that
        triggers a model reply with `**bold**`,
        `*italic*`, ` ``` fenced code ``` `, an inline

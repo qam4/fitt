@@ -102,6 +102,7 @@ class TelegramBot(Protocol):
         text: str,
         reply_markup: Any = None,
         disable_notification: bool = False,
+        parse_mode: str | None = None,
     ) -> TelegramMessage: ...
 
     async def edit_message_text(
@@ -111,6 +112,7 @@ class TelegramBot(Protocol):
         message_id: int,
         text: str,
         reply_markup: Any = None,
+        parse_mode: str | None = None,
     ) -> Any: ...
 
 
@@ -463,6 +465,7 @@ class TurnRenderer:
                 chat_id=self.state.chat_id,
                 text=body,
                 disable_notification=True,  # silent: this is a live-progress view
+                parse_mode="HTML",
             )
             self.state.stream_message_id = msg.message_id
             self.state.phase = TurnPhase.ACTIVE
@@ -492,17 +495,32 @@ class TurnRenderer:
         the reply text (if any). Matches MeshClaw's task-card
         + narrative split so the user scans the "what ran"
         rows first and drops into the "what the model said"
-        prose after."""
+        prose after.
+
+        Phase 7 Slice 7.4: bubble is sent with
+        ``parse_mode="HTML"``. Bot-authored task lines (the
+        emoji-prefixed "🔵 Reading X…" entries) are escaped
+        for HTML so any literal ``<``/``>``/``&`` characters
+        embedded in tool args don't break the parser. The
+        LLM-controlled ``reply_text`` is rendered through
+        :func:`markdown_to_telegram_html` so ``**bold**`` /
+        ``[link](url)`` / fenced code render correctly. The
+        truncation marker is bot-authored plain text, escaped."""
+        import html as _html
+
+        from .markdown_render import markdown_to_telegram_html
+
         lines: list[str] = []
         for task in self.state.tool_tasks:
-            lines.append(task.final or task.placeholder)
+            line = task.final or task.placeholder
+            lines.append(_html.escape(line))
         if self.state.reply_text:
             if lines:
                 lines.append("")
-            lines.append(self.state.reply_text)
+            lines.append(markdown_to_telegram_html(self.state.reply_text))
         text = "\n".join(lines)
         if self.state.stream_truncated:
-            text += "\n\n(stream bubble truncated at 4 KB; full turn in logs)"
+            text += "\n\n" + _html.escape("(stream bubble truncated at 4 KB; full turn in logs)")
         return text[-MAX_STREAM_BUBBLE_CHARS:]
 
     async def _flush_stream_bubble_if_due(self, *, force: bool = False) -> None:
@@ -533,6 +551,7 @@ class TurnRenderer:
                 chat_id=self.state.chat_id,
                 message_id=self.state.stream_message_id,
                 text=body,
+                parse_mode="HTML",
             )
             self.state.last_stream_edit_ts = self._clock()
         except Exception as exc:

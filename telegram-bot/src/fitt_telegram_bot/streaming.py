@@ -8,6 +8,14 @@ The caller sends an empty placeholder message first, then hands the
 returned ``message_id`` plus a live stream of deltas to this
 ``StreamingEditor``. It accumulates the deltas and edits the
 placeholder in place.
+
+Phase 7 Slice 7.4: every edit converts the accumulated CommonMark
+to Telegram HTML before sending. Without this, model replies that
+contain ``**bold**`` / ` ```code``` ` / ``[link](url)`` arrive on
+the phone as literal markdown source. HTML over MarkdownV2 because
+half-written ``<b>`` degrades gracefully under streaming edits
+while half-written ``*…*`` crashes the MarkdownV2 parser for the
+whole message.
 """
 
 from __future__ import annotations
@@ -16,6 +24,8 @@ import asyncio
 import logging
 import time
 from collections.abc import Coroutine
+
+from .markdown_render import markdown_to_telegram_html
 
 _log = logging.getLogger(__name__)
 
@@ -76,11 +86,21 @@ class StreamingEditor:
         text = "".join(self._buffer)
         if not text:
             return
+        # Phase 7 Slice 7.4: convert markdown -> Telegram HTML
+        # before edit. Telegram's HTML parse mode accepts
+        # half-written tags gracefully (renders the partial
+        # structure) so streaming edits don't crash if the
+        # buffer ends mid-token. Telegram's 4096-char cap is
+        # on the rendered length; tail-truncate the markdown
+        # source first so the rendered HTML stays bounded
+        # without fighting the truncation.
+        rendered = markdown_to_telegram_html(text[-4000:])
         try:
             await self._bot.edit_message_text(
                 chat_id=self._chat_id,
                 message_id=self._message_id,
-                text=text[-4000:],  # Telegram caps at 4096 chars
+                text=rendered,
+                parse_mode="HTML",
             )
             self._last_edit_ts = now
             self._dirty = False
@@ -103,7 +123,14 @@ class TelegramBotAPI:
     ``telegram.Bot`` from ``python-telegram-bot``.
     """
 
-    async def edit_message_text(self, *, chat_id: int, message_id: int, text: str) -> None:
+    async def edit_message_text(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        parse_mode: str | None = None,
+    ) -> None:
         raise NotImplementedError
 
 

@@ -17,6 +17,12 @@ dependencies = [
     "pydantic>=2.9",
     "pyyaml>=6.0",
     "structlog>=24.4",
+    # Phase 7 Slice 7.4: CommonMark -> Telegram HTML
+    # conversion so model replies with `**bold**` /
+    # ` ```code``` ` / `[link](url)` render correctly on the
+    # phone instead of arriving with literal asterisks. Pure
+    # Python, ~100KB, no native deps.
+    "markdown-it-py>=3.0,<4.0",
     # The bot imports gateway.config and gateway.sessions to share
     # configuration loading and the session registry. An editable
     # install of the gateway package is pulled in as a path dep so
@@ -29,6 +35,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "respx>=0.21",
+    "hypothesis>=6.115",
     "ruff>=0.7",
     "mypy>=1.13",
     "types-pyyaml>=6.0",

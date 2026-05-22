@@ -24,11 +24,24 @@ class FakeBot:
     sent: list[tuple[int, str]] = field(default_factory=list)
     edits: list[tuple[int, int, str]] = field(default_factory=list)
 
-    async def send_message(self, *, chat_id: int, text: str):
+    async def send_message(
+        self,
+        *,
+        chat_id: int,
+        text: str,
+        parse_mode: str | None = None,
+    ):
         self.sent.append((chat_id, text))
         return type("M", (), {"message_id": 1000 + len(self.sent)})()
 
-    async def edit_message_text(self, *, chat_id: int, message_id: int, text: str) -> None:
+    async def edit_message_text(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        parse_mode: str | None = None,
+    ) -> None:
         self.edits.append((chat_id, message_id, text))
 
 
