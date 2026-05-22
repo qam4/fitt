@@ -35,78 +35,78 @@ Foundation. Smallest unit; ships first.
 
 ### 1. Discovery primitives
 
-- [ ] 1a. `gateway/src/gateway/context_window.py`:
+- [x] 1a. `gateway/src/gateway/context_window.py`:
        `ContextWindowResult` frozen dataclass with
        `tokens`, `source`, `detail`, `discovered_at`.
-- [ ] 1b. `ContextWindowProbe` Protocol matching the per-
+- [x] 1b. `ContextWindowProbe` Protocol matching the per-
        backend discovery contract.
-- [ ] 1c. `OllamaContextProbe` — `POST /api/show`,
+- [x] 1c. `OllamaContextProbe` — `POST /api/show`,
        parse `parameters` for `num_ctx`, fall back to
        `model_info["<arch>.context_length"]`, fall back to
        2048 with a WARNING log.
-- [ ] 1d. `OpenAIContextProbe` — covers `openai`,
+- [x] 1d. `OpenAIContextProbe` — covers `openai`,
        `openrouter`, NIM, Groq, Together. `GET /v1/models`
        with the configured api_key; match by model id;
        read `context_length` (or `max_input_tokens` for
        OpenRouter).
-- [ ] 1e. `AnthropicContextProbe` — static lookup table
+- [x] 1e. `AnthropicContextProbe` — static lookup table
        keyed on family prefix. Document the table; new
        families = one-line edit.
-- [ ] 1f. `ContextWindowCache` class — async populate
+- [x] 1f. `ContextWindowCache` class — async populate
        across all bindings, `get(backend, model_id)` lookup,
        `refresh(backend, model_id)` re-runs one probe.
-- [ ] 1g. Tests: per-probe happy path and failure modes
+- [x] 1g. Tests: per-probe happy path and failure modes
        (auth fail, malformed response, transport error,
        missing field). ~12-15 tests.
 
 ### 2. Boot integration
 
-- [ ] 2a. `app.py::create_app` calls
+- [x] 2a. `app.py::create_app` calls
        `ContextWindowCache.populate()` after the api_keys
        check, before the alias_probe. Stash on
        `app.state.context_windows`.
-- [ ] 2b. Per-binding ERROR log on discovery failure with
+- [x] 2b. Per-binding ERROR log on discovery failure with
        alias / backend / failure reason (Principle 11
        shape).
-- [ ] 2c. Discovery cost stays under 10s typical. Probe
+- [x] 2c. Discovery cost stays under 10s typical. Probe
        timeout per backend defaults to 5s, configurable via
        `server.context_probe_timeout_s`.
-- [ ] 2d. Tests: app fixture with a stubbed cache asserts
+- [x] 2d. Tests: app fixture with a stubbed cache asserts
        discovery is invoked; failure-mode test asserts the
        app starts even when every probe times out.
 
 ### 3. `/v1/aliases` endpoint
 
-- [ ] 3a. `gateway/src/gateway/aliases_endpoint.py` with
+- [x] 3a. `gateway/src/gateway/aliases_endpoint.py` with
        `GET /v1/aliases` returning the schema in design.md.
-- [ ] 3b. Reads `app.state.context_windows`, the existing
+- [x] 3b. Reads `app.state.context_windows`, the existing
        boot-probe results, and the rolling per-alias eval
        report at `$FITT_HOME/eval/<alias>-latest.md`.
-- [ ] 3c. Bearer auth via the existing middleware (gated;
+- [x] 3c. Bearer auth via the existing middleware (gated;
        see design.md Open Question 1).
-- [ ] 3d. Tests: shape, missing-eval-file → null,
+- [x] 3d. Tests: shape, missing-eval-file → null,
        auth-required-and-rejects-missing-token, all-fields-
        populated happy path.
 
 ### 4. CLI: `fitt context refresh`
 
-- [ ] 4a. New `fitt context` subcommand group in `cli.py`.
-- [ ] 4b. `fitt context list` — prints per-binding context
+- [x] 4a. New `fitt context` subcommand group in `cli.py`.
+- [x] 4b. `fitt context list` — prints per-binding context
        window from `app.state.context_windows`. Operator-
        readable table.
-- [ ] 4c. `fitt context refresh [--alias <name>]` — POST
+- [x] 4c. `fitt context refresh [--alias <name>]` — POST
        to a new `/v1/internal/context-refresh` endpoint
        (auth-gated, internal use) that re-runs discovery
        for the named alias or all aliases.
-- [ ] 4d. Tests for the CLI subcommand and the internal
+- [x] 4d. Tests for the CLI subcommand and the internal
        endpoint.
 
 ### 5. Definition of done — Slice 7.1
 
-- [ ] 5a. Required tasks 1a-4d complete.
-- [ ] 5b. `uv run pytest -q` green in `gateway/`.
-- [ ] 5c. `uv run mypy src` clean.
-- [ ] 5d. `uv run ruff format/check` clean.
+- [x] 5a. Required tasks 1a-4d complete.
+- [x] 5b. `uv run pytest -q` green in `gateway/`.
+- [x] 5c. `uv run mypy src` clean.
+- [x] 5d. `uv run ruff format/check` clean.
 - [ ] 5e. Live validation: bring up the gateway against
        a real Ollama satellite with `OLLAMA_CONTEXT_LENGTH`
        set; confirm `fitt context list` shows the right
