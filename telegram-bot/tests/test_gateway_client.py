@@ -715,3 +715,78 @@ async def test_get_status_returns_none_on_500() -> None:
         )
         status = await _client().get_status()
     assert status is None
+
+
+# --------------------------------------------------------------- run_eval
+
+
+async def test_run_eval_returns_summary_on_200() -> None:
+    payload = {
+        "alias": "fitt-default",
+        "model_id": "qwen2.5-coder:14b",
+        "passed": 5,
+        "failed": 0,
+        "total": 5,
+        "pass_rate": 1.0,
+        "duration_ms": 30_000,
+        "cases": [],
+    }
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/eval/fitt-default").mock(
+            return_value=httpx.Response(200, json=payload),
+        )
+        result = await _client().run_eval("fitt-default")
+    assert result == payload
+
+
+async def test_run_eval_returns_error_envelope_on_404() -> None:
+    """404 maps to ``{"error": {...}}`` so the bot can render
+    the available-aliases hint."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/eval/missing").mock(
+            return_value=httpx.Response(
+                404,
+                json={
+                    "detail": {
+                        "error": {
+                            "type": "unknown_alias",
+                            "message": "alias 'missing' not configured",
+                            "available": ["fitt-default"],
+                        }
+                    }
+                },
+            ),
+        )
+        result = await _client().run_eval("missing")
+    assert result is not None
+    assert result["error"]["type"] == "unknown_alias"
+    assert result["error"]["available"] == ["fitt-default"]
+
+
+async def test_run_eval_returns_error_envelope_on_500() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/eval/fitt-default").mock(
+            return_value=httpx.Response(
+                500,
+                json={
+                    "detail": {
+                        "error": {
+                            "type": "eval_infrastructure_failure",
+                            "message": "harness broke",
+                        }
+                    }
+                },
+            ),
+        )
+        result = await _client().run_eval("fitt-default")
+    assert result is not None
+    assert result["error"]["type"] == "eval_infrastructure_failure"
+
+
+async def test_run_eval_returns_none_on_transport_error() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post("http://127.0.0.1:8080/v1/eval/fitt-default").mock(
+            side_effect=httpx.ConnectError("boom"),
+        )
+        result = await _client().run_eval("fitt-default")
+    assert result is None

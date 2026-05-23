@@ -223,6 +223,54 @@ class GatewayClient:
             return None
         return payload if isinstance(payload, dict) else None
 
+    async def run_eval(self, alias: str) -> dict[str, Any] | None:
+        """POST /v1/eval/<alias> — kick the alias eval suite.
+
+        Phase 7 Slice 7.3: backs the ``/eval <alias>`` Telegram
+        command. The harness runs sequentially through 5 cases
+        and typically takes 15-25 seconds; the bot displays
+        a "running…" placeholder while this awaits.
+
+        Returns the summary dict on 200, ``None`` on transport
+        failure, ``{"error": ...}`` on a documented error
+        (404 unknown_alias, 500 infrastructure failure) so the
+        caller can render the right message inline."""
+        async with httpx.AsyncClient(timeout=120.0) as http:
+            try:
+                r = await http.post(
+                    f"{self._base}/v1/eval/{alias}",
+                    headers=self._headers,
+                )
+            except httpx.HTTPError as e:
+                _log.warning(
+                    "gateway.run_eval.failed",
+                    alias=alias,
+                    error_class=type(e).__name__,
+                    error=str(e),
+                )
+                return None
+        if r.status_code == 200:
+            try:
+                payload = r.json()
+            except ValueError:
+                return None
+            return payload if isinstance(payload, dict) else None
+        if r.status_code in (404, 500):
+            try:
+                body = r.json()
+            except ValueError:
+                return {"error": {"type": "http_error", "message": str(r.status_code)}}
+            detail = body.get("detail") if isinstance(body, dict) else None
+            if isinstance(detail, dict) and "error" in detail:
+                return {"error": detail["error"]}
+            return {"error": {"type": "http_error", "message": str(r.status_code)}}
+        _log.warning(
+            "gateway.run_eval.unexpected_status",
+            alias=alias,
+            status=r.status_code,
+        )
+        return None
+
     async def list_pending_approvals(self, client: str | None = None) -> list[dict[str, Any]]:
         """GET /v1/approvals/pending[?client=...].
 

@@ -358,11 +358,130 @@ async def handle_help(bot: SenderBot, update: IncomingUpdate) -> None:
             "/model <alias> - switch alias\n"
             "/lastturn - show detail for the most recent turn\n"
             "/status - system snapshot (mcp, cron, gaps, uptime)\n"
+            "/eval <alias> - run the eval suite against alias\n"
             "/help - this message\n"
             "\nPhoto messages get multimodal analysis. Voice is not "
             "wired up yet."
         ),
     )
+
+
+# ---------- /eval -------------------------------------------------
+
+
+async def handle_eval_command(
+    bot: SenderBot,
+    update: IncomingUpdate,
+    services: Services,
+) -> None:
+    """Phase 7 Slice 7.3: kick the alias eval suite.
+
+    Long-running call (~15-25s typical, longer if a binding is
+    slow). Posts a ``running…`` placeholder, then edits in the
+    result when the gateway returns. The placeholder gives the
+    operator immediate feedback that the command was accepted —
+    without it Telegram looks frozen for the duration of the
+    suite.
+
+    Usage: ``/eval`` (defaults to the chat's current alias) or
+    ``/eval <alias>`` (explicit binding).
+    """
+    args = update.command_args
+    target_alias: str
+    if args:
+        target_alias = args[0]
+    else:
+        target_alias = services.prefs.get(update.chat_id).alias
+
+    placeholder = await bot.send_message(
+        chat_id=update.chat_id,
+        text=f"Running eval suite against <code>{target_alias}</code>…",
+        parse_mode="HTML",
+    )
+
+    summary = await services.gateway.run_eval(target_alias)
+
+    if summary is None:
+        await bot.edit_message_text(
+            chat_id=update.chat_id,
+            message_id=placeholder.message_id,
+            text=(f"Eval against <code>{target_alias}</code> failed: gateway unreachable."),
+            parse_mode="HTML",
+        )
+        return
+    if "error" in summary:
+        err = summary["error"]
+        err_type = err.get("type", "error")
+        message = err.get("message", "?")
+        if err_type == "unknown_alias":
+            available = err.get("available", [])
+            avail_text = ", ".join(available) if available else "(none configured)"
+            text = (
+                f"Unknown alias <code>{target_alias}</code>.\n"
+                f"Available: <code>{_html_escape(avail_text)}</code>"
+            )
+        else:
+            text = f"Eval failed: <code>{_html_escape(err_type)}</code>: {_html_escape(message)}"
+        await bot.edit_message_text(
+            chat_id=update.chat_id,
+            message_id=placeholder.message_id,
+            text=text,
+            parse_mode="HTML",
+        )
+        return
+
+    text = _format_eval_summary(summary)
+    await bot.edit_message_text(
+        chat_id=update.chat_id,
+        message_id=placeholder.message_id,
+        text=text,
+        parse_mode="HTML",
+    )
+
+
+def _html_escape(s: str) -> str:
+    import html as _html
+
+    return _html.escape(str(s))
+
+
+def _format_eval_summary(summary: dict[str, Any]) -> str:
+    """Render an eval report summary as Telegram HTML.
+
+    Header: alias → model, pass rate, duration. Per-case body:
+    one line per case with status glyph, name, latency, and
+    detail (truncated). Long enough to be informative; short
+    enough to fit comfortably in a phone screen."""
+    alias = summary.get("alias", "?")
+    model = summary.get("model_id") or "(unknown)"
+    passed = int(summary.get("passed") or 0)
+    total = int(summary.get("total") or 0)
+    pass_rate = float(summary.get("pass_rate") or 0.0)
+    duration_ms = int(summary.get("duration_ms") or 0)
+    cases = summary.get("cases") or []
+
+    lines: list[str] = []
+    pct = int(pass_rate * 100)
+    glyph = "✅" if pass_rate >= 0.8 else "⚠"
+    lines.append(
+        f"{glyph} <b>Eval {_html_escape(alias)}</b> <code>{_html_escape(str(model))}</code>"
+    )
+    lines.append(f"<b>{passed}/{total}</b> passed ({pct}%) in {duration_ms} ms")
+    lines.append("")
+
+    for case in cases:
+        name = _html_escape(str(case.get("name", "?")))
+        status = str(case.get("status", "?"))
+        detail = _html_escape(str(case.get("detail", ""))[:120])
+        latency = int(case.get("latency_ms") or 0)
+        case_glyph = "✅" if status == "pass" else "❌"
+        lines.append(
+            f"{case_glyph} <code>{name}</code> <i>{_html_escape(status)}</i> ({latency} ms)"
+        )
+        if status != "pass":
+            lines.append(f"  {detail}")
+
+    return "\n".join(lines)
 
 
 # ---------- /status -----------------------------------------------

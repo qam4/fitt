@@ -98,6 +98,7 @@ def build_application(bot_config: TelegramBotConfig) -> Application[Any, Any, An
     app.add_handler(CommandHandler("model", _wrap_command(_on_model)))
     app.add_handler(CommandHandler("lastturn", _wrap_command(_on_lastturn)))
     app.add_handler(CommandHandler("status", _wrap_command(_on_status)))
+    app.add_handler(CommandHandler("eval", _wrap_command(_on_eval)))
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, _on_photo_ptb))
     app.add_handler(MessageHandler(filters.VOICE & ~filters.COMMAND, _wrap_command(_on_voice)))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_text_ptb))
@@ -501,6 +502,10 @@ async def _on_lastturn(bot: Any, update: IncomingUpdate, services: Services) -> 
 
 async def _on_status(bot: Any, update: IncomingUpdate, services: Services) -> None:
     await handlers.handle_status_command(bot, update, services)
+
+
+async def _on_eval(bot: Any, update: IncomingUpdate, services: Services) -> None:
+    await handlers.handle_eval_command(bot, update, services)
 
 
 async def _on_text(bot: Any, update: IncomingUpdate, services: Services) -> None:

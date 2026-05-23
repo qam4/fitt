@@ -72,6 +72,7 @@ class FakeGateway:
         self._details = details
         self._captures: list[dict[str, Any]] = []
         self._status: dict[str, Any] | None = None
+        self._eval_response: dict[str, Any] | None = None
         self.seen_calls: list[dict[str, Any]] = []
 
     async def chat(
@@ -113,11 +114,19 @@ class FakeGateway:
     async def get_status(self) -> dict[str, Any] | None:
         return self._status
 
+    async def run_eval(self, alias: str) -> dict[str, Any] | None:
+        # Tests inject either an explicit summary, an error
+        # envelope, or None (transport failure).
+        return self._eval_response
+
     def set_captures(self, captures: list[dict[str, Any]]) -> None:
         self._captures = captures
 
     def set_status(self, status: dict[str, Any] | None) -> None:
         self._status = status
+
+    def set_eval_response(self, response: dict[str, Any] | None) -> None:
+        self._eval_response = response
 
 
 def _services(
@@ -885,3 +894,169 @@ async def test_status_warns_when_gaps_exist(tmp_path: Path) -> None:
     text = bot.sent[0][1]
     assert "7" in text
     assert "recorded" in text
+
+
+# ---------- /eval -------------------------------------------------
+
+
+async def test_eval_posts_running_placeholder_then_edits(tmp_path: Path) -> None:
+    """The bot replies with a "running…" placeholder
+    immediately so the operator sees the command was
+    accepted, then edits in the result when the gateway
+    returns. Without the placeholder the chat looks frozen
+    for 15-25 seconds."""
+    gw = FakeGateway(deltas=[])
+    gw.set_eval_response(
+        {
+            "alias": "fitt-default",
+            "model_id": "qwen2.5-coder:14b",
+            "started_at": "2026-05-22T19:00:00+00:00",
+            "finished_at": "2026-05-22T19:00:30+00:00",
+            "duration_ms": 30_000,
+            "passed": 4,
+            "failed": 1,
+            "total": 5,
+            "pass_rate": 0.8,
+            "cases": [
+                {
+                    "name": "read_file_basic",
+                    "status": "pass",
+                    "detail": "called read_file",
+                    "latency_ms": 120,
+                    "tool_called": "read_file",
+                    "finish_reason": "tool_calls",
+                },
+                {
+                    "name": "narrated_case",
+                    "status": "narrated",
+                    "detail": "model replied with text instead of tool_calls",
+                    "latency_ms": 1500,
+                    "tool_called": None,
+                    "finish_reason": "stop",
+                },
+            ],
+        }
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_eval_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="eval", command_args=[]),
+        svc,
+    )
+    # One send (the placeholder) + one edit (the result).
+    assert len(bot.sent) == 1
+    assert "Running eval suite" in bot.sent[0][1]
+    assert "fitt-default" in bot.sent[0][1]  # default chat alias
+    assert len(bot.edits) == 1
+    edited = bot.edits[0][2]
+    assert "4/5</b> passed" in edited or "4/5" in edited
+    assert "80%" in edited
+    assert "qwen2.5-coder:14b" in edited
+    # Per-case rendering: pass + narrated.
+    assert "read_file_basic" in edited
+    assert "narrated_case" in edited
+    assert "✅" in edited
+    assert "❌" in edited
+
+
+async def test_eval_uses_explicit_alias_arg(tmp_path: Path) -> None:
+    """``/eval fitt-smart`` overrides the chat's default alias."""
+    gw = FakeGateway(deltas=[])
+    gw.set_eval_response(
+        {
+            "alias": "fitt-smart",
+            "model_id": "claude-sonnet-4.5",
+            "started_at": "2026-05-22T19:00:00+00:00",
+            "finished_at": "2026-05-22T19:00:30+00:00",
+            "duration_ms": 30_000,
+            "passed": 5,
+            "failed": 0,
+            "total": 5,
+            "pass_rate": 1.0,
+            "cases": [],
+        }
+    )
+    seen_aliases: list[str] = []
+
+    original_run_eval = gw.run_eval
+
+    async def _track(alias: str) -> dict[str, Any] | None:
+        seen_aliases.append(alias)
+        return await original_run_eval(alias)
+
+    gw.run_eval = _track  # type: ignore[method-assign]
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_eval_command(
+        bot,
+        IncomingUpdate(
+            user_id=42,
+            chat_id=100,
+            command="eval",
+            command_args=["fitt-smart"],
+        ),
+        svc,
+    )
+    assert seen_aliases == ["fitt-smart"]
+    assert "fitt-smart" in bot.sent[0][1]
+
+
+async def test_eval_handles_unknown_alias_error(tmp_path: Path) -> None:
+    gw = FakeGateway(deltas=[])
+    gw.set_eval_response(
+        {
+            "error": {
+                "type": "unknown_alias",
+                "message": "alias 'nope' not configured",
+                "available": ["fitt-default", "fitt-smart"],
+            }
+        }
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_eval_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="eval", command_args=["nope"]),
+        svc,
+    )
+    edited = bot.edits[-1][2]
+    assert "Unknown alias" in edited
+    assert "nope" in edited
+    assert "fitt-default" in edited  # available list rendered
+
+
+async def test_eval_handles_infrastructure_failure(tmp_path: Path) -> None:
+    gw = FakeGateway(deltas=[])
+    gw.set_eval_response(
+        {
+            "error": {
+                "type": "eval_infrastructure_failure",
+                "message": "harness broke",
+            }
+        }
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_eval_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="eval", command_args=[]),
+        svc,
+    )
+    edited = bot.edits[-1][2]
+    assert "Eval failed" in edited
+    assert "eval_infrastructure_failure" in edited
+
+
+async def test_eval_handles_gateway_unreachable(tmp_path: Path) -> None:
+    gw = FakeGateway(deltas=[])
+    gw.set_eval_response(None)  # transport failure
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_eval_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="eval", command_args=[]),
+        svc,
+    )
+    edited = bot.edits[-1][2]
+    assert "gateway unreachable" in edited

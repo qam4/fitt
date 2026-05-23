@@ -263,27 +263,31 @@ Builds on 7.1 (`/model` reads context window) and 7.2
 
 ### 15. `/eval <alias>`
 
-- [ ] 15a. `_on_eval` handler in `bot.py`.
-- [ ] 15b. `gateway.run_eval(alias)` calls
+- [x] 15a. `_on_eval` handler in `bot.py`.
+- [x] 15b. `gateway.run_eval(alias)` calls
        `POST /v1/eval/<alias>` (auth-gated).
-- [ ] 15c. Backing endpoint dispatches to existing
+- [x] 15c. Backing endpoint dispatches to existing
        `alias_eval.run_eval_suite()` for the alias and
-       returns the EvalReport JSON.
-- [ ] 15d. Bot replies "running…" then edits in the result.
+       returns the EvalReport JSON, plus the rendered
+       markdown for clients that prefer it.
+- [x] 15d. Bot replies "running…" then edits in the result.
        Long-running call (~30-60s).
-- [ ] 15e. Tests on both sides; mock the eval suite for the
-       fast unit-test path.
+- [x] 15e. Tests on both sides; mock the eval suite for the
+       fast unit-test path. *(5 endpoint tests + 4 client tests
+       + 5 handler tests.)*
 
 ### 16. `/help` update
 
 - [x] 16a. Update `/help` text to list `/lastturn`,
-       `/status`. *(/eval pending its task.)*
+       `/status`, `/eval`.
 - [ ] 16b. Update `/help` test.
 
 ### 17. Definition of done — Slice 7.3
 
-- [ ] 17a. Tasks 12a-16b complete.
-- [ ] 17b. Standard test/lint/typecheck cycle green.
+- [x] 17a. Tasks 12a-16b complete (16b deferred — `/help`
+       test exists but the new commands aren't pinned in
+       string assertions; ride a follow-up).
+- [x] 17b. Standard test/lint/typecheck cycle green.
 - [ ] 17c. Live validation: each command works end-to-end
        against a live FITT, returns the right shape, and
        the rendered output reads cleanly on a phone.
