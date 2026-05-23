@@ -59,6 +59,11 @@ def create_app(config: Config) -> FastAPI:
         redoc_url=None,
     )
     app.state.config = config
+    # Phase 7 Slice 7.3: stamp the gateway's startup time so
+    # /v1/status can surface uptime without an extra subsystem.
+    import time as _time
+
+    app.state.started_at = _time.time()
 
     # Principle 11: fail loud on detectable misconfigurations.
     # At startup, walk the config + secrets pair and emit an
@@ -660,6 +665,7 @@ def create_app(config: Config) -> FastAPI:
     from .health import router as health_router
     from .mcp_endpoint import router as mcp_router
     from .models_endpoint import router as models_router
+    from .status_endpoint import router as status_router
     from .turn_capture_endpoint import router as turn_capture_router
 
     app.include_router(health_router)
@@ -668,6 +674,7 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(approvals_router)
     app.include_router(events_router)
     app.include_router(mcp_router)
+    app.include_router(status_router)
     app.include_router(turn_capture_router)
 
     try:

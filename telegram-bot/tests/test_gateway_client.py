@@ -677,3 +677,41 @@ async def test_get_capture_returns_none_on_transport_error() -> None:
         )
         cap = await _client().get_capture("main", "t1")
     assert cap is None
+
+
+# --------------------------------------------------------------- status
+
+
+async def test_get_status_returns_dict_on_200() -> None:
+    payload = {
+        "gateway": {"uptime_s": 60.0, "started_at": 1779479763.0},
+        "mcp": {"servers_total": 0, "servers_running": 0},
+        "cron": {"total": 0, "enabled": 0, "next_firing": None},
+        "capability_gaps": {"total": 0},
+        "pruners": {"history_last_sweep": None, "events_last_sweep": None},
+        "telegram": {"configured": True},
+    }
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/status").mock(
+            return_value=httpx.Response(200, json=payload),
+        )
+        status = await _client().get_status()
+    assert status == payload
+
+
+async def test_get_status_returns_none_on_transport_error() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/status").mock(
+            side_effect=httpx.ConnectError("boom"),
+        )
+        status = await _client().get_status()
+    assert status is None
+
+
+async def test_get_status_returns_none_on_500() -> None:
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("http://127.0.0.1:8080/v1/status").mock(
+            return_value=httpx.Response(500, json={"error": "internal"}),
+        )
+        status = await _client().get_status()
+    assert status is None

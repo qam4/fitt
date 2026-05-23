@@ -357,11 +357,139 @@ async def handle_help(bot: SenderBot, update: IncomingUpdate) -> None:
             "/model - list aliases\n"
             "/model <alias> - switch alias\n"
             "/lastturn - show detail for the most recent turn\n"
+            "/status - system snapshot (mcp, cron, gaps, uptime)\n"
             "/help - this message\n"
             "\nPhoto messages get multimodal analysis. Voice is not "
             "wired up yet."
         ),
     )
+
+
+# ---------- /status -----------------------------------------------
+
+
+async def handle_status_command(
+    bot: SenderBot,
+    update: IncomingUpdate,
+    services: Services,
+) -> None:
+    """Phase 7 Slice 7.3: operator-facing system snapshot.
+
+    Aggregates uptime, MCP server up/down, cron job count + next
+    firing, capability-gap log size, pruner cadences, and
+    Telegram-configured flag. The "is FITT okay right now?"
+    answer at a glance — without ssh into the hub."""
+    status = await services.gateway.get_status()
+    if status is None:
+        await bot.send_message(
+            chat_id=update.chat_id,
+            text="Could not reach the gateway for status.",
+        )
+        return
+    text = _format_status(status)
+    await bot.send_message(chat_id=update.chat_id, text=text, parse_mode="HTML")
+
+
+def _format_status(status: dict[str, Any]) -> str:
+    """Render the /v1/status payload as Telegram HTML."""
+    import html as _html
+
+    lines: list[str] = ["<b>FITT status</b>"]
+
+    # Gateway uptime.
+    gw = status.get("gateway") or {}
+    uptime_s = gw.get("uptime_s")
+    if isinstance(uptime_s, (int, float)):
+        lines.append(f"uptime <code>{_html.escape(_format_duration(uptime_s))}</code>")
+
+    # MCP servers.
+    mcp = status.get("mcp") or {}
+    total = int(mcp.get("servers_total") or 0)
+    running = int(mcp.get("servers_running") or 0)
+    if total == 0:
+        lines.append("mcp servers: <code>none configured</code>")
+    elif running == total:
+        lines.append(f"mcp servers: <code>{running}/{total} running</code>")
+    else:
+        # Partial running is a warning condition.
+        lines.append(f"⚠ mcp servers: <code>{running}/{total} running</code>")
+
+    # Cron.
+    cron = status.get("cron") or {}
+    cron_total = int(cron.get("total") or 0)
+    cron_enabled = int(cron.get("enabled") or 0)
+    next_firing = cron.get("next_firing")
+    if cron_total == 0:
+        lines.append("cron: <code>no jobs</code>")
+    else:
+        cron_line = f"cron: <code>{cron_enabled}/{cron_total} enabled</code>"
+        if isinstance(next_firing, (int, float)):
+            cron_line += f", next {_format_until(next_firing)}"
+        lines.append(cron_line)
+
+    # Capability gaps.
+    gaps = status.get("capability_gaps") or {}
+    gap_total = int(gaps.get("total") or 0)
+    if gap_total > 0:
+        lines.append(f"capability gaps: <code>{gap_total}</code> recorded")
+
+    # Pruner cadences.
+    pruners = status.get("pruners") or {}
+    history_last = pruners.get("history_last_sweep")
+    events_last = pruners.get("events_last_sweep")
+    if isinstance(history_last, (int, float)):
+        lines.append(f"history pruner: last swept {_format_ago(history_last)}")
+    if isinstance(events_last, (int, float)):
+        lines.append(f"events pruner: last swept {_format_ago(events_last)}")
+
+    # Telegram presence.
+    telegram = status.get("telegram") or {}
+    if telegram.get("configured"):
+        lines.append("telegram: <code>configured</code>")
+    else:
+        lines.append("⚠ telegram: <code>not configured</code>")
+
+    return "\n".join(lines)
+
+
+def _format_duration(seconds: float) -> str:
+    """Compact duration: 1d2h, 3h45m, 12m, 45s. The status
+    surface is at-a-glance — full ISO-8601 strings would be
+    operator overhead."""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        h, rem = divmod(s, 3600)
+        m = rem // 60
+        return f"{h}h{m}m" if m else f"{h}h"
+    d, rem = divmod(s, 86400)
+    h = rem // 3600
+    return f"{d}d{h}h" if h else f"{d}d"
+
+
+def _format_until(future_ts: float) -> str:
+    """Compact "in N units" rendering. Negative results (the
+    timestamp's already past) say "now" rather than producing
+    a misleading "-3m"."""
+    import time as _time
+
+    delta = future_ts - _time.time()
+    if delta < 0:
+        return "now"
+    return f"in {_format_duration(delta)}"
+
+
+def _format_ago(past_ts: float) -> str:
+    """Compact "N units ago"."""
+    import time as _time
+
+    delta = _time.time() - past_ts
+    if delta < 0:
+        return "in the future"
+    return f"{_format_duration(delta)} ago"
 
 
 # ---------- /lastturn ---------------------------------------------

@@ -71,6 +71,7 @@ class FakeGateway:
             ]
         self._details = details
         self._captures: list[dict[str, Any]] = []
+        self._status: dict[str, Any] | None = None
         self.seen_calls: list[dict[str, Any]] = []
 
     async def chat(
@@ -109,8 +110,14 @@ class FakeGateway:
                 return cap
         return None
 
+    async def get_status(self) -> dict[str, Any] | None:
+        return self._status
+
     def set_captures(self, captures: list[dict[str, Any]]) -> None:
         self._captures = captures
+
+    def set_status(self, status: dict[str, Any] | None) -> None:
+        self._status = status
 
 
 def _services(
@@ -731,3 +738,150 @@ async def test_lastturn_uses_chat_session(tmp_path: Path) -> None:
         svc,
     )
     assert seen == ["retroai"]
+
+
+# ---------- /status -----------------------------------------------
+
+
+async def test_status_handles_gateway_unreachable(tmp_path: Path) -> None:
+    """When the gateway client returns None (transport error,
+    auth failure), the bot renders a clear error rather than
+    crashing."""
+    gw = FakeGateway(deltas=[])
+    gw.set_status(None)
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_status_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="status", command_args=[]),
+        svc,
+    )
+    assert len(bot.sent) == 1
+    assert "Could not reach" in bot.sent[0][1]
+
+
+async def test_status_renders_aggregate(tmp_path: Path) -> None:
+    """A typical status response renders every section the
+    operator looks for: uptime, mcp, cron, gaps, pruners,
+    telegram."""
+    gw = FakeGateway(deltas=[])
+    import time as _time
+
+    now = _time.time()
+    gw.set_status(
+        {
+            "generated_at": now,
+            "gateway": {"uptime_s": 3725.0, "started_at": now - 3725.0},
+            "mcp": {"servers_total": 2, "servers_running": 2},
+            "cron": {"total": 3, "enabled": 2, "next_firing": now + 300.0},
+            "capability_gaps": {"total": 5},
+            "pruners": {
+                "history_last_sweep": now - 86400.0,  # one day ago
+                "events_last_sweep": now - 3600.0,  # one hour ago
+            },
+            "telegram": {"configured": True},
+        }
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_status_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="status", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "FITT status" in text
+    assert "uptime" in text
+    # 3725s = 1h2m.
+    assert "1h2m" in text
+    assert "2/2 running" in text  # mcp
+    assert "2/3 enabled" in text  # cron enabled / total
+    # next_firing is ~300s out; rendering rounds down to "4m" or
+    # "5m" depending on exactly how much wall clock elapsed
+    # between set_status and the format call.
+    assert ("next in 4m" in text) or ("next in 5m" in text)
+    assert "5</code> recorded" in text  # gap count formatted
+    assert "1d ago" in text  # history pruner
+    assert ("1h ago" in text) or ("59m ago" in text)  # events pruner
+    assert "configured" in text
+
+
+async def test_status_warns_on_partial_mcp(tmp_path: Path) -> None:
+    """One down MCP server out of two surfaces with a warning
+    glyph so the operator notices."""
+    gw = FakeGateway(deltas=[])
+    gw.set_status(
+        {
+            "generated_at": 1779479823.0,
+            "gateway": {"uptime_s": 60.0, "started_at": 1779479763.0},
+            "mcp": {"servers_total": 2, "servers_running": 1},
+            "cron": {"total": 0, "enabled": 0, "next_firing": None},
+            "capability_gaps": {"total": 0},
+            "pruners": {"history_last_sweep": None, "events_last_sweep": None},
+            "telegram": {"configured": True},
+        }
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_status_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="status", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "1/2 running" in text
+    assert "⚠" in text
+
+
+async def test_status_handles_no_cron_jobs(tmp_path: Path) -> None:
+    gw = FakeGateway(deltas=[])
+    gw.set_status(
+        {
+            "gateway": {"uptime_s": 60.0, "started_at": 0},
+            "mcp": {"servers_total": 0, "servers_running": 0},
+            "cron": {"total": 0, "enabled": 0, "next_firing": None},
+            "capability_gaps": {"total": 0},
+            "pruners": {"history_last_sweep": None, "events_last_sweep": None},
+            "telegram": {"configured": False},
+        }
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_status_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="status", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "no jobs" in text
+    assert "none configured" in text  # mcp
+    # Telegram unconfigured is also surfaced as a warning so an
+    # operator setting up notices the gap.
+    assert "not configured" in text
+
+
+async def test_status_warns_when_gaps_exist(tmp_path: Path) -> None:
+    """Capability gaps recorded → surface the count so the
+    operator knows there's a backlog of "I'd need a tool"
+    feedback."""
+    gw = FakeGateway(deltas=[])
+    gw.set_status(
+        {
+            "gateway": {"uptime_s": 60.0, "started_at": 0},
+            "mcp": {"servers_total": 0, "servers_running": 0},
+            "cron": {"total": 0, "enabled": 0, "next_firing": None},
+            "capability_gaps": {"total": 7},
+            "pruners": {"history_last_sweep": None, "events_last_sweep": None},
+            "telegram": {"configured": True},
+        }
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_status_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="status", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    assert "7" in text
+    assert "recorded" in text

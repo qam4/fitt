@@ -195,6 +195,34 @@ class GatewayClient:
             return None
         return payload if isinstance(payload, dict) else None
 
+    async def get_status(self) -> dict[str, Any] | None:
+        """GET /v1/status — operator-facing system snapshot.
+
+        Phase 7 Slice 7.3: backs the ``/status`` Telegram
+        command. Returns the aggregate dict on 200, ``None``
+        on transport / auth failures so the bot renders a
+        clear "gateway unreachable" rather than a stack
+        trace."""
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            try:
+                r = await http.get(
+                    f"{self._base}/v1/status",
+                    headers=self._headers,
+                )
+                r.raise_for_status()
+            except httpx.HTTPError as e:
+                _log.warning(
+                    "gateway.get_status.failed",
+                    error_class=type(e).__name__,
+                    error=str(e),
+                )
+                return None
+        try:
+            payload = r.json()
+        except ValueError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
     async def list_pending_approvals(self, client: str | None = None) -> list[dict[str, Any]]:
         """GET /v1/approvals/pending[?client=...].
 

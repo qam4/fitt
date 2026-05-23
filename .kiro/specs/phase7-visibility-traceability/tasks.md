@@ -250,14 +250,16 @@ Builds on 7.1 (`/model` reads context window) and 7.2
 
 ### 14. `/status`
 
-- [ ] 14a. `_on_status` handler in `bot.py`.
-- [ ] 14b. New `gateway.get_status()` that aggregates
-       `/health`, `/ready`, MCP server status, cron job
+- [x] 14a. `_on_status` handler in `bot.py`.
+- [x] 14b. New `gateway.get_status()` that aggregates
+       `/health`, MCP server status, cron job
        status, history-pruner last sweep, event-pruner last
-       sweep, capability-gap-log size, gateway uptime.
-- [ ] 14c. Backing endpoint `GET /v1/status` on the gateway
+       sweep, capability-gap-log size, gateway uptime,
+       Telegram-configured flag.
+- [x] 14c. Backing endpoint `GET /v1/status` on the gateway
        returning the aggregate JSON.
-- [ ] 14d. Tests on both sides.
+- [x] 14d. Tests on both sides. *(10 endpoint tests +
+       4 client tests + 4 handler tests.)*
 
 ### 15. `/eval <alias>`
 
@@ -274,8 +276,8 @@ Builds on 7.1 (`/model` reads context window) and 7.2
 
 ### 16. `/help` update
 
-- [x] 16a. Update `/help` text to list `/lastturn`.
-       *(/status, /eval pending their respective tasks.)*
+- [x] 16a. Update `/help` text to list `/lastturn`,
+       `/status`. *(/eval pending its task.)*
 - [ ] 16b. Update `/help` test.
 
 ### 17. Definition of done — Slice 7.3
