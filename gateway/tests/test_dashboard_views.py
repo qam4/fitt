@@ -114,10 +114,6 @@ def test_overview_redirects_without_auth(client: TestClient) -> None:
 @pytest.mark.parametrize(
     "path,nav,title_substring",
     [
-        ("/dashboard/aliases", "aliases", "Aliases"),
-        ("/dashboard/turns", "turns", "Turns"),
-        ("/dashboard/turns/main", "turns", "Turns"),
-        ("/dashboard/turns/main/abc", "turns", "Turns"),
         ("/dashboard/tools", "tools", "Tools"),
         ("/dashboard/cron", "cron", "Cron"),
         ("/dashboard/audit", "audit", "Audit"),
@@ -204,3 +200,325 @@ def test_overview_works_with_session_cookie(client: TestClient) -> None:
     r = client.get("/dashboard/")
     assert r.status_code == 200
     assert "Uptime" in r.text
+
+
+# --------------------------------------------------------------- aliases view
+
+
+def test_aliases_view_lists_each_alias(client: TestClient) -> None:
+    r = client.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "fitt-default" in body
+    assert "fitt-smart" in body
+    assert "fitt-fast" in body
+    # Headers expected on the aliases table.
+    assert "Last eval" in body
+    assert "Dispatched 24h" in body
+
+
+def test_aliases_view_surfaces_fallback(client: TestClient) -> None:
+    """Aliases with a configured fallback render the fallback
+    model id underneath the primary."""
+    r = client.get("/dashboard/aliases", headers=_auth())
+    body = r.text
+    # fitt-default → qwen-big with fallback qwen-small (from
+    # build_test_config).
+    assert "fallback:" in body
+    assert "qwen2.5-coder:7b" in body  # fallback model name
+
+
+def test_aliases_view_surfaces_eval_pass_rate(tmp_path: Path) -> None:
+    """When a rolling eval report exists, the aliases view
+    renders the pass-rate badge."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    from gateway.alias_eval import default_eval_dir
+    from gateway.config import fitt_home
+
+    eval_dir = default_eval_dir(fitt_home())
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    md = "\n".join(
+        [
+            "# Eval report — `fitt-smart`",
+            "",
+            "- Model: `anthropic/claude-sonnet-4.5`",
+            "- Started: 2026-05-22T10:00:00",
+            "- Finished: 2026-05-22T10:00:30",
+            "- Duration: 30000 ms",
+            "- Result: **4/5 passed** (80%)",
+            "",
+        ]
+    )
+    (eval_dir / "fitt-smart-latest.md").write_text(md, encoding="utf-8")
+
+    r = tc.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    # The badge renders the pass-rate; check the literal text.
+    assert "4/5 (80%)" in r.text
+
+
+def test_aliases_view_surfaces_context_window_source(client: TestClient) -> None:
+    cache = client.app.state.context_windows
+    cache._results[("ollama", "qwen-big")] = ContextWindowResult(
+        tokens=32_768,
+        source="modelfile",
+        detail="num_ctx 32768",
+        discovered_at=1779479823.42,
+    )
+    r = client.get("/dashboard/aliases", headers=_auth())
+    body = r.text
+    assert "32k" in body
+    assert "modelfile" in body  # source column
+
+
+def test_aliases_partial_returns_table_only(client: TestClient) -> None:
+    r = client.get("/dashboard/_partials/aliases", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "fitt-default" in body
+    assert '<aside class="sidebar">' not in body  # no nav
+
+
+def test_aliases_view_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/aliases")
+    assert r.status_code == 302
+
+
+# --------------------------------------------------------------- turns view
+
+
+def _make_capture(
+    turn_id: str = "turn-abc",
+    *,
+    session_key: str = "main",
+    started_at: float = 1779479823.42,
+    finished_at: float = 1779479825.81,
+    narration_warning: bool = False,
+    status: str = "ok",
+    prompt_tokens: int = 5400,
+    context_window: int | None = 32768,
+    tool_calls: list | None = None,
+):
+    """Build a TurnCapture for tests. Mirrors the helper in
+    test_turn_capture_endpoint.py — kept local rather than
+    shared so changes to one test file don't surprise the
+    other."""
+    from gateway.turn_capture import TurnCapture
+
+    pct = (prompt_tokens / context_window * 100.0) if context_window else None
+    return TurnCapture(
+        turn_id=turn_id,
+        session_key=session_key,
+        alias="fitt-default",
+        client="telegram",
+        model_used="qwen2.5-coder:14b",
+        backend="ollama",
+        fallback_used=False,
+        started_at=started_at,
+        finished_at=finished_at,
+        dispatched_messages=[
+            {"role": "system", "content": "[Capabilities]\nyou have these tools..."},
+            {"role": "user", "content": "Read README.md"},
+        ],
+        response={
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "I'll read it."},
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+        tool_calls=tool_calls or [],
+        prompt_tokens=prompt_tokens,
+        completion_tokens=89,
+        context_window=context_window,
+        prompt_pct_of_window=pct,
+        finish_reason="stop",
+        narration_warning=narration_warning,
+        iterations=1,
+        status=status,
+    )
+
+
+def test_turns_list_renders_empty(tmp_path: Path) -> None:
+    """A session with no captures renders the empty state, not
+    a crash."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/turns", headers=_auth())
+    assert r.status_code == 200
+    assert "No captured turns" in r.text
+
+
+def test_turns_list_shows_recent_captures(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    store = app.state.turn_capture
+    store.write(_make_capture("turn-aaa"))
+    store.write(_make_capture("turn-bbb", started_at=1779479900.0, finished_at=1779479905.0))
+
+    r = tc.get("/dashboard/turns", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "turn-aaa" in body
+    assert "turn-bbb" in body
+    # The list table renders the alias + model.
+    assert "fitt-default" in body
+    assert "qwen2.5-coder:14b" in body
+    # Prompt + fill columns get rendered.
+    assert "5k" in body  # prompt_tokens=5400 → "5k"
+    assert "16%" in body  # prompt_pct_of_window=16.48 → "16%"
+
+
+def test_turns_list_warns_on_narration(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    store = app.state.turn_capture
+    store.write(_make_capture("narrated", narration_warning=True))
+
+    r = tc.get("/dashboard/turns", headers=_auth())
+    assert r.status_code == 200
+    # The narration badge is rendered for the row.
+    assert "narration" in r.text.lower() or "⚠" in r.text
+
+
+def test_turns_list_session_switcher(tmp_path: Path) -> None:
+    """Sessions with captures appear in the available list so
+    the operator can switch between them."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    store = app.state.turn_capture
+    store.write(_make_capture("aaa", session_key="main"))
+    store.write(_make_capture("bbb", session_key="other"))
+
+    r = tc.get("/dashboard/turns", headers=_auth())
+    assert r.status_code == 200
+    # Both session ids appear in the available-sessions footer.
+    assert "main" in r.text
+    assert "other" in r.text
+
+
+def test_turns_list_takes_session_query(tmp_path: Path) -> None:
+    """``?session=<x>`` switches the rendered list."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    store = app.state.turn_capture
+    store.write(_make_capture("only-other", session_key="other"))
+
+    r = tc.get("/dashboard/turns?session=other", headers=_auth())
+    assert r.status_code == 200
+    assert "only-other" in r.text
+
+
+def test_turns_detail_renders(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    store = app.state.turn_capture
+    store.write(_make_capture("turn-detail"))
+
+    r = tc.get("/dashboard/turns/main/turn-detail", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # Detail view renders the headline metrics.
+    assert "Prompt tokens" in body
+    assert "Completion" in body
+    assert "Latency" in body
+    # The dispatched-messages section renders the system + user.
+    assert "[Capabilities]" in body
+    assert "Read README.md" in body
+    # Source pointer at the bottom.
+    assert "captures/turn-detail" in body
+
+
+def test_turns_detail_renders_tool_calls(tmp_path: Path) -> None:
+    from gateway.turn_capture import CapturedToolCall
+
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    store = app.state.turn_capture
+    cap = _make_capture(
+        "turn-tools",
+        tool_calls=[
+            CapturedToolCall(
+                call_id="c1",
+                tool_name="read_file",
+                args={"project": "fitt", "path": "README.md"},
+                decision="auto",
+                decision_detail="",
+                duration_ms=12,
+                ok=True,
+                result_summary="contents...",
+                artifact_path=None,
+                iteration=0,
+            )
+        ],
+    )
+    store.write(cap)
+
+    r = tc.get("/dashboard/turns/main/turn-tools", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "Tool calls" in body
+    assert "read_file" in body
+    assert "auto" in body
+    assert "12ms" in body
+
+
+def test_turns_detail_404_for_missing(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/turns/main/nonexistent", headers=_auth())
+    assert r.status_code == 404
+    assert "not found" in r.text.lower()
+
+
+def test_turns_view_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/turns")
+    assert r.status_code == 302
+    r = client.get("/dashboard/turns/main")
+    assert r.status_code == 302
+    r = client.get("/dashboard/turns/main/abc")
+    assert r.status_code == 302
+
+
+def test_turns_session_path_traversal_safe(tmp_path: Path) -> None:
+    """A session id with a path-traversal payload sanitises down
+    to something benign — we never want a crafted URL to read
+    files outside sessions/."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    # Try a couple of known-evil shapes. None should 500.
+    for evil in ["..%2Fmain", "../../etc/passwd"]:
+        r = tc.get(f"/dashboard/turns/{evil}", headers=_auth())
+        assert r.status_code in (200, 404)

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% set nav_active = "turns" %}
+{% block title %}FITT dashboard - turn not found{% endblock %}
+{% block content %}
+<p style="margin-top: 0;">
+  <a href="/dashboard/turns/{{ session_key }}">← back to turns</a>
+</p>
+
+<h2>Turn not found</h2>
+<p class="tagline">
+  No capture for turn <code>{{ turn_id }}</code> in session
+  <code>{{ session_key }}</code>.
+</p>
+
+<div class="card">
+  <p>This usually means one of:</p>
+  <ul>
+    <li>The turn id is wrong — capture file names match the
+      <code>turn_id</code> exactly.</li>
+    <li>The originating client opted out of capture (router-mode
+      / <code>coding-agent</code> by default).</li>
+    <li>The capture has been pruned (default
+      <code>memory.history_max_days = 90</code>).</li>
+  </ul>
+  <p class="dim" style="font-size: 12px; margin-top: 12px;">
+    Looked under
+    <code>$FITT_HOME/sessions/{{ session_key }}/turns/&lt;date&gt;/{{ turn_id }}.json</code>.
+  </p>
+</div>
+{% endblock %}

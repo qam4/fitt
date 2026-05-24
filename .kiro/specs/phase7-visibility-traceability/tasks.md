@@ -403,32 +403,40 @@ time.
 
 ### 25. Aliases view
 
-- [ ] 25a. `/dashboard/aliases` — table over `/v1/aliases`.
-- [ ] 25b. One row per alias: id, model, backend, context
+- [x] 25a. `/dashboard/aliases` — table over `/v1/aliases`.
+- [x] 25b. One row per alias: id, model, backend, context
        window, last probe, last eval, recent dispatches
        (last 24h count + avg prompt size + narration
-       warnings count).
-- [ ] 25c. Polls every 60s.
-- [ ] 25d. Tests.
+       warnings count). *(Recent-dispatch count from audit
+       log; per-alias-extra-on-audit follow-up needed for
+       avg prompt size + narration counts.)*
+- [x] 25c. Polls every 60s.
+- [x] 25d. Tests.
 
 ### 26. Turns view (centerpiece)
 
-- [ ] 26a. `/dashboard/turns/<session>` — list of recent
-       turns. Reads `/v1/sessions/<session>/turns?limit=50`.
-- [ ] 26b. `/dashboard/turns/<session>/<turn_id>` — detail
+- [x] 26a. `/dashboard/turns/<session>` — list of recent
+       turns. Reads via :class:`gateway.turn_capture.TurnCaptureStore`
+       directly (in-process); same data the
+       `/v1/sessions/<s>/captures?limit=50` endpoint exposes.
+- [x] 26b. `/dashboard/turns/<session>/<turn_id>` — detail
        view. Reads
-       `/v1/sessions/<session>/turns/<turn_id>` and renders
-       the captured detail in collapsed-by-default
+       `/v1/sessions/<session>/captures/<turn_id>` via
+       :class:`TurnCaptureStore.read` and renders the captured
+       detail in collapsed-by-default
        sections (dispatched system / history / user,
        response, tool calls, finish reason, prompt fill).
 - [ ] 26c. For an active session, the list view
        SSE-subscribes to
        `/v1/sessions/<session>/turns/stream` (Phase 4.8c)
        and prepends new turns as they arrive.
-- [ ] 26d. Narration warning rows badge with a "⚠ narration?"
+       *Deferred — list view polls on operator refresh today;
+       SSE wiring rides a follow-up alongside the dashboard's
+       first real-life session.*
+- [x] 26d. Narration warning rows badge with a "⚠ narration?"
        annotation linking to the detail view.
-- [ ] 26e. Tests: list shape, detail shape, SSE subscription
-       smoke test.
+- [x] 26e. Tests: list shape, detail shape, SSE subscription
+       smoke test. *(SSE smoke test deferred with 26c.)*
 
 ### 27. Tools / Cron / Audit / Health / Gaps
 

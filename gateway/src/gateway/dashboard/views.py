@@ -24,6 +24,7 @@ health, gaps) in this same module.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +34,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from ..alias_eval import default_eval_dir
 from ..config import fitt_home as _fitt_home
 from .auth import authorize_request
 
@@ -234,12 +236,440 @@ def _build_overview_context(request: Request) -> dict[str, Any]:
     }
 
 
-def _stub_view_context(*, title: str, description: str) -> dict[str, Any]:
-    """Render context for the placeholder pages still pending in
-    Slice 7.5. Each links forward to its own task in tasks.md so
-    the operator who clicks early sees what's missing instead of
-    a 404."""
-    return {"title": title, "description": description}
+# --------------------------------------------------------------- aliases
+
+
+# Mirrors the regex in :mod:`gateway.aliases_endpoint`. Kept as a
+# private duplicate here because the endpoint module's parser is
+# closed over file IO and a regex compile cost we don't want to
+# import for every dashboard render.
+_EVAL_RESULT_RE = re.compile(
+    r"^-\s+Result:\s+\*\*(?P<passed>\d+)/(?P<total>\d+)\s+passed\*\*\s+\((?P<pct>\d+)%\)"
+)
+_EVAL_FINISHED_RE = re.compile(r"^-\s+Finished:\s+(?P<iso>\S+)")
+
+
+def _parse_eval_report(path: Path) -> dict[str, Any] | None:
+    """Read the rolling per-alias eval report header. Returns the
+    summary dict or ``None`` when the file's missing / unparseable.
+    Same parser the ``/v1/aliases`` endpoint uses; duplicated
+    locally to avoid the cross-module import for the dashboard's
+    hot path."""
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    passed: int | None = None
+    total: int | None = None
+    finished_iso: str | None = None
+    for line in text.splitlines()[:30]:
+        m = _EVAL_RESULT_RE.match(line)
+        if m is not None:
+            passed = int(m.group("passed"))
+            total = int(m.group("total"))
+            continue
+        m = _EVAL_FINISHED_RE.match(line)
+        if m is not None:
+            finished_iso = m.group("iso")
+        if passed is not None and finished_iso is not None:
+            break
+    if passed is None or total is None:
+        return None
+    return {
+        "passed": passed,
+        "total": total,
+        "pass_rate": passed / total if total > 0 else 0.0,
+        "finished_iso": finished_iso,
+    }
+
+
+def _format_eval_cell(report: dict[str, Any] | None) -> str:
+    """Render the last-eval column. Returns HTML so we can include
+    a colour-coded pass-rate badge. Caller marks the value safe in
+    the template."""
+    if report is None:
+        return '<span class="dim">—</span>'
+    passed = report["passed"]
+    total = report["total"]
+    pct = round(report["pass_rate"] * 100)
+    if pct >= 90:
+        cls = "badge"
+    elif pct >= 60:
+        cls = "badge-warn"
+    else:
+        cls = "badge-error"
+    return f'<span class="{cls}">{passed}/{total} ({pct}%)</span>'
+
+
+def _count_dispatches_last_24h(audit: Any) -> dict[str, int]:
+    """Walk the audit log and count tool-call entries per alias
+    over the last 24 hours.
+
+    The audit log doesn't carry an alias field directly — what
+    it does carry is the tool name (and ``extra`` payloads when
+    the tool registered them). Per-alias dispatch volume isn't
+    something the audit log surfaces today. For the v0 aliases
+    view we approximate via the ``audit.extra.alias`` field
+    where present, falling back to zero counts when absent.
+
+    A future commit will land per-turn dispatch metadata in the
+    audit log so this aggregation stops being best-effort. The
+    placeholder shape keeps the dashboard honest about what
+    it knows."""
+    counts: dict[str, int] = {}
+    if audit is None:
+        return counts
+    cutoff = time.time() - 86400
+    try:
+        entries = audit.iter_entries()
+    except Exception:
+        return counts
+    for entry in entries:
+        try:
+            ts = float(entry.get("ts", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if ts < cutoff:
+            continue
+        extra = entry.get("extra") or {}
+        alias = extra.get("alias") if isinstance(extra, dict) else None
+        if isinstance(alias, str) and alias:
+            counts[alias] = counts.get(alias, 0) + 1
+    return counts
+
+
+def _build_aliases_context(request: Request) -> dict[str, Any]:
+    """Same alias enumeration as the overview but with the full
+    detail set the aliases view renders: fallback model id,
+    discovery source, last-eval summary, recent dispatch count.
+    """
+    app = request.app
+    config = app.state.config
+    home = _fitt_home()
+    now = time.time()
+
+    cache = getattr(app.state, "context_windows", None)
+    probe_results: dict[str, Any] = getattr(app.state, "alias_probe_results", {}) or {}
+    audit = getattr(app.state, "audit", None)
+    dispatch_counts = _count_dispatches_last_24h(audit)
+    eval_dir = default_eval_dir(home)
+
+    alias_rows: list[dict[str, Any]] = []
+    for alias in config.alias_names():
+        chain = config.resolve_alias(alias)
+        primary = chain[0]
+        fallback = chain[1] if len(chain) > 1 else None
+
+        cw_tokens: int | None = None
+        cw_source = "—"
+        if cache is not None:
+            cw = cache.get(primary.backend, primary.id)
+            if cw is not None:
+                cw_tokens = cw.tokens
+                cw_source = cw.source
+
+        probe = probe_results.get(alias)
+        if probe is not None and probe.status == "ok":
+            pip = "ok"
+            last_probe_text = "ok"
+        elif probe is not None and probe.status == "skipped_no_api_key":
+            pip = "warn"
+            last_probe_text = "skipped — no api_key"
+        elif probe is not None:
+            pip = "error"
+            last_probe_text = probe.status
+        else:
+            pip = "unknown"
+            last_probe_text = "not probed"
+
+        eval_report = _parse_eval_report(eval_dir / f"{alias}-latest.md")
+
+        alias_rows.append(
+            {
+                "id": alias,
+                "model": primary.model,
+                "fallback": fallback.model if fallback else None,
+                "backend": primary.backend,
+                "context_window_human": (_fmt_tokens(cw_tokens) if cw_tokens is not None else "?"),
+                "context_source": cw_source,
+                "pip": pip,
+                "last_probe_text": last_probe_text,
+                "last_eval_text": _format_eval_cell(eval_report),
+                "dispatched_24h": dispatch_counts.get(alias, 0),
+            }
+        )
+
+    return {
+        "alias_rows": alias_rows,
+        "generated_at_human": datetime.fromtimestamp(now, tz=UTC).strftime("%H:%M:%S UTC"),
+    }
+
+
+# --------------------------------------------------------------- turns
+
+
+def _safe_session_key(s: str) -> str:
+    """Reject anything that doesn't look like a valid session id —
+    a path-traversal attempt via the URL would otherwise let an
+    operator browse arbitrary directories under sessions/.
+    Mirror of :data:`gateway.sessions.SESSION_ID_PATTERN`'s
+    intent: lowercase letters, digits, hyphens.
+    """
+    if not s:
+        return "main"
+    cleaned = "".join(c for c in s if c.isalnum() or c in "-_")
+    return cleaned[:64] or "main"
+
+
+def _format_message_preview(content: Any) -> str:
+    """First-line preview for the ``dispatched_messages`` list.
+    Each capture stores the OpenAI-shape ``content`` field, which
+    can be a string, a list of content parts, or None for tool
+    messages."""
+    if content is None:
+        return "(no content)"
+    if isinstance(content, str):
+        flat = content.replace("\n", " ").strip()
+        return flat[:120] + ("…" if len(flat) > 120 else "")
+    if isinstance(content, list):
+        # OpenAI multi-part content. Concatenate text parts.
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                parts.append(str(part.get("text", "")))
+        flat = " ".join(parts).replace("\n", " ").strip()
+        return flat[:120] + ("…" if len(flat) > 120 else "")
+    return str(content)[:120]
+
+
+def _format_message_full(content: Any) -> str:
+    """Renderable form for the ``<pre>`` body. Strings are passed
+    through; multi-part content is flattened with one part per
+    line so the structure stays visible."""
+    if content is None:
+        return "(no content)"
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out_lines: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                ptype = part.get("type", "?")
+                if ptype == "text":
+                    out_lines.append(str(part.get("text", "")))
+                else:
+                    out_lines.append(f"[{ptype}] {part!r}")
+            else:
+                out_lines.append(str(part))
+        return "\n\n".join(out_lines)
+    return str(content)
+
+
+def _flatten_response_text(response: dict[str, Any]) -> str:
+    """Pull the assistant text out of a LiteLLM response dict.
+    Returns ``""`` when the response had no choices or only tool
+    calls. Best-effort — the dashboard renders the full JSON in a
+    collapsed pre block separately, so even an unparseable response
+    doesn't break the view."""
+    try:
+        choices = response.get("choices") or []
+        if not choices:
+            return ""
+        msg = choices[0].get("message") or {}
+        text = msg.get("content")
+        if text is None:
+            return ""
+        if isinstance(text, str):
+            return text
+        return str(text)
+    except (AttributeError, IndexError, TypeError):
+        return ""
+
+
+def _list_capture_sessions(sessions_dir: Path) -> list[str]:
+    """Walk the sessions/ directory looking for any session that
+    has a ``turns/`` subdirectory with at least one capture file.
+    Best-effort: a missing or unreadable sessions dir returns []."""
+    if not sessions_dir.exists():
+        return []
+    try:
+        candidates = [p for p in sessions_dir.iterdir() if p.is_dir()]
+    except OSError:
+        return []
+    out: list[str] = []
+    for sd in candidates:
+        turns_dir = sd / "turns"
+        if not turns_dir.exists():
+            continue
+        try:
+            has_capture = any(d.is_dir() for d in turns_dir.iterdir())
+        except OSError:
+            continue
+        if has_capture:
+            out.append(sd.name)
+    out.sort(key=lambda s: (s != "main", s))
+    return out
+
+
+def _build_turn_list_context(
+    request: Request, *, session_key: str, limit: int = 50
+) -> dict[str, Any]:
+    """Assemble the turns-list page context from the capture
+    store. The store handles the per-day directory walk; we
+    annotate each summary dict with display-ready fields."""
+    store = getattr(request.app.state, "turn_capture", None)
+    if store is None:
+        return {
+            "session_key": session_key,
+            "turns": [],
+            "limit": limit,
+            "available_sessions": [],
+        }
+    raw = store.list_recent(session_key, limit=limit)
+    turns: list[dict[str, Any]] = []
+    for s in raw:
+        started = float(s.get("started_at", 0.0))
+        finished = float(s.get("finished_at", started))
+        turns.append(
+            {
+                "turn_id": s["turn_id"],
+                "started_iso": _fmt_iso(started),
+                "age_human": _fmt_age(started),
+                "alias": s.get("alias", "?"),
+                "model_used": s.get("model_used", "?"),
+                "prompt_human": _fmt_tokens(s.get("prompt_tokens")),
+                "fill_human": (
+                    f"{s['prompt_pct_of_window']:.0f}%"
+                    if s.get("prompt_pct_of_window") is not None
+                    else "—"
+                ),
+                "tool_calls_count": s.get("tool_calls_count", 0),
+                "finish_reason": s.get("finish_reason"),
+                "narration_warning": bool(s.get("narration_warning")),
+                "status": s.get("status", "ok"),
+                "latency_ms": int(max(0.0, (finished - started) * 1000)),
+            }
+        )
+
+    config = request.app.state.config
+    available = _list_capture_sessions(config.memory.sessions_dir)
+    return {
+        "session_key": session_key,
+        "turns": turns,
+        "limit": limit,
+        "available_sessions": available,
+    }
+
+
+def _build_turn_detail_context(
+    request: Request, *, session_key: str, turn_id: str
+) -> dict[str, Any] | None:
+    """Assemble the per-turn detail context. Returns ``None``
+    when the capture isn't found — the route handler turns that
+    into a 404."""
+    import json as _json
+
+    store = getattr(request.app.state, "turn_capture", None)
+    if store is None:
+        return None
+    cap = store.read(session_key, turn_id)
+    if cap is None:
+        return None
+
+    started = cap.started_at
+    finished = cap.finished_at
+    latency_ms = int(max(0.0, (finished - started) * 1000))
+
+    messages: list[dict[str, Any]] = []
+    for m in cap.dispatched_messages:
+        if not isinstance(m, dict):
+            continue
+        messages.append(
+            {
+                "role": m.get("role", "?"),
+                "content_preview": _format_message_preview(m.get("content")),
+                "content_full": _format_message_full(m.get("content")),
+            }
+        )
+
+    tool_calls: list[dict[str, Any]] = []
+    for tc in cap.tool_calls:
+        tool_calls.append(
+            {
+                "iteration": tc.iteration,
+                "tool_name": tc.tool_name,
+                "decision": tc.decision,
+                "decision_detail": tc.decision_detail,
+                "duration_ms": tc.duration_ms,
+                "ok": tc.ok,
+                "args_json": _json.dumps(tc.args, indent=2, ensure_ascii=False),
+                "result_summary": tc.result_summary,
+                "artifact_path": tc.artifact_path,
+            }
+        )
+
+    day = datetime.fromtimestamp(finished, tz=UTC).strftime("%Y-%m-%d")
+
+    turn = {
+        "turn_id": cap.turn_id,
+        "alias": cap.alias,
+        "client": cap.client,
+        "model_used": cap.model_used,
+        "backend": cap.backend,
+        "fallback_used": cap.fallback_used,
+        "started_iso": _fmt_iso(started),
+        "finished_iso": _fmt_iso(finished),
+        "prompt_human": _fmt_tokens(cap.prompt_tokens),
+        "completion_human": _fmt_tokens(cap.completion_tokens),
+        "context_window_human": (_fmt_tokens(cap.context_window) if cap.context_window else "?"),
+        "fill_human": (
+            f"{cap.prompt_pct_of_window:.0f}%" if cap.prompt_pct_of_window is not None else "—"
+        ),
+        "latency_human": (f"{latency_ms / 1000:.2f}s" if latency_ms >= 1000 else f"{latency_ms}ms"),
+        "iterations": cap.iterations,
+        "tool_calls_count": len(cap.tool_calls),
+        "finish_reason": cap.finish_reason,
+        "narration_warning": cap.narration_warning,
+        "status": cap.status,
+        "dispatched_messages": messages,
+        "tool_calls": tool_calls,
+        "response_pretty": _json.dumps(cap.response, indent=2, ensure_ascii=False),
+        "response_text": _flatten_response_text(cap.response),
+        "day": day,
+    }
+    return {"session_key": session_key, "turn": turn}
+
+
+def _render_turn_list(request: Request, *, session_key: str | None, client: str) -> Response:
+    key = _safe_session_key(session_key or "main")
+    ctx = _build_turn_list_context(request, session_key=key)
+    ctx["client"] = client
+    return templates.TemplateResponse(request, "turns_list.html", ctx)
+
+
+def _render_turn_detail(
+    request: Request, *, session_key: str, turn_id: str, client: str
+) -> Response:
+    key = _safe_session_key(session_key)
+    # Don't sanitise turn_id — it's a UUID; characters outside
+    # [0-9a-f-] would fail the file lookup naturally.
+    ctx = _build_turn_detail_context(request, session_key=key, turn_id=turn_id)
+    if ctx is None:
+
+        body = templates.TemplateResponse(
+            request,
+            "turn_not_found.html",
+            {"client": client, "session_key": key, "turn_id": turn_id},
+            status_code=404,
+        )
+        return body
+    ctx["client"] = client
+    return templates.TemplateResponse(request, "turns_detail.html", ctx)
+
+
+# --------------------------------------------------------------- placeholder helper
 
 
 def build_views_router() -> APIRouter:
@@ -272,16 +702,26 @@ def build_views_router() -> APIRouter:
             ctx,
         )
 
-    # --------------------------------------------------------- placeholders
+    # --------------------------------------------------------- aliases
 
     @router.get("/aliases", response_class=HTMLResponse)
     async def aliases_view(request: Request) -> Response:
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        # Placeholder until Task 25 lands.
-        return _placeholder(request, page="aliases", title="Aliases")
+        ctx = _build_aliases_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "aliases.html", ctx)
 
+    @router.get("/_partials/aliases", response_class=HTMLResponse)
+    async def aliases_partial(request: Request) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        ctx = _build_aliases_context(request)
+        return templates.TemplateResponse(request, "_aliases_panel.html", ctx)
+
+    # --------------------------------------------------------- turns
     @router.get("/turns", response_class=HTMLResponse)
     @router.get("/turns/{session}", response_class=HTMLResponse)
     @router.get("/turns/{session}/{turn_id}", response_class=HTMLResponse)
@@ -293,7 +733,19 @@ def build_views_router() -> APIRouter:
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        return _placeholder(request, page="turns", title="Turns")
+        client = getattr(request.state, "client", "webui")
+        if turn_id is not None and session is not None:
+            return _render_turn_detail(
+                request,
+                session_key=session,
+                turn_id=turn_id,
+                client=client,
+            )
+        return _render_turn_list(
+            request,
+            session_key=session,
+            client=client,
+        )
 
     @router.get("/tools", response_class=HTMLResponse)
     async def tools_view(request: Request) -> Response:

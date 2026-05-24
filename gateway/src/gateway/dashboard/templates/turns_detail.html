@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% set nav_active = "turns" %}
+{% block title %}FITT dashboard - turn {{ turn.turn_id[:8] }}{% endblock %}
+{% block content %}
+<p style="margin-top: 0;">
+  <a href="/dashboard/turns/{{ session_key }}">← back to turns</a>
+</p>
+
+<h2>Turn <code>{{ turn.turn_id }}</code></h2>
+<p class="tagline">
+  {{ turn.alias }} → <code>{{ turn.model_used }}</code> on
+  <code>{{ turn.backend }}</code>
+  · {{ turn.started_iso }}
+  {% if turn.fallback_used %} · <span class="badge-warn badge">fallback</span>{% endif %}
+  {% if turn.narration_warning %} · <span class="badge-warn badge">⚠ narration?</span>{% endif %}
+  {% if turn.status != "ok" %} · <span class="badge-error badge">{{ turn.status }}</span>{% endif %}
+</p>
+
+<div class="grid">
+  <div class="metric">
+    <div class="label">Prompt tokens</div>
+    <div class="value">{{ turn.prompt_human }}</div>
+    {% if turn.fill_human != "—" %}
+    <div class="sub">{{ turn.fill_human }} of {{ turn.context_window_human }}</div>
+    {% endif %}
+  </div>
+  <div class="metric">
+    <div class="label">Completion</div>
+    <div class="value">{{ turn.completion_human }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">Latency</div>
+    <div class="value">{{ turn.latency_human }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">Iterations</div>
+    <div class="value">{{ turn.iterations }}</div>
+    <div class="sub">{{ turn.tool_calls_count }} tool calls</div>
+  </div>
+</div>
+
+{% if turn.tool_calls %}
+<div class="card">
+  <h3>Tool calls</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th></th>
+        <th>Name</th>
+        <th>Decision</th>
+        <th class="right">Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for tc in turn.tool_calls %}
+      <tr>
+        <td class="dim mono">{{ tc.iteration }}</td>
+        <td>
+          {% if tc.ok %}
+            <span class="pip pip-ok"></span>
+          {% else %}
+            <span class="pip pip-error"></span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ tc.tool_name }}</td>
+        <td class="dim">{{ tc.decision }}{% if tc.decision_detail %} <span class="dim" style="font-size: 11px;">({{ tc.decision_detail }})</span>{% endif %}</td>
+        <td class="right mono dim">{{ tc.duration_ms }}ms</td>
+      </tr>
+      <tr>
+        <td></td>
+        <td colspan="4">
+          <details>
+            <summary class="dim" style="font-size: 12px; cursor: pointer;">args + result</summary>
+            <pre>args: {{ tc.args_json }}
+
+result: {{ tc.result_summary }}{% if tc.artifact_path %}
+(full payload at {{ tc.artifact_path }}){% endif %}</pre>
+          </details>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Dispatched messages</h3>
+  <p class="dim" style="font-size: 12px;">
+    The full message list as sent to LiteLLM for the final iteration of
+    the tool loop — exactly what the model saw.
+  </p>
+  {% for m in turn.dispatched_messages %}
+  <details {% if loop.first %}open{% endif %}>
+    <summary>
+      <strong>{{ loop.index }}. {{ m.role }}</strong>
+      {% if m.content_preview %}
+        <span class="dim" style="font-size: 12px; margin-left: 8px;">{{ m.content_preview }}</span>
+      {% endif %}
+    </summary>
+    <pre>{{ m.content_full }}</pre>
+  </details>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h3>Response</h3>
+  <details>
+    <summary class="dim" style="font-size: 12px; cursor: pointer;">show full upstream response</summary>
+    <pre>{{ turn.response_pretty }}</pre>
+  </details>
+  {% if turn.response_text %}
+  <p class="dim" style="font-size: 12px; margin-top: 12px;">assistant text:</p>
+  <pre>{{ turn.response_text }}</pre>
+  {% endif %}
+</div>
+
+<div class="card compact">
+  <h3>Source</h3>
+  <div class="dim" style="font-size: 12px;">
+    capture file:
+    <code>$FITT_HOME/sessions/{{ session_key }}/turns/{{ turn.day }}/{{ turn.turn_id }}.json</code>
+  </div>
+  <div class="dim" style="font-size: 12px; margin-top: 4px;">
+    HTTP: <code>GET /v1/sessions/{{ session_key }}/captures/{{ turn.turn_id }}</code>
+  </div>
+</div>
+{% endblock %}

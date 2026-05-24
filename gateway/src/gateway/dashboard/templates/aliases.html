@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% set nav_active = "aliases" %}
+{% block title %}FITT dashboard - aliases{% endblock %}
+{% block content %}
+<h2>Aliases</h2>
+<p class="tagline">Per-binding state — model, backend, context window, last probe, last eval.</p>
+
+<div hx-get="/dashboard/_partials/aliases" hx-trigger="load, every 60s" hx-swap="innerHTML">
+  {% include "_aliases_panel.html" %}
+</div>
+{% endblock %}

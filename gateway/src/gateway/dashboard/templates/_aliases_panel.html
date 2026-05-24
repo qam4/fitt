@@ -1,0 +1,48 @@
+{# Aliases table fragment. Refreshed every 60s by HTMX.
+
+   One row per alias, with everything Slice 7.1's discovery
+   surfaces plus the per-alias eval pass-rate from the rolling
+   report. The recent-dispatches column reads from the audit log
+   (last 24h) so the operator can tell at a glance whether an
+   alias has been used and whether anything's been odd.
+#}
+<div class="card">
+  {% if alias_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>Alias</th>
+        <th>Model</th>
+        <th>Backend</th>
+        <th class="right">Context window</th>
+        <th>Source</th>
+        <th>Last probe</th>
+        <th class="right">Last eval</th>
+        <th class="right">Dispatched 24h</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in alias_rows %}
+      <tr>
+        <td><span class="pip pip-{{ row.pip }}"></span></td>
+        <td class="mono">{{ row.id }}</td>
+        <td class="mono">{{ row.model }}{% if row.fallback %}<br><span class="dim" style="font-size: 11px;">fallback: {{ row.fallback }}</span>{% endif %}</td>
+        <td class="mono dim">{{ row.backend }}</td>
+        <td class="right mono">{{ row.context_window_human }}</td>
+        <td class="dim mono">{{ row.context_source }}</td>
+        <td class="dim">{{ row.last_probe_text }}</td>
+        <td class="right">{{ row.last_eval_text|safe }}</td>
+        <td class="right mono">{{ row.dispatched_24h }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No aliases configured.</div>
+  {% endif %}
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  refreshed at {{ generated_at_human }}
+</p>
