@@ -1009,6 +1009,44 @@ docker compose restart open-webui
 
 Then redo the two bootstrap steps above.
 
+## Step 16.5 - Operator dashboard
+
+The gateway also exposes a small read-only dashboard at
+`/dashboard/` for the longer debugging sessions that don't fit on
+a phone screen. Useful when something looks weird and you want to
+walk back through what FITT actually did rather than reconstruct
+it from logs.
+
+From your laptop or hub browser on Tailscale:
+
+```
+http://<hub-tailscale-ip>:8421/dashboard/
+```
+
+Paste any of your bearer tokens into the login form; the cookie
+is good for 24 hours.
+
+The eight views cover what Telegram surfaces plus what you'd want
+in front of you with a real keyboard:
+
+- **Overview** — at-a-glance "is FITT okay" snapshot.
+- **Aliases** — per-binding state (model, backend, context window,
+  last probe, last eval pass-rate).
+- **Turns** — per-session turn browser. Click any captured turn
+  to see exactly what the model saw — dispatched system prompt,
+  history, user message, response, tool-call chain, prompt fill
+  percent. The traceability centerpiece; this is what makes "this
+  reply looked weird" a 30-second lookup.
+- **Tools / Cron / Audit / Health / Gaps** — registered tools,
+  scheduled jobs, audit log tail, system status, capability-gap
+  log ranked by frequency.
+
+The dashboard is read-only in v0 — editing config, secrets,
+projects, cron, identity, lessons through the UI is a follow-up.
+The CLI stays authoritative.
+
+See `gateway/README.md` for the per-route reference.
+
 ---
 
 # Part D — Wire up a project (optional; needed for tool-capable chat)

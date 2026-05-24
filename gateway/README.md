@@ -301,6 +301,58 @@ Probes every alias's primary + fallback. Returns 200 when every alias
 has at least one reachable backend, 503 otherwise with the list of
 failing aliases.
 
+## Dashboard
+
+A small read-only operator UI lives at `/dashboard/`. Reach it from
+any browser on the tailnet:
+
+```
+http://<hub>:8421/dashboard/
+```
+
+### Logging in
+
+The dashboard is gated by the same Bearer tokens as `/v1/*`, but
+adds a browser-friendly cookie path on top:
+
+1. Open `/dashboard/` — unauthenticated requests redirect to
+   `/dashboard/login`.
+2. Paste any of the bearer tokens from `secrets.yaml::allowed_tokens`.
+3. The form sets a 24-hour HTTP-only cookie signed with a key at
+   `$FITT_HOME/dashboard.key` (0600, generated on first use).
+4. `/dashboard/logout` clears the cookie.
+
+Tools that prefer a header can keep using
+`Authorization: Bearer <token>` against any `/dashboard/*` route —
+the cookie path is purely for the browser.
+
+### Views
+
+| Route | Purpose |
+|---|---|
+| `/dashboard/` | Overview — "is FITT okay?" snapshot, alias status pips, subsystem cards. Refreshes every 30s. |
+| `/dashboard/aliases` | Per-binding detail — model, backend, context window, last probe, last eval. |
+| `/dashboard/turns` | Per-session turn browser. The traceability centerpiece; click any turn to see the full dispatched message list, response, tool calls, and prompt fill. |
+| `/dashboard/turns/<session>/<turn_id>` | Direct link to a captured turn's detail. Useful for "why did this Telegram reply look weird?" — open it from `X-FITT-Turn-Id` on the response header. |
+| `/dashboard/tools` | Registered tools, default approval bucket, last invocation. |
+| `/dashboard/cron` | Scheduled jobs (read-only; edit via `fitt cron` CLI). |
+| `/dashboard/audit` | Audit log tail with `?tool=<name>` filter. |
+| `/dashboard/health` | Same data as `/v1/status`. |
+| `/dashboard/gaps` | Capability-gap log, ranked by frequency — the next-tool-to-build backlog. |
+
+### What it doesn't do
+
+Phase 7 ships a v0 dashboard. By design:
+
+- **Read-only.** Editing config, secrets, projects, cron, identity,
+  or lessons through the UI is a follow-up. The CLI stays
+  authoritative.
+- **No chat surface.** Telegram and Open WebUI cover that. Adding a
+  third would clutter the operator pane.
+- **Tailscale-only by default.** The gateway's bind posture
+  applies; if you expose it publicly, layer your own reverse proxy.
+- **Single-operator.** Per-user authorization is a follow-up.
+
 ## Failure handling
 
 | Upstream behavior                      | Gateway response                                  |

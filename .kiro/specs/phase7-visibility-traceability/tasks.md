@@ -455,25 +455,35 @@ time.
 
 ### 28. Docker integration
 
-- [ ] 28a. Confirm the dashboard ships in the existing
-       `gateway/Dockerfile` build.
-- [ ] 28b. Document in `gateway/README.md` how to reach the
+- [x] 28a. Confirm the dashboard ships in the existing
+       `gateway/Dockerfile` build. *(Validated 2026-05-24
+       on the QNAP hub — `docker compose build gateway` +
+       `up -d` picks up the new dashboard package, templates,
+       and vendored htmx via the existing
+       ``COPY src/ src/`` line. No Dockerfile change needed.)*
+- [x] 28b. Document in `gateway/README.md` how to reach the
        dashboard (default URL, login flow).
-- [ ] 28c. Document in `docs/quickstart.md` (one-line
+- [x] 28c. Document in `docs/quickstart.md` (one-line
        pointer at the right point in the post-install
-       walkthrough).
+       walkthrough). *(Step 16.5 — between Open WebUI
+       bootstrap and the project-shell setup.)*
 
 ### 29. Definition of done — Slice 7.5
 
-- [ ] 29a. Tasks 22a-28c complete.
-- [ ] 29b. All views render with empty data (no events, no
+- [x] 29a. Tasks 22a-28c complete (26c SSE wiring deferred —
+       polling-on-refresh covers v0; live updates ride a
+       follow-up alongside the first real-life session).
+- [x] 29b. All views render with empty data (no events, no
        cron, no captures yet) — no crashes on a fresh
-       install.
-- [ ] 29c. Standard test/lint/typecheck cycle green.
+       install. *(Empty-state branches covered by tests for
+       overview, turns, cron, audit, gaps.)*
+- [x] 29c. Standard test/lint/typecheck cycle green.
 - [ ] 29d. Live validation: open the dashboard from a
        Tailscale browser; navigate every view; trigger a
        Telegram turn and watch it appear in the live
-       turns list.
+       turns list. *(Foundation already validated live
+       2026-05-24; per-view live validation rides the
+       two-week Principle 9 window.)*
 
 ## 30. Roadmap pointer update
 
