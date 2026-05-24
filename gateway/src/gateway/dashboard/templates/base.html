@@ -1,0 +1,46 @@
+{# Base template for every dashboard view.
+
+   Layout: left sidebar with navigation, main content area on
+   the right. The sidebar's `active` class lights up based on
+   `nav_active`, which each child template sets in its own
+   block.
+
+   HTMX is loaded once here so partial-update views can use
+   `hx-get` / `hx-trigger="every Ns"` without reloading
+   anything. CSS is also one file; we don't ship per-view
+   stylesheets.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}FITT dashboard{% endblock %}</title>
+<link rel="stylesheet" href="/dashboard/static/style.css">
+<script src="/dashboard/static/htmx.min.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <h1>FITT</h1>
+    <nav>
+      <a href="/dashboard/" class="{% if nav_active == 'overview' %}active{% endif %}">Overview</a>
+      <a href="/dashboard/aliases" class="{% if nav_active == 'aliases' %}active{% endif %}">Aliases</a>
+      <a href="/dashboard/turns" class="{% if nav_active == 'turns' %}active{% endif %}">Turns</a>
+      <a href="/dashboard/tools" class="{% if nav_active == 'tools' %}active{% endif %}">Tools</a>
+      <a href="/dashboard/cron" class="{% if nav_active == 'cron' %}active{% endif %}">Cron</a>
+      <a href="/dashboard/audit" class="{% if nav_active == 'audit' %}active{% endif %}">Audit</a>
+      <a href="/dashboard/health" class="{% if nav_active == 'health' %}active{% endif %}">Health</a>
+      <a href="/dashboard/gaps" class="{% if nav_active == 'gaps' %}active{% endif %}">Gaps</a>
+    </nav>
+    <div class="footer">
+      <div>signed in as <code>{{ client }}</code></div>
+      <div><a href="/dashboard/logout">sign out</a></div>
+    </div>
+  </aside>
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+</body>
+</html>

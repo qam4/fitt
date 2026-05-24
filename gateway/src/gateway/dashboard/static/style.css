@@ -1,0 +1,352 @@
+/* FITT dashboard - small operator UI.
+   Terminal-ish, monospace-friendly, dark by default.
+   Designed to fit on a desktop browser without surprises;
+   no responsive complexity, no theme switcher.
+   Operators get one job: see what FITT is doing. */
+
+:root {
+  --bg: #1a1a1a;
+  --panel: #222;
+  --border: #333;
+  --text: #ddd;
+  --text-dim: #888;
+  --text-bright: #fff;
+  --accent: #2a6;
+  --accent-dim: #19534a;
+  --warn: #d80;
+  --error: #d44;
+  --link: #8ac;
+  --code-bg: #161616;
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code, pre, .mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+code {
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+pre {
+  background: var(--code-bg);
+  padding: 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------ layout */
+
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 200px;
+  background: #161616;
+  border-right: 1px solid var(--border);
+  padding: 20px 0;
+  flex-shrink: 0;
+}
+
+.sidebar h1 {
+  margin: 0 20px 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-bright);
+  letter-spacing: 0.4px;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar nav a {
+  display: block;
+  padding: 8px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+  border-left: 3px solid transparent;
+}
+
+.sidebar nav a:hover {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.sidebar nav a.active {
+  color: var(--text-bright);
+  border-left-color: var(--accent);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.sidebar .footer {
+  position: fixed;
+  bottom: 16px;
+  left: 0;
+  width: 200px;
+  padding: 0 20px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.sidebar .footer a {
+  color: var(--text-dim);
+}
+
+.main {
+  flex: 1;
+  padding: 24px 32px;
+  max-width: 1400px;
+  overflow-x: auto;
+}
+
+.main h2 {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--text-bright);
+}
+
+.main .tagline {
+  margin: 0 0 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------ cards */
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.card h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-bright);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.card.compact {
+  padding: 12px 16px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.metric {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+}
+
+.metric .label {
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.metric .value {
+  color: var(--text-bright);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.metric .sub {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* ------------------------------------------------------ tables */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+td.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+td.dim {
+  color: var(--text-dim);
+}
+
+td.right {
+  text-align: right;
+}
+
+/* ------------------------------------------------------ status pips */
+
+.pip {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.pip-ok { background: var(--accent); }
+.pip-warn { background: var(--warn); }
+.pip-error { background: var(--error); }
+.pip-unknown { background: var(--text-dim); }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.badge-warn {
+  background: rgba(216, 136, 0, 0.15);
+  color: var(--warn);
+}
+
+.badge-error {
+  background: rgba(212, 68, 68, 0.15);
+  color: var(--error);
+}
+
+.badge-dim {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------ forms */
+
+button, input, select {
+  font-family: inherit;
+  font-size: 14px;
+}
+
+input[type=text], input[type=password], input[type=search] {
+  padding: 6px 10px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  color: var(--text-bright);
+  border-radius: 4px;
+}
+
+input[type=text]:focus, input[type=password]:focus, input[type=search]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+button {
+  padding: 6px 14px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent);
+  color: var(--text-bright);
+}
+
+/* ------------------------------------------------------ misc */
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 6px 12px;
+  font-size: 13px;
+}
+
+.kv .k {
+  color: var(--text-dim);
+}
+
+.kv .v {
+  color: var(--text);
+  word-break: break-all;
+}
+
+.kv .v code {
+  font-size: 12px;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}

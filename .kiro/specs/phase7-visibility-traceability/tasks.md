@@ -372,24 +372,34 @@ time.
 
 ### 23. Static assets and templates
 
-- [ ] 23a. `gateway/src/gateway/dashboard/static/style.css` —
+- [x] 23a. `gateway/src/gateway/dashboard/static/style.css` —
        small, terminal-ish, monospace-friendly.
-- [ ] 23b. `gateway/src/gateway/dashboard/static/htmx.min.js`
-       — bundled, vendored. Pin version.
-- [ ] 23c. `gateway/src/gateway/dashboard/templates/base.html` —
+- [x] 23b. `gateway/src/gateway/dashboard/static/htmx.min.js`
+       — bundled, vendored. Pin version. *(htmx 2.0.7
+       vendored 2026-05-24.)*
+- [x] 23c. `gateway/src/gateway/dashboard/templates/base.html` —
        layout, nav, embed-htmx, embed-style.
-- [ ] 23d. Templates for each view (one per page below).
+- [x] 23d. Templates for each view (one per page below).
+       *Foundation slice ships base.html + login.html +
+       overview.html + _overview_panel.html + placeholder.html.
+       Per-view templates land alongside their data wiring in
+       Tasks 25-27.*
 
 ### 24. Overview page
 
-- [ ] 24a. `/dashboard` (root, after login) → overview.
+- [x] 24a. `/dashboard` (root, after login) → overview.
        Reads `/v1/aliases`, recent events count, MCP
-       server status.
-- [ ] 24b. "Is FITT okay right now?" snapshot with
+       server status. *(Reads in-process state directly via
+       :mod:`gateway.dashboard.views`, not the HTTP endpoint.
+       Same data backbone as the endpoints expose; no extra
+       round-trip on the request hot path.)*
+- [x] 24b. "Is FITT okay right now?" snapshot with
        per-alias one-liner status, recent failure count,
        gateway uptime, links to detail views.
-- [ ] 24c. Polls every 30s via HTMX.
-- [ ] 24d. Tests.
+- [x] 24c. Polls every 30s via HTMX. *(Partial endpoint
+       at ``/dashboard/_partials/overview`` swapped via
+       ``hx-get`` + ``hx-trigger="every 30s"``.)*
+- [x] 24d. Tests.
 
 ### 25. Aliases view
 

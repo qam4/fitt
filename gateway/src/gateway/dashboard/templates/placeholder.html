@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}FITT dashboard - {{ title }}{% endblock %}
+{% block content %}
+<h2>{{ title }}</h2>
+<p class="tagline">This view is still pending in Slice 7.5.</p>
+
+<div class="card">
+  <p>The dashboard's data backbone is wired (the
+  <a href="/dashboard/">overview</a> page renders), but the
+  per-page views (aliases, turns, tools, cron, audit, health,
+  gaps) ship in follow-up commits.</p>
+  <p class="dim" style="font-size: 12px;">
+  See <code>.kiro/specs/phase7-visibility-traceability/tasks.md</code>
+  tasks 25-27 for the remaining work.
+  </p>
+</div>
+{% endblock %}

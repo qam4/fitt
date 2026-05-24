@@ -1,0 +1,42 @@
+{# Login page. Self-contained (no base.html extend) because the
+   sidebar's "signed in as ..." footer assumes auth has already
+   succeeded. The shape is small enough that a separate template
+   reads cleaner than a shared base.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FITT dashboard - login</title>
+<link rel="stylesheet" href="/dashboard/static/style.css">
+<style>
+body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.login-card { background: var(--panel); border: 1px solid var(--border);
+              border-radius: 8px; padding: 32px; width: 360px;
+              box-shadow: var(--shadow); }
+.login-card h1 { margin: 0 0 8px; font-size: 20px; font-weight: 500; }
+.login-card .tagline { margin: 0 0 24px; color: var(--text-dim); font-size: 13px; }
+.login-card label { display: block; margin-bottom: 8px; font-size: 13px;
+                    color: var(--text-dim); }
+.login-card input[type=password] { width: 100%; box-sizing: border-box; }
+.login-card button { width: 100%; margin-top: 16px; padding: 10px; }
+.login-card .error { background: #5a1a1a; border: 1px solid #a33; color: #fbb;
+                     padding: 8px 12px; border-radius: 4px; margin-bottom: 16px;
+                     font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="login-card">
+<h1>FITT dashboard</h1>
+<p class="tagline">Paste a bearer token to sign in.</p>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" action="/dashboard/login">
+<input type="hidden" name="next" value="{{ next_path }}">
+<label for="token">Bearer token</label>
+<input type="password" name="token" id="token" autocomplete="current-password" autofocus>
+<button type="submit">Sign in</button>
+</form>
+</div>
+</body>
+</html>

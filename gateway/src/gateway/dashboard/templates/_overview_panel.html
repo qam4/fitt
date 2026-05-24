@@ -1,0 +1,90 @@
+{# Partial fragment refreshed every 30s by HTMX.
+
+   Renders the at-a-glance "is FITT okay" snapshot:
+
+   * Headline metrics (uptime, alias count, recent failures).
+   * Per-alias one-liners with status pip + concrete model.
+   * Subsystem health (MCP, cron, capability gaps, pruner age).
+
+   Lives in its own template so the JSON-shape parent template
+   (overview.html) and the HTMX partial endpoint can both render
+   it without code duplication.
+#}
+<div class="grid">
+  <div class="metric">
+    <div class="label">Uptime</div>
+    <div class="value">{{ uptime_human }}</div>
+    <div class="sub">since {{ started_at_human }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">Aliases</div>
+    <div class="value">{{ alias_count }}</div>
+    <div class="sub">{{ alias_ok_count }} probed ok</div>
+  </div>
+  <div class="metric">
+    <div class="label">MCP servers</div>
+    <div class="value">{{ mcp_running }}/{{ mcp_total }}</div>
+    <div class="sub">running</div>
+  </div>
+  <div class="metric">
+    <div class="label">Cron jobs</div>
+    <div class="value">{{ cron_enabled }}</div>
+    <div class="sub">{{ cron_total }} total</div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Aliases</h3>
+  {% if alias_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>Alias</th>
+        <th>Model</th>
+        <th>Backend</th>
+        <th class="right">Context window</th>
+        <th>Last probe</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in alias_rows %}
+      <tr>
+        <td><span class="pip pip-{{ row.pip }}"></span></td>
+        <td><a href="/dashboard/aliases">{{ row.id }}</a></td>
+        <td class="mono">{{ row.model }}</td>
+        <td class="mono dim">{{ row.backend }}</td>
+        <td class="right mono">{{ row.context_window_human }}</td>
+        <td class="dim">{{ row.last_probe_text }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No aliases configured.</div>
+  {% endif %}
+</div>
+
+<div class="grid">
+  <div class="card compact">
+    <h3>Capability gaps</h3>
+    <div class="value mono">{{ gap_count }}</div>
+    <div class="dim" style="font-size: 12px;">recorded across all sessions</div>
+  </div>
+  <div class="card compact">
+    <h3>History pruner</h3>
+    <div class="value mono">{{ history_pruner_text }}</div>
+  </div>
+  <div class="card compact">
+    <h3>Event pruner</h3>
+    <div class="value mono">{{ event_pruner_text }}</div>
+  </div>
+  <div class="card compact">
+    <h3>Telegram bot</h3>
+    <div class="value mono">{{ telegram_text }}</div>
+  </div>
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  refreshed at {{ generated_at_human }}
+</p>

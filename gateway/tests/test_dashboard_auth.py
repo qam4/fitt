@@ -226,7 +226,8 @@ def test_login_then_protected_page(client: TestClient) -> None:
     # The TestClient's cookie jar carries the cookie forward.
     page = client.get("/dashboard/")
     assert page.status_code == 200
-    assert "Signed in as" in page.text
+    # Sidebar footer renders the resolved client tag.
+    assert "signed in as" in page.text.lower()
 
 
 def test_login_next_is_dashboard_only(client: TestClient) -> None:
