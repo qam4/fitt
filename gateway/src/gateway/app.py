@@ -518,6 +518,21 @@ def create_app(config: Config) -> FastAPI:
         sessions_dir=config.memory.sessions_dir,
     )
 
+    # Phase 7 Slice 7.5: dashboard auth context. Build now so
+    # the cookie-signing key file is created lazily on the
+    # first login attempt rather than on first import. The
+    # dashboard router is registered alongside the other
+    # routers below.
+    from .dashboard import build_router as build_dashboard_router
+    from .dashboard.auth import default_key_path as default_dashboard_key_path
+    from .dashboard.auth import make_dashboard_auth
+    from .dashboard.router import add_static_mount as add_dashboard_static
+
+    app.state.dashboard_auth = make_dashboard_auth(
+        secrets_obj=getattr(config, "secrets", None),
+        key_path=default_dashboard_key_path(fitt_home()),
+    )
+
     # Boot-time alias tool-call reliability probe (Principle 11).
     # Fires one canary tool-call request per alias and logs an
     # ERROR per binding that narrates instead of emitting real
@@ -678,6 +693,20 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(status_router)
     app.include_router(turn_capture_router)
     app.include_router(eval_router)
+
+    # Phase 7 Slice 7.5: dashboard router + static assets. The
+    # dashboard handles its own auth (cookie-or-bearer); see
+    # :mod:`gateway.dashboard.auth`. Static-asset mount is
+    # optional — when the assets directory doesn't exist (a
+    # foundation-only build) the dashboard still serves its
+    # routes, just without CSS / HTMX.
+    from pathlib import Path as _Path
+
+    app.include_router(build_dashboard_router())
+    add_dashboard_static(
+        app,
+        static_dir=_Path(__file__).parent / "dashboard" / "static",
+    )
 
     try:
         from .chat import router as chat_router

@@ -54,7 +54,18 @@ from .config import Config
 
 _log = logging.getLogger(__name__)
 
-_EXEMPT_PREFIXES: tuple[str, ...] = ("/health", "/ready", "/v1/models")
+_EXEMPT_PREFIXES: tuple[str, ...] = (
+    "/health",
+    "/ready",
+    "/v1/models",
+    # Phase 7 Slice 7.5: the dashboard handles its own auth
+    # (cookie-or-bearer) inside :mod:`gateway.dashboard.auth`.
+    # Excluding the prefix here lets the dashboard return
+    # 302-redirects for unauthorised browser requests without
+    # the global middleware short-circuiting them to JSON 401s
+    # first.
+    "/dashboard",
+)
 
 _VALID_CLIENTS: frozenset[str] = frozenset({"ide", "telegram", "webui", "cli", "coding-agent"})
 """Accepted values for the ``X-FITT-Client`` header and the

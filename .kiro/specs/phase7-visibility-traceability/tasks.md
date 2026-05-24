@@ -355,18 +355,18 @@ time.
 
 ### 22. Mount point and auth
 
-- [ ] 22a. `gateway/src/gateway/dashboard/__init__.py`:
+- [x] 22a. `gateway/src/gateway/dashboard/__init__.py`:
        FastAPI sub-router mounted at `/dashboard`.
-- [ ] 22b. `gateway/src/gateway/dashboard/auth.py`:
+- [x] 22b. `gateway/src/gateway/dashboard/auth.py`:
        cookie-or-bearer middleware. Bearer tokens work
        directly; the cookie is signed with a key at
        `$FITT_HOME/dashboard.key` (0600, generated on
        first use).
-- [ ] 22c. `/dashboard/login` page — accepts a bearer
+- [x] 22c. `/dashboard/login` page — accepts a bearer
        token, validates against `secrets.allowed_tokens`,
        sets the signed cookie. 24h expiry.
-- [ ] 22d. `/dashboard/logout` clears the cookie.
-- [ ] 22e. Tests: cookie issuance, cookie validation,
+- [x] 22d. `/dashboard/logout` clears the cookie.
+- [x] 22e. Tests: cookie issuance, cookie validation,
        expired-cookie rejection, bearer-auth-still-works,
        missing-auth-302-to-login.
 
