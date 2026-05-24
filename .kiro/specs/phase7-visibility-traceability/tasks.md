@@ -569,12 +569,13 @@ two-week Principle 9 window plus per-item readiness checks.
        identity (user.md / soul.md / tools.md / lessons.md),
        skills, sessions, cost. Same shape as Slice 7.5's
        existing views. *Shipped 2026-05-24.*
-- [ ] F10. **Dashboard edit substrate.** CSRF token tied to
+- [x] F10. **Dashboard edit substrate.** CSRF token tied to
        the dashboard's signed cookie, optimistic-mtime
        concurrency for file edits, audit-on-edit (one
        entry per save in the existing chain). Foundation
        only — no surfaces yet. The first commit that opens
        the edit path; everything F11-F15 rides on it.
+       *Shipped 2026-05-24.*
 - [ ] F11. **Dashboard edit for identity + lessons.**
        First user of F10. Smallest blast radius (markdown,
        no schema, hot-loaded by MemoryStore on every
