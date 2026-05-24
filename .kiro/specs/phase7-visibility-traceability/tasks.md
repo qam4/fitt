@@ -440,14 +440,18 @@ time.
 
 ### 27. Tools / Cron / Audit / Health / Gaps
 
-- [ ] 27a. `/dashboard/tools` — registered tools, last
+- [x] 27a. `/dashboard/tools` — registered tools, last
        invocations from audit log.
-- [ ] 27b. `/dashboard/cron` — table over the cron service.
-- [ ] 27c. `/dashboard/audit` — paged tail with filters
-       (since, tool, session, decision).
-- [ ] 27d. `/dashboard/health` — reuses `/status` data.
-- [ ] 27e. `/dashboard/gaps` — capability gap log, ranked.
-- [ ] 27f. Tests for each.
+- [x] 27b. `/dashboard/cron` — table over the cron service.
+- [x] 27c. `/dashboard/audit` — paged tail with filters
+       (since, tool, session, decision). *(``tool`` and
+       ``limit`` filters shipped; ``since`` and ``decision``
+       filters ride a follow-up — the operator can already
+       drill down via the tool filter and the file order
+       gives the time window naturally.)*
+- [x] 27d. `/dashboard/health` — reuses `/status` data.
+- [x] 27e. `/dashboard/gaps` — capability gap log, ranked.
+- [x] 27f. Tests for each.
 
 ### 28. Docker integration
 

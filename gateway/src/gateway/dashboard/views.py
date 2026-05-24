@@ -657,7 +657,6 @@ def _render_turn_detail(
     # [0-9a-f-] would fail the file lookup naturally.
     ctx = _build_turn_detail_context(request, session_key=key, turn_id=turn_id)
     if ctx is None:
-
         body = templates.TemplateResponse(
             request,
             "turn_not_found.html",
@@ -667,6 +666,289 @@ def _render_turn_detail(
         return body
     ctx["client"] = client
     return templates.TemplateResponse(request, "turns_detail.html", ctx)
+
+
+# --------------------------------------------------------------- tools / cron / audit / health / gaps
+
+
+_BUCKET_CLASS = {
+    "auto": "badge",
+    "ask": "badge-warn",
+    "block": "badge-error",
+    "trust_session": "badge",
+}
+
+
+def _build_tools_context(request: Request) -> dict[str, Any]:
+    """Tool registry + per-tool last invocation from the audit
+    log. Audit-derived counts ride a 24h window."""
+    app = request.app
+    registry = getattr(app.state, "tool_registry", None)
+    audit = getattr(app.state, "audit", None)
+    now = time.time()
+
+    # Build per-tool aggregates from the audit log. We walk the
+    # log once and accumulate everything we need rather than
+    # making one pass per tool.
+    audit_entries: list[dict[str, Any]] = []
+    if audit is not None:
+        try:
+            audit_entries = audit.iter_entries() or []
+        except Exception:
+            audit_entries = []
+
+    cutoff = now - 86400
+    counts_24h: dict[str, int] = {}
+    last_invocation: dict[str, dict[str, Any]] = {}
+    for entry in audit_entries:
+        tool = entry.get("tool")
+        if not isinstance(tool, str):
+            continue
+        try:
+            ts = float(entry.get("ts", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if ts >= cutoff:
+            counts_24h[tool] = counts_24h.get(tool, 0) + 1
+        prev = last_invocation.get(tool)
+        if prev is None or ts > prev.get("ts", 0.0):
+            last_invocation[tool] = {
+                "ts": ts,
+                "decision": entry.get("decision", "?"),
+                "ok": bool(entry.get("ok", False)),
+            }
+
+    tool_rows: list[dict[str, Any]] = []
+    if registry is not None:
+        for t in registry.list_all():
+            bucket = t.default_bucket.value
+            last = last_invocation.get(t.name)
+            tool_rows.append(
+                {
+                    "name": t.name,
+                    "kind": t.kind,
+                    "description": t.description,
+                    "bucket": bucket,
+                    "bucket_class": _BUCKET_CLASS.get(bucket, "badge-dim"),
+                    "requires_project": t.requires_project,
+                    "calls_24h": counts_24h.get(t.name, 0),
+                    "last_invocation_age": _fmt_age(last["ts"]) if last else "never",
+                    "last_decision": last["decision"] if last else "—",
+                }
+            )
+    return {
+        "tool_rows": tool_rows,
+        "generated_at_human": datetime.fromtimestamp(now, tz=UTC).strftime("%H:%M:%S UTC"),
+    }
+
+
+def _format_schedule(sched: Any) -> str:
+    """Compact human form for a CronSchedule. Mirrors the CLI's
+    rendering so the dashboard reads consistent with `fitt cron list`."""
+    if sched is None:
+        return "—"
+    kind = getattr(sched, "kind", "?")
+    if kind == "every":
+        secs = getattr(sched, "every_secs", None)
+        if not secs:
+            return "every ?"
+        return f"every {_fmt_duration(float(secs))}"
+    if kind == "at":
+        ts = getattr(sched, "at_ts", None)
+        if ts is None:
+            return "at (consumed)"
+        return f"at {_fmt_iso(ts)}"
+    if kind == "cron":
+        expr = getattr(sched, "cron_expr", "?") or "?"
+        tz = getattr(sched, "timezone", "UTC")
+        return f"{expr} ({tz})"
+    return str(kind)
+
+
+def _build_cron_context(request: Request) -> dict[str, Any]:
+    cron_service = getattr(request.app.state, "cron", None)
+    now = time.time()
+    cron_rows: list[dict[str, Any]] = []
+    if cron_service is not None:
+        try:
+            jobs = cron_service.list(include_disabled=True)
+        except Exception:
+            jobs = []
+        for j in jobs:
+            schedule = getattr(j, "schedule", None)
+            try:
+                next_ts = schedule.next_run(after=now) if schedule else None
+            except Exception:
+                next_ts = None
+            message = getattr(j, "message", "") or ""
+            preview = (message[:90] + "…") if len(message) > 90 else (message or "(empty)")
+            cron_rows.append(
+                {
+                    "id": j.id,
+                    "name": j.name,
+                    "schedule_human": _format_schedule(schedule),
+                    "next_firing_human": _fmt_iso(next_ts) if next_ts else "—",
+                    "last_run_age": _fmt_age(j.last_run_ts),
+                    "last_status": j.last_status,
+                    "enabled": j.enabled,
+                    "silent": j.silent,
+                    "created_by_client": j.created_by_client,
+                    "message": message,
+                    "message_preview": preview,
+                }
+            )
+    return {
+        "cron_rows": cron_rows,
+        "generated_at_human": datetime.fromtimestamp(now, tz=UTC).strftime("%H:%M:%S UTC"),
+    }
+
+
+def _build_audit_context(
+    request: Request, *, tool_filter: str | None, limit: int
+) -> dict[str, Any]:
+    audit = getattr(request.app.state, "audit", None)
+    audit_entries: list[dict[str, Any]] = []
+    if audit is not None:
+        try:
+            audit_entries = audit.iter_entries() or []
+        except Exception:
+            audit_entries = []
+    if tool_filter:
+        audit_entries = [e for e in audit_entries if e.get("tool") == tool_filter]
+    # Newest first.
+    audit_entries = audit_entries[-limit:][::-1]
+
+    rows: list[dict[str, Any]] = []
+    for e in audit_entries:
+        try:
+            ts = float(e.get("ts", 0.0))
+        except (TypeError, ValueError):
+            ts = 0.0
+        rows.append(
+            {
+                "ts_iso": _fmt_iso(ts),
+                "age_human": _fmt_age(ts),
+                "tool": e.get("tool", "?"),
+                "client": e.get("client", "?"),
+                "decision": e.get("decision", "?"),
+                "session_key": e.get("session_key", "?"),
+                "duration_ms": e.get("duration_ms", 0),
+                "ok": bool(e.get("ok", False)),
+                "error": (e.get("error") or "").strip(),
+            }
+        )
+    return {
+        "audit_rows": rows,
+        "tool_filter": tool_filter,
+        "limit": limit,
+    }
+
+
+def _build_health_context(request: Request) -> dict[str, Any]:
+    """Mirrors the /v1/status payload, plus the alias summary
+    from the overview view."""
+    app = request.app
+    home = _fitt_home()
+    now = time.time()
+
+    started_at: float | None = getattr(app.state, "started_at", None)
+    if started_at is None:
+        started_at = now
+    uptime_s = max(0.0, now - started_at)
+
+    mcp_servers: list[dict[str, Any]] = []
+    mcp_manager = getattr(app.state, "mcp", None)
+    if mcp_manager is not None:
+        try:
+            mcp_servers = list(mcp_manager.describe() or [])
+        except Exception:
+            mcp_servers = []
+    mcp_running = sum(1 for s in mcp_servers if s.get("running"))
+    mcp_total = len(mcp_servers)
+
+    cron_total = 0
+    cron_enabled = 0
+    cron_next_firing_ts: float | None = None
+    cron_service = getattr(app.state, "cron", None)
+    if cron_service is not None:
+        try:
+            jobs = cron_service.list(include_disabled=True)
+            cron_total = len(jobs)
+            soonest: float | None = None
+            for j in jobs:
+                if not getattr(j, "enabled", True):
+                    continue
+                cron_enabled += 1
+                schedule = getattr(j, "schedule", None)
+                try:
+                    nxt = schedule.next_run(after=now) if schedule else None
+                except Exception:
+                    nxt = None
+                if nxt is not None and (soonest is None or nxt < soonest):
+                    soonest = float(nxt)
+            cron_next_firing_ts = soonest
+        except Exception:
+            pass
+
+    gap_count = 0
+    gap_log = getattr(app.state, "capability_gaps", None)
+    if gap_log is not None:
+        try:
+            gap_count = len(gap_log.read())
+        except Exception:
+            pass
+
+    history_last_sweep = _read_anchor_ts(home / "history.pruner.anchor")
+    event_last_sweep = _read_anchor_ts(home / "events.pruner.anchor")
+
+    config = app.state.config
+    secrets = getattr(config, "secrets", None)
+    telegram_configured = bool(secrets and getattr(secrets, "telegram", None))
+
+    # Alias counts mirror the overview's logic.
+    probe_results: dict[str, Any] = getattr(app.state, "alias_probe_results", {}) or {}
+    alias_count = len(config.alias_names())
+    alias_ok_count = sum(1 for p in probe_results.values() if getattr(p, "status", "") == "ok")
+
+    return {
+        "uptime_human": _fmt_duration(uptime_s),
+        "started_at_human": _fmt_iso(started_at),
+        "mcp_running": mcp_running,
+        "mcp_total": mcp_total,
+        "mcp_servers": mcp_servers,
+        "cron_total": cron_total,
+        "cron_enabled": cron_enabled,
+        "cron_next_firing_human": _fmt_iso(cron_next_firing_ts) if cron_next_firing_ts else "",
+        "gap_count": gap_count,
+        "history_pruner_text": _fmt_age(history_last_sweep),
+        "event_pruner_text": _fmt_age(event_last_sweep),
+        "telegram_text": "configured" if telegram_configured else "not configured",
+        "alias_count": alias_count,
+        "alias_ok_count": alias_ok_count,
+        "generated_at_human": datetime.fromtimestamp(now, tz=UTC).strftime("%H:%M:%S UTC"),
+    }
+
+
+def _build_gaps_context(request: Request) -> dict[str, Any]:
+    gap_log = getattr(request.app.state, "capability_gaps", None)
+    rows: list[dict[str, Any]] = []
+    if gap_log is not None:
+        try:
+            from ..capabilities import rank_gaps as _rank_gaps
+
+            ranked = _rank_gaps(gap_log.read())
+        except Exception:
+            ranked = []
+        for action, count, gap in ranked:
+            rows.append(
+                {
+                    "action": action,
+                    "count": count,
+                    "last_suggestion": gap.suggestion,
+                    "last_seen_human": _fmt_age(gap.ts),
+                }
+            )
+    return {"gap_rows": rows}
 
 
 # --------------------------------------------------------------- placeholder helper
@@ -752,35 +1034,61 @@ def build_views_router() -> APIRouter:
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        return _placeholder(request, page="tools", title="Tools")
+        ctx = _build_tools_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "tools.html", ctx)
 
     @router.get("/cron", response_class=HTMLResponse)
     async def cron_view(request: Request) -> Response:
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        return _placeholder(request, page="cron", title="Cron")
+        ctx = _build_cron_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "cron.html", ctx)
 
     @router.get("/audit", response_class=HTMLResponse)
-    async def audit_view(request: Request) -> Response:
+    async def audit_view(
+        request: Request,
+        tool: str | None = None,
+        limit: int = 100,
+    ) -> Response:
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        return _placeholder(request, page="audit", title="Audit")
+        # Clamp limit so a huge ?limit=99999 query doesn't hang
+        # the renderer; 1000 covers the worst-case forensic
+        # browse.
+        clamped = max(1, min(limit, 1000))
+        ctx = _build_audit_context(request, tool_filter=tool, limit=clamped)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "audit.html", ctx)
 
     @router.get("/health", response_class=HTMLResponse)
     async def health_view(request: Request) -> Response:
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        return _placeholder(request, page="health", title="Health")
+        ctx = _build_health_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "health.html", ctx)
+
+    @router.get("/_partials/health", response_class=HTMLResponse)
+    async def health_partial(request: Request) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        ctx = _build_health_context(request)
+        return templates.TemplateResponse(request, "_health_panel.html", ctx)
 
     @router.get("/gaps", response_class=HTMLResponse)
     async def gaps_view(request: Request) -> Response:
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        return _placeholder(request, page="gaps", title="Capability gaps")
+        ctx = _build_gaps_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "gaps.html", ctx)
 
     return router
 

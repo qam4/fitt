@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% set nav_active = "cron" %}
+{% block title %}FITT dashboard - cron{% endblock %}
+{% block content %}
+<h2>Cron</h2>
+<p class="tagline">
+  Scheduled jobs (read-only in v0).
+</p>
+
+<div class="card">
+  {% if cron_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>Name</th>
+        <th>Schedule</th>
+        <th>Next firing</th>
+        <th>Last fired</th>
+        <th>Last status</th>
+        <th class="dim">Created by</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for j in cron_rows %}
+      <tr>
+        <td>
+          {% if not j.enabled %}
+            <span class="badge-dim badge">off</span>
+          {% elif j.last_status == "ok" %}
+            <span class="pip pip-ok"></span>
+          {% elif j.last_status == "error" %}
+            <span class="pip pip-error"></span>
+          {% else %}
+            <span class="pip pip-unknown"></span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ j.name }}{% if j.silent %} <span class="badge-dim badge">silent</span>{% endif %}</td>
+        <td class="mono dim">{{ j.schedule_human }}</td>
+        <td class="dim">{{ j.next_firing_human }}</td>
+        <td class="dim">{{ j.last_run_age }}</td>
+        <td class="dim">{{ j.last_status or "—" }}</td>
+        <td class="dim mono">{{ j.created_by_client or "—" }}</td>
+      </tr>
+      <tr>
+        <td></td>
+        <td colspan="6" class="dim" style="font-size: 12px; padding-top: 0;">
+          <details>
+            <summary style="cursor: pointer;">{{ j.message_preview }}</summary>
+            <pre>{{ j.message }}</pre>
+          </details>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No cron jobs configured.</div>
+  {% endif %}
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  refreshed at {{ generated_at_human }} ·
+  edit jobs from the CLI: <code>fitt cron list</code> /
+  <code>fitt cron rm</code>
+</p>
+{% endblock %}

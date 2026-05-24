@@ -111,35 +111,27 @@ def test_overview_redirects_without_auth(client: TestClient) -> None:
 # --------------------------------------------------------------- placeholder views
 
 
-@pytest.mark.parametrize(
-    "path,nav,title_substring",
-    [
-        ("/dashboard/tools", "tools", "Tools"),
-        ("/dashboard/cron", "cron", "Cron"),
-        ("/dashboard/audit", "audit", "Audit"),
-        ("/dashboard/health", "health", "Health"),
-        ("/dashboard/gaps", "gaps", "Capability gaps"),
-    ],
-)
-def test_placeholder_views_render(
-    client: TestClient,
-    path: str,
-    nav: str,
-    title_substring: str,
-) -> None:
-    """Every sidebar link lands on a working page during
-    the foundation slice. Real views replace the placeholder
-    in subsequent commits without changing the URL shape."""
-    r = client.get(path, headers=_auth())
-    assert r.status_code == 200, f"{path} returned {r.status_code}"
-    assert title_substring in r.text
-    # Sidebar lights up the right nav entry.
-    assert "active" in r.text  # `class="active"` rendered somewhere
+# --------------------------------------------------------------- placeholder views (none left)
 
 
-def test_placeholder_redirects_without_auth(client: TestClient) -> None:
-    r = client.get("/dashboard/aliases")
-    assert r.status_code == 302
+def test_no_placeholder_left(client: TestClient) -> None:
+    """Every sidebar link now resolves to a real view; no
+    page should still render the "still pending" placeholder
+    body."""
+    for path in [
+        "/dashboard/aliases",
+        "/dashboard/turns",
+        "/dashboard/tools",
+        "/dashboard/cron",
+        "/dashboard/audit",
+        "/dashboard/health",
+        "/dashboard/gaps",
+    ]:
+        r = client.get(path, headers=_auth())
+        assert r.status_code == 200, f"{path} returned {r.status_code}"
+        assert "still pending in Slice 7.5" not in r.text, (
+            f"{path} still renders the placeholder body"
+        )
 
 
 # --------------------------------------------------------------- static
@@ -522,3 +514,220 @@ def test_turns_session_path_traversal_safe(tmp_path: Path) -> None:
     for evil in ["..%2Fmain", "../../etc/passwd"]:
         r = tc.get(f"/dashboard/turns/{evil}", headers=_auth())
         assert r.status_code in (200, 404)
+
+
+# --------------------------------------------------------------- tools view
+
+
+def test_tools_view_lists_registered_tools(client: TestClient) -> None:
+    r = client.get("/dashboard/tools", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # The registry has a known set of inline tools registered
+    # by build_test_config's app — at minimum read_file / git_*.
+    assert "read_file" in body
+    # Bucket badges render.
+    assert "Default bucket" in body
+
+
+def test_tools_view_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/tools")
+    assert r.status_code == 302
+
+
+# --------------------------------------------------------------- cron view
+
+
+def test_cron_view_renders_empty(client: TestClient) -> None:
+    r = client.get("/dashboard/cron", headers=_auth())
+    assert r.status_code == 200
+    assert "No cron jobs configured" in r.text
+
+
+def test_cron_view_lists_jobs(tmp_path: Path) -> None:
+    """A configured cron job appears in the table with its
+    schedule and message preview."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    cron_service = app.state.cron
+    from gateway.cron import CronJob, CronSchedule
+
+    job = CronJob(
+        id="cj1",
+        name="every-hour",
+        message="Check the inbox",
+        schedule=CronSchedule(kind="every", every_secs=3600),
+        enabled=True,
+        created_by_client="cli",
+        created_ts=1779479823.42,
+    )
+    cron_service.add(job)
+
+    r = tc.get("/dashboard/cron", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "every-hour" in body
+    assert "every 1h" in body
+    assert "Check the inbox" in body
+
+
+# --------------------------------------------------------------- audit view
+
+
+def test_audit_view_renders_empty(client: TestClient) -> None:
+    r = client.get("/dashboard/audit", headers=_auth())
+    assert r.status_code == 200
+    assert "No audit entries" in r.text
+
+
+def test_audit_view_lists_entries(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    audit = app.state.audit
+    from gateway.audit import new_entry
+
+    audit.append(
+        new_entry(
+            session_key="main",
+            client="telegram",
+            tool="read_file",
+            args={"path": "README.md"},
+            decision="auto",
+            ok=True,
+            duration_ms=12,
+            ts=1779479823.42,
+        )
+    )
+
+    r = tc.get("/dashboard/audit", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "read_file" in body
+    assert "telegram" in body
+    assert "auto" in body
+
+
+def test_audit_view_filters_by_tool(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    audit = app.state.audit
+    from gateway.audit import new_entry
+
+    audit.append(
+        new_entry(
+            session_key="main",
+            client="cli",
+            tool="read_file",
+            args={"path": "a"},
+            decision="auto",
+            ok=True,
+        )
+    )
+    audit.append(
+        new_entry(
+            session_key="main",
+            client="cli",
+            tool="grep_repo",
+            args={"pattern": "x"},
+            decision="auto",
+            ok=True,
+        )
+    )
+
+    r = tc.get("/dashboard/audit?tool=read_file", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "read_file" in body
+    # grep_repo appears as the filter input value but not in
+    # the table body.
+    assert body.count("grep_repo") == 0
+
+
+# --------------------------------------------------------------- health view
+
+
+def test_health_view_renders(client: TestClient) -> None:
+    r = client.get("/dashboard/health", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "Gateway uptime" in body
+    assert "MCP servers" in body
+    assert "Cron" in body
+
+
+def test_health_partial_returns_panel_only(client: TestClient) -> None:
+    r = client.get("/dashboard/_partials/health", headers=_auth())
+    assert r.status_code == 200
+    assert '<aside class="sidebar">' not in r.text
+    assert "Gateway uptime" in r.text
+
+
+def test_health_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/health")
+    assert r.status_code == 302
+
+
+# --------------------------------------------------------------- gaps view
+
+
+def test_gaps_view_renders_empty(client: TestClient) -> None:
+    r = client.get("/dashboard/gaps", headers=_auth())
+    assert r.status_code == 200
+    assert "No capability gaps" in r.text
+
+
+def test_gaps_view_renders_ranked_entries(tmp_path: Path) -> None:
+    """A capability gap log gets surfaced ranked by frequency."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    gap_log = app.state.capability_gaps
+    from gateway.capabilities import GapReport
+
+    # Two distinct actions, the first one twice so it ranks
+    # higher.
+    gap_log.append(
+        GapReport(
+            ts=1779479823.42,
+            session_key="main",
+            action="run a docker container",
+            suggestion="docker_run tool",
+        )
+    )
+    gap_log.append(
+        GapReport(
+            ts=1779479900.0,
+            session_key="main",
+            action="run a docker container",
+            suggestion="docker_run tool",
+        )
+    )
+    gap_log.append(
+        GapReport(
+            ts=1779479950.0,
+            session_key="main",
+            action="send slack messages",
+            suggestion="mcp.slack",
+        )
+    )
+
+    r = tc.get("/dashboard/gaps", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "docker container" in body
+    assert "slack messages" in body
+    # The docker action appears before slack (count=2 vs 1).
+    docker_pos = body.index("docker container")
+    slack_pos = body.index("slack messages")
+    assert docker_pos < slack_pos

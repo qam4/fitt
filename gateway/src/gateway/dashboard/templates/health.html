@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% set nav_active = "health" %}
+{% block title %}FITT dashboard - health{% endblock %}
+{% block content %}
+<h2>Health</h2>
+<p class="tagline">System status — same data <code>/v1/status</code> exposes.</p>
+
+<div hx-get="/dashboard/_partials/health" hx-trigger="load, every 30s" hx-swap="innerHTML">
+  {% include "_health_panel.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,71 @@
+{# Health panel fragment, refreshed every 30s by HTMX.
+   Mirrors what the Telegram /status command surfaces, with
+   per-subsystem cards instead of one flat block.
+#}
+<div class="grid">
+  <div class="metric">
+    <div class="label">Gateway uptime</div>
+    <div class="value">{{ uptime_human }}</div>
+    <div class="sub">since {{ started_at_human }}</div>
+  </div>
+  <div class="metric">
+    <div class="label">MCP servers</div>
+    <div class="value">{{ mcp_running }}/{{ mcp_total }}</div>
+    <div class="sub">running / configured</div>
+  </div>
+  <div class="metric">
+    <div class="label">Cron</div>
+    <div class="value">{{ cron_enabled }}/{{ cron_total }}</div>
+    <div class="sub">{% if cron_next_firing_human %}next: {{ cron_next_firing_human }}{% else %}none scheduled{% endif %}</div>
+  </div>
+  <div class="metric">
+    <div class="label">Capability gaps</div>
+    <div class="value">{{ gap_count }}</div>
+    <div class="sub">recorded</div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card compact">
+    <h3>History pruner</h3>
+    <div class="value mono">{{ history_pruner_text }}</div>
+    <div class="dim" style="font-size: 12px;">last sweep</div>
+  </div>
+  <div class="card compact">
+    <h3>Event pruner</h3>
+    <div class="value mono">{{ event_pruner_text }}</div>
+    <div class="dim" style="font-size: 12px;">last sweep</div>
+  </div>
+  <div class="card compact">
+    <h3>Telegram bot</h3>
+    <div class="value mono">{{ telegram_text }}</div>
+  </div>
+  <div class="card compact">
+    <h3>Aliases</h3>
+    <div class="value mono">{{ alias_ok_count }}/{{ alias_count }}</div>
+    <div class="dim" style="font-size: 12px;">probed ok</div>
+  </div>
+</div>
+
+{% if mcp_servers %}
+<div class="card">
+  <h3>MCP servers</h3>
+  <table>
+    <thead><tr><th></th><th>Name</th><th>Tools</th><th>Command</th></tr></thead>
+    <tbody>
+    {% for s in mcp_servers %}
+      <tr>
+        <td>{% if s.running %}<span class="pip pip-ok"></span>{% else %}<span class="pip pip-error"></span>{% endif %}</td>
+        <td class="mono">{{ s.name }}</td>
+        <td class="dim mono">{{ s.tools|length }}</td>
+        <td class="dim mono" style="font-size: 11px;">{{ s.command }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  refreshed at {{ generated_at_human }}
+</p>

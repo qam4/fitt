@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% set nav_active = "tools" %}
+{% block title %}FITT dashboard - tools{% endblock %}
+{% block content %}
+<h2>Tools</h2>
+<p class="tagline">
+  Registered tools and their last invocations.
+</p>
+
+<div class="card">
+  {% if tool_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Kind</th>
+        <th>Default bucket</th>
+        <th>Project required</th>
+        <th class="right">Calls 24h</th>
+        <th>Last invocation</th>
+        <th>Last decision</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for t in tool_rows %}
+      <tr>
+        <td class="mono">{{ t.name }}</td>
+        <td class="dim mono">{{ t.kind }}</td>
+        <td class="mono">
+          <span class="badge {{ t.bucket_class }}">{{ t.bucket }}</span>
+        </td>
+        <td class="dim">{{ "yes" if t.requires_project else "—" }}</td>
+        <td class="right mono">{{ t.calls_24h }}</td>
+        <td class="dim mono">{{ t.last_invocation_age }}</td>
+        <td class="dim">{{ t.last_decision }}</td>
+      </tr>
+      {% if t.description %}
+      <tr>
+        <td></td>
+        <td colspan="6" class="dim" style="font-size: 12px; padding-top: 0;">{{ t.description }}</td>
+      </tr>
+      {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No tools registered.</div>
+  {% endif %}
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  refreshed at {{ generated_at_human }} ·
+  invocation counts read from <code>$FITT_HOME/audit.jsonl</code>
+</p>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% set nav_active = "gaps" %}
+{% block title %}FITT dashboard - capability gaps{% endblock %}
+{% block content %}
+<h2>Capability gaps</h2>
+<p class="tagline">
+  "I'd need a tool to <em>X</em>" statements the model has logged,
+  ranked by frequency. The next-tool-to-build backlog.
+</p>
+
+<div class="card">
+  {% if gap_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th class="right">#</th>
+        <th>Action</th>
+        <th>Last suggestion</th>
+        <th>Last seen</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for g in gap_rows %}
+      <tr>
+        <td class="right mono"><strong>{{ g.count }}</strong></td>
+        <td>{{ g.action }}</td>
+        <td class="dim">{{ g.last_suggestion or "—" }}</td>
+        <td class="dim mono">{{ g.last_seen_human }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    No capability gaps recorded. Either the agent is happy with
+    its tools or no one has tried something it can't do yet.
+  </div>
+  {% endif %}
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  same data <code>fitt capability-gaps</code> CLI surfaces ·
+  ranked by occurrence count, then most recent
+</p>
+{% endblock %}

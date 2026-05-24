@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% set nav_active = "audit" %}
+{% block title %}FITT dashboard - audit{% endblock %}
+{% block content %}
+<h2>Audit log</h2>
+<p class="tagline">
+  Append-only HMAC-chained record of every tool call.
+</p>
+
+<form method="get" action="/dashboard/audit" style="margin-bottom: 16px;">
+  <label for="tool" style="font-size: 12px; color: var(--text-dim);">filter tool:</label>
+  <input type="text" id="tool" name="tool" value="{{ tool_filter or '' }}"
+         style="width: 200px; margin-left: 8px;" placeholder="read_file">
+  <label for="limit" style="font-size: 12px; color: var(--text-dim); margin-left: 12px;">limit:</label>
+  <input type="text" id="limit" name="limit" value="{{ limit }}"
+         style="width: 60px; margin-left: 8px;">
+  <button type="submit" style="margin-left: 8px;">apply</button>
+</form>
+
+<div class="card">
+  {% if audit_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>When</th>
+        <th>Tool</th>
+        <th>Client</th>
+        <th>Decision</th>
+        <th>Session</th>
+        <th class="right">Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for e in audit_rows %}
+      <tr>
+        <td>
+          {% if e.ok %}<span class="pip pip-ok"></span>
+          {% else %}<span class="pip pip-error"></span>{% endif %}
+        </td>
+        <td class="dim mono" title="{{ e.ts_iso }}">{{ e.age_human }}</td>
+        <td class="mono">{{ e.tool }}</td>
+        <td class="mono dim">{{ e.client }}</td>
+        <td>
+          {% if e.decision in ("auto", "approved", "trust_session") %}
+            <span class="badge">{{ e.decision }}</span>
+          {% elif e.decision in ("rejected", "blocked", "denied_deny_list", "timeout") %}
+            <span class="badge-error badge">{{ e.decision }}</span>
+          {% else %}
+            <span class="badge-dim badge">{{ e.decision }}</span>
+          {% endif %}
+        </td>
+        <td class="mono dim">{{ e.session_key }}</td>
+        <td class="right mono dim">{{ e.duration_ms }}ms</td>
+      </tr>
+      {% if e.error %}
+      <tr>
+        <td></td>
+        <td colspan="6" class="dim" style="font-size: 12px; padding-top: 0; color: var(--error);">
+          {{ e.error }}
+        </td>
+      </tr>
+      {% endif %}
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No audit entries match the filter.</div>
+  {% endif %}
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  showing newest {{ limit }} entries · verify HMAC chain via
+  <code>fitt audit verify</code>
+</p>
+{% endblock %}
