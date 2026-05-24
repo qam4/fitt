@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% set nav_active = "identity" %}
+{% block title %}FITT dashboard - edit {{ filename }}{% endblock %}
+{% block content %}
+<p style="margin-top: 0;">
+  <a href="/dashboard/identity">← back to identity</a>
+</p>
+
+<h2>Edit <code>{{ filename }}</code></h2>
+<p class="tagline">
+  Identity files are read fresh on every chat request. Save
+  here, the change applies to the next turn — no restart needed.
+</p>
+
+{% if error_code == "mtime_conflict" %}
+<div class="card" style="border-color: var(--warn);">
+  <h3 style="color: var(--warn);">⚠ File changed on disk</h3>
+  <p>
+    The file moved between when you opened the editor and when
+    you saved. Your submission is preserved below; reload the
+    page to see the new on-disk content, then re-apply your
+    changes.
+  </p>
+  <p class="dim" style="font-size: 12px;">
+    Disk mtime now: <code>{{ current_mtime }}</code>.
+    The form's hint was: <code>{{ submitted_mtime }}</code>.
+  </p>
+</div>
+{% elif error_code == "csrf_mismatch" %}
+<div class="card" style="border-color: var(--error);">
+  <h3 style="color: var(--error);">CSRF token mismatch</h3>
+  <p>The form expired or was submitted from a stale tab. Reload and try again.</p>
+</div>
+{% elif error_code == "validation_failed" %}
+<div class="card" style="border-color: var(--error);">
+  <h3 style="color: var(--error);">Validation failed</h3>
+  <p>{{ error_detail }}</p>
+</div>
+{% elif error_code == "io_error" %}
+<div class="card" style="border-color: var(--error);">
+  <h3 style="color: var(--error);">Write failed</h3>
+  <p>The save couldn't complete. Check the gateway logs.</p>
+</div>
+{% endif %}
+
+{% if saved_at %}
+<div class="card" style="border-color: var(--accent);">
+  <p style="color: var(--accent); margin: 0;">
+    ✓ Saved — {{ bytes_written }} bytes written
+    ({{ "%+d"|format(bytes_changed_delta) }} change).
+  </p>
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="post" action="/dashboard/identity/save">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="filename" value="{{ filename }}">
+    <input type="hidden" name="expected_mtime" value="{{ expected_mtime }}">
+    <textarea name="content" rows="24" style="
+      width: 100%;
+      box-sizing: border-box;
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 13px;
+      background: var(--code-bg);
+      color: var(--text-bright);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px;
+    ">{{ content }}</textarea>
+    <div style="margin-top: 12px; display: flex; gap: 12px; align-items: center;">
+      <button type="submit">Save</button>
+      <a href="/dashboard/identity" class="dim" style="font-size: 12px;">cancel</a>
+      <span class="dim" style="font-size: 11px; margin-left: auto;">
+        {% if expected_mtime %}loaded at mtime {{ expected_mtime }}{% else %}new file{% endif %}
+      </span>
+    </div>
+  </form>
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  File path:
+  <code>{{ file_path }}</code> ·
+  edits ride the optimistic-mtime check, so a concurrent
+  <code>learn_*</code> tool call won't be overwritten silently.
+</p>
+{% endblock %}

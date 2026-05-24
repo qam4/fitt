@@ -31,7 +31,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -1041,6 +1041,87 @@ def _build_cost_context(request: Request, *, month_prefix: str | None) -> dict[s
     }
 
 
+_IDENTITY_FILENAMES: tuple[str, ...] = ("user.md", "soul.md", "tools.md", "lessons.md")
+"""Editable identity files. Tightly scoped — the form's
+filename hidden input must be one of these. Anything else
+is rejected outright; we don't trust user-supplied paths
+under any circumstance."""
+
+
+def _identity_path(request: Request, filename: str) -> Path | None:
+    """Resolve a filename to its on-disk path, refusing
+    anything outside the configured identity dir."""
+    if filename not in _IDENTITY_FILENAMES:
+        return None
+    config = request.app.state.config
+    return Path(config.memory.identity_dir) / filename
+
+
+def _build_identity_edit_context(
+    request: Request,
+    *,
+    filename: str,
+    csrf_token: str,
+    content: str | None = None,
+    expected_mtime: float | None = None,
+    error_code: str | None = None,
+    error_detail: str | None = None,
+    current_mtime: float | None = None,
+    submitted_mtime: float | None = None,
+    saved_at: float | None = None,
+    bytes_written: int | None = None,
+    bytes_changed_delta: int | None = None,
+) -> dict[str, Any]:
+    """Build the context for ``identity_edit.html``.
+
+    Used both by the GET (render existing content) and the
+    POST (re-render after save / failure with the operator's
+    submitted bytes preserved). Keeping one builder means
+    the template's contract stays simple and the route's
+    failure paths can re-render without re-reading disk.
+    """
+    path = _identity_path(request, filename)
+    if path is None:
+        # Caller checks; this is just defensive.
+        return {
+            "filename": filename,
+            "file_path": "<invalid>",
+            "csrf_token": csrf_token,
+            "content": "",
+            "expected_mtime": "",
+            "error_code": "validation_failed",
+            "error_detail": f"unknown identity file: {filename}",
+        }
+    if content is None:
+        # Fresh GET — read from disk.
+        if path.exists():
+            try:
+                content = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                content = ""
+                error_code = "io_error"
+                error_detail = str(exc)
+            else:
+                expected_mtime = path.stat().st_mtime
+        else:
+            content = ""
+            expected_mtime = None
+    return {
+        "filename": filename,
+        "file_path": str(path),
+        "csrf_token": csrf_token,
+        "content": content,
+        "expected_mtime": expected_mtime if expected_mtime is not None else "",
+        "error_code": error_code,
+        "error_detail": error_detail,
+        "current_mtime": current_mtime,
+        "submitted_mtime": submitted_mtime,
+        "saved_at": saved_at,
+        "bytes_written": bytes_written,
+        "bytes_changed_delta": bytes_changed_delta,
+    }
+
+
 # --------------------------------------------------------------- tools / cron / audit / health / gaps
 
 
@@ -1491,6 +1572,162 @@ def build_views_router() -> APIRouter:
         ctx = _build_identity_context(request)
         ctx["client"] = getattr(request.state, "client", "webui")
         return templates.TemplateResponse(request, "identity.html", ctx)
+
+    @router.get("/identity/edit", response_class=HTMLResponse)
+    async def identity_edit_get(
+        request: Request,
+        filename: str = "",
+    ) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        if filename not in _IDENTITY_FILENAMES:
+            from fastapi.responses import RedirectResponse as _Redirect
+
+            return _Redirect(url="/dashboard/identity", status_code=302)
+        from .edit import issue_csrf as _issue_csrf
+
+        auth = request.app.state.dashboard_auth
+        token = _issue_csrf(request, key=auth.key())
+        ctx = _build_identity_edit_context(
+            request,
+            filename=filename,
+            csrf_token=token,
+        )
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "identity_edit.html", ctx)
+
+    @router.post("/identity/save", response_class=HTMLResponse)
+    async def identity_edit_save(
+        request: Request,
+        csrf_token: str = Form(""),
+        filename: str = Form(""),
+        expected_mtime: str = Form(""),
+        content: str = Form(""),
+    ) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        client = getattr(request.state, "client", "webui")
+
+        # Re-issue a fresh token for the next render no matter
+        # which path we take. The submitted token might be
+        # stale by the time we re-render.
+        from .edit import (
+            CsrfMismatch,
+            MtimeConflict,
+            ValidationFailed,
+            csrf_required,
+            issue_csrf,
+            save_file_with_mtime,
+        )
+
+        auth = request.app.state.dashboard_auth
+        next_token = issue_csrf(request, key=auth.key())
+
+        if filename not in _IDENTITY_FILENAMES:
+            ctx = _build_identity_edit_context(
+                request,
+                filename=filename,
+                csrf_token=next_token,
+                content=content,
+                error_code="validation_failed",
+                error_detail=f"unknown identity file: {filename!r}",
+            )
+            ctx["client"] = client
+            return templates.TemplateResponse(request, "identity_edit.html", ctx, status_code=400)
+
+        # CSRF first — independent of any disk state.
+        try:
+            csrf_required(request, csrf_token)
+        except CsrfMismatch:
+            ctx = _build_identity_edit_context(
+                request,
+                filename=filename,
+                csrf_token=next_token,
+                content=content,
+                error_code="csrf_mismatch",
+            )
+            ctx["client"] = client
+            return templates.TemplateResponse(request, "identity_edit.html", ctx, status_code=403)
+
+        # Parse the mtime hint. Empty string == "didn't exist
+        # at render time"; pass through as None.
+        expected_ts: float | None
+        if expected_mtime.strip():
+            try:
+                expected_ts = float(expected_mtime)
+            except ValueError:
+                expected_ts = None
+        else:
+            expected_ts = None
+
+        path = _identity_path(request, filename)
+        # _identity_path None case already filtered by the
+        # filename check above; defensive assertion.
+        assert path is not None
+
+        audit_log = getattr(request.app.state, "audit", None)
+
+        try:
+            result = save_file_with_mtime(
+                path=path,
+                new_content=content,
+                expected_mtime=expected_ts,
+                audit_log=audit_log,
+                client=client,
+            )
+        except MtimeConflict as exc:
+            ctx = _build_identity_edit_context(
+                request,
+                filename=filename,
+                csrf_token=next_token,
+                content=content,
+                error_code="mtime_conflict",
+                current_mtime=exc.current_mtime,
+                submitted_mtime=expected_ts,
+                expected_mtime=expected_ts,
+            )
+            ctx["client"] = client
+            return templates.TemplateResponse(request, "identity_edit.html", ctx, status_code=409)
+        except ValidationFailed as exc:
+            ctx = _build_identity_edit_context(
+                request,
+                filename=filename,
+                csrf_token=next_token,
+                content=content,
+                error_code="validation_failed",
+                error_detail=exc.detail,
+                expected_mtime=expected_ts,
+            )
+            ctx["client"] = client
+            return templates.TemplateResponse(request, "identity_edit.html", ctx, status_code=400)
+        except Exception:
+            ctx = _build_identity_edit_context(
+                request,
+                filename=filename,
+                csrf_token=next_token,
+                content=content,
+                error_code="io_error",
+                expected_mtime=expected_ts,
+            )
+            ctx["client"] = client
+            return templates.TemplateResponse(request, "identity_edit.html", ctx, status_code=500)
+
+        # Success — re-render with the new content + a fresh
+        # mtime hint so consecutive saves work.
+        ctx = _build_identity_edit_context(
+            request,
+            filename=filename,
+            csrf_token=next_token,
+            content=content,
+            expected_mtime=result.new_mtime,
+            saved_at=time.time(),
+            bytes_written=result.bytes_written,
+            bytes_changed_delta=result.bytes_changed_delta,
+        )
+        ctx["client"] = client
+        return templates.TemplateResponse(request, "identity_edit.html", ctx)
 
     @router.get("/skills", response_class=HTMLResponse)
     async def skills_view(request: Request) -> Response:

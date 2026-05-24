@@ -10,7 +10,10 @@
 
 {% for f in files %}
 <div class="card">
-  <h3>{{ f.name }}</h3>
+  <h3>
+    {{ f.name }}
+    <a href="/dashboard/identity/edit?filename={{ f.name }}" style="font-size: 12px; margin-left: 12px;">edit →</a>
+  </h3>
   {% if not f.exists %}
   <div class="empty">File not present.</div>
   {% else %}

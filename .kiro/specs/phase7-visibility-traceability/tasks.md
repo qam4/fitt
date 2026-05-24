@@ -576,13 +576,14 @@ two-week Principle 9 window plus per-item readiness checks.
        only — no surfaces yet. The first commit that opens
        the edit path; everything F11-F15 rides on it.
        *Shipped 2026-05-24.*
-- [ ] F11. **Dashboard edit for identity + lessons.**
+- [x] F11. **Dashboard edit for identity + lessons.**
        First user of F10. Smallest blast radius (markdown,
        no schema, hot-loaded by MemoryStore on every
        request). The `learn_*` tools mutate `lessons.md`
        concurrently — the optimistic-mtime check is what
        prevents lost updates. Markdown editor surface;
        Save writes through the MemoryStore-aware path.
+       *Shipped 2026-05-24.*
 - [ ] F12. **Dashboard edit for projects.yaml + cron.json.**
        Reuses the inline `cron_*` tools' code path so
        CSRF + audit + scheduling-side-effects come for

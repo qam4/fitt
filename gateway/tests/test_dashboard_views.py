@@ -895,6 +895,201 @@ def test_identity_view_redirects_without_auth(client: TestClient) -> None:
     assert r.status_code == 302
 
 
+# --------------------------------------------------------------- identity edit (F11)
+
+
+def test_identity_edit_get_renders_form_for_existing_file(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    identity_dir = cfg.memory.identity_dir
+    identity_dir.mkdir(parents=True, exist_ok=True)
+    (identity_dir / "user.md").write_text("# Who I am\n\nFred.\n", encoding="utf-8")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/identity/edit?filename=user.md", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # Form contains the textarea pre-filled with current content.
+    assert 'name="content"' in body
+    assert "# Who I am" in body
+    # CSRF token is present.
+    assert 'name="csrf_token"' in body
+    # Mtime hint populated.
+    assert 'name="expected_mtime"' in body
+
+
+def test_identity_edit_get_redirects_for_unknown_filename(client: TestClient) -> None:
+    """Bogus filenames bounce to the listing rather than
+    rendering a form."""
+    r = client.get("/dashboard/identity/edit?filename=/etc/passwd", headers=_auth())
+    assert r.status_code == 302
+    assert "/dashboard/identity" in r.headers["location"]
+
+
+def test_identity_edit_save_updates_file(tmp_path: Path) -> None:
+    """Cookie + CSRF + mtime → file gets the new content."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    identity_dir = cfg.memory.identity_dir
+    identity_dir.mkdir(parents=True, exist_ok=True)
+    target = identity_dir / "user.md"
+    target.write_text("old\n", encoding="utf-8")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    # Login to get a cookie.
+    tc.post(
+        "/dashboard/login",
+        data={"token": PERSONAL_TOKEN, "next": "/dashboard/identity"},
+    )
+
+    # Render the form to get a valid CSRF token + mtime.
+    r = tc.get("/dashboard/identity/edit?filename=user.md")
+    assert r.status_code == 200
+    body = r.text
+    # Extract csrf_token and expected_mtime from the rendered form.
+    import re
+
+    csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', body)
+    mtime_match = re.search(r'name="expected_mtime" value="([^"]+)"', body)
+    assert csrf_match and mtime_match
+    csrf_token = csrf_match.group(1)
+    expected_mtime = mtime_match.group(1)
+
+    # Submit the new content.
+    r = tc.post(
+        "/dashboard/identity/save",
+        data={
+            "csrf_token": csrf_token,
+            "filename": "user.md",
+            "expected_mtime": expected_mtime,
+            "content": "new content\n",
+        },
+    )
+    assert r.status_code == 200
+    assert "Saved" in r.text
+    # The file actually changed.
+    assert target.read_text(encoding="utf-8") == "new content\n"
+
+
+def test_identity_edit_save_rejects_bad_csrf(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    identity_dir = cfg.memory.identity_dir
+    identity_dir.mkdir(parents=True, exist_ok=True)
+    target = identity_dir / "user.md"
+    target.write_text("preserved\n", encoding="utf-8")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    tc.post(
+        "/dashboard/login",
+        data={"token": PERSONAL_TOKEN, "next": "/dashboard/identity"},
+    )
+
+    r = tc.post(
+        "/dashboard/identity/save",
+        data={
+            "csrf_token": "garbage",
+            "filename": "user.md",
+            "expected_mtime": "0",
+            "content": "should not land\n",
+        },
+    )
+    assert r.status_code == 403
+    assert "CSRF" in r.text or "csrf" in r.text.lower()
+    # File untouched.
+    assert target.read_text(encoding="utf-8") == "preserved\n"
+
+
+def test_identity_edit_save_rejects_unknown_filename(tmp_path: Path) -> None:
+    """Even with a valid CSRF token, an unknown filename
+    must not let the operator write outside the allowlist."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    tc.post(
+        "/dashboard/login",
+        data={"token": PERSONAL_TOKEN, "next": "/dashboard/identity"},
+    )
+
+    # Get a valid token via a real form render.
+    r = tc.get("/dashboard/identity/edit?filename=user.md")
+    import re
+
+    csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', r.text)
+    assert csrf_match
+    csrf_token = csrf_match.group(1)
+
+    r = tc.post(
+        "/dashboard/identity/save",
+        data={
+            "csrf_token": csrf_token,
+            "filename": "../../../etc/passwd",
+            "expected_mtime": "0",
+            "content": "evil\n",
+        },
+    )
+    assert r.status_code == 400
+    assert "unknown identity file" in r.text
+
+
+def test_identity_edit_save_emits_audit_entry(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    identity_dir = cfg.memory.identity_dir
+    identity_dir.mkdir(parents=True, exist_ok=True)
+    (identity_dir / "user.md").write_text("v1\n", encoding="utf-8")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    tc.post(
+        "/dashboard/login",
+        data={"token": PERSONAL_TOKEN, "next": "/dashboard/identity"},
+    )
+
+    r = tc.get("/dashboard/identity/edit?filename=user.md")
+    import re
+
+    csrf = re.search(r'name="csrf_token" value="([^"]+)"', r.text).group(1)
+    mtime = re.search(r'name="expected_mtime" value="([^"]+)"', r.text).group(1)
+    tc.post(
+        "/dashboard/identity/save",
+        data={
+            "csrf_token": csrf,
+            "filename": "user.md",
+            "expected_mtime": mtime,
+            "content": "v2\n",
+        },
+    )
+
+    audit = app.state.audit
+    entries = audit.iter_entries()
+    edit_entries = [e for e in entries if e.get("tool") == "dashboard.edit"]
+    assert len(edit_entries) >= 1
+    e = edit_entries[-1]
+    assert e["ok"] is True
+    assert e["decision"] == "approved"
+    assert e["args"]["path"].endswith("user.md")
+
+
+def test_identity_edit_save_redirects_without_auth(client: TestClient) -> None:
+    r = client.post(
+        "/dashboard/identity/save",
+        data={
+            "csrf_token": "x",
+            "filename": "user.md",
+            "expected_mtime": "0",
+            "content": "anything",
+        },
+    )
+    assert r.status_code == 302
+
+
 # --------------------------------------------------------------- skills view
 
 
