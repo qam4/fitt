@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set nav_active = "skills" %}
+{% block title %}FITT dashboard - skills{% endblock %}
+{% block content %}
+<h2>Skills</h2>
+<p class="tagline">
+  Operator-authored <code>SKILL.md</code> files loaded at boot.
+  {% if not skills_enabled %}
+    <span class="badge-warn badge">loader disabled</span>
+  {% endif %}
+</p>
+
+<div class="card">
+  {% if skill_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Description</th>
+        <th>Prerequisites</th>
+        <th>Path</th>
+        <th>Last edited</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for s in skill_rows %}
+      <tr>
+        <td class="mono">{{ s.name }}</td>
+        <td>
+          {{ s.description }}
+          {% if s.description_truncated %}<span class="badge-dim badge" title="description was truncated for system prompt">…</span>{% endif %}
+        </td>
+        <td class="mono dim" style="font-size: 11px;">
+          {% if s.prerequisites %}{{ s.prerequisites|join(", ") }}{% else %}—{% endif %}
+        </td>
+        <td class="mono dim" style="font-size: 11px;">{{ s.path }}</td>
+        <td class="mono dim">{{ s.mtime_human }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    No skills loaded.
+    {% if skills_enabled %}
+    Drop <code>SKILL.md</code> files into <code>{{ skills_dir }}/&lt;name&gt;/</code>
+    and restart the gateway.
+    {% else %}
+    Skills loader is disabled in config.
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  Skills load at gateway boot; edit-and-restart contract. The
+  <code>[Skills available]</code> system-prompt block is rebuilt on every chat request.
+</p>
+{% endblock %}

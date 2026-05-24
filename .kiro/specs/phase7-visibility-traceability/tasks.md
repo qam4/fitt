@@ -558,6 +558,75 @@ gap before declaring DONE.
 Tracked here so they don't drift. Each is a future commit
 of its own; pick them up when the pain shows up.
 
+The dashboard road below (F9-F17) is committed: we plan to
+land it in this order, scheduling each item once live use
+informs whether it earns its weight. F9 ships in the same
+session as Phase 7's wrap-up; the rest ride after the
+two-week Principle 9 window plus per-item readiness checks.
+
+- [x] F9. **Dashboard read-only introspection.** Settings
+       (loaded Config + redacted secrets), projects,
+       identity (user.md / soul.md / tools.md / lessons.md),
+       skills, sessions, cost. Same shape as Slice 7.5's
+       existing views. *Shipped 2026-05-24.*
+- [ ] F10. **Dashboard edit substrate.** CSRF token tied to
+       the dashboard's signed cookie, optimistic-mtime
+       concurrency for file edits, audit-on-edit (one
+       entry per save in the existing chain). Foundation
+       only — no surfaces yet. The first commit that opens
+       the edit path; everything F11-F15 rides on it.
+- [ ] F11. **Dashboard edit for identity + lessons.**
+       First user of F10. Smallest blast radius (markdown,
+       no schema, hot-loaded by MemoryStore on every
+       request). The `learn_*` tools mutate `lessons.md`
+       concurrently — the optimistic-mtime check is what
+       prevents lost updates. Markdown editor surface;
+       Save writes through the MemoryStore-aware path.
+- [ ] F12. **Dashboard edit for projects.yaml + cron.json.**
+       Reuses the inline `cron_*` tools' code path so
+       CSRF + audit + scheduling-side-effects come for
+       free; projects gets validate-on-save through the
+       existing pydantic schema. Both small, structured,
+       no cross-references to other config.
+- [ ] F13. **Dashboard edit for skills (SKILL.md).**
+       Frontmatter validation needed (name uniqueness,
+       description length, prerequisites resolvable).
+       Same edit-and-restart contract the loader has
+       today; the dashboard surfaces a "restart to
+       reload" banner after save.
+- [ ] F14. **Dashboard edit for config.yaml.** Validation
+       runs the same pydantic graph the boot does. Decision
+       point at this commit: hot-reload vs restart-to-apply.
+       Restart-to-apply is the v0 default unless live use
+       makes hot-reload obviously earn its complexity.
+       Cross-reference checks (every alias points at a
+       configured model; every fallback resolves) surface
+       structured errors above the form on save failure.
+- [ ] F15. **Dashboard edit for secrets.yaml.** Per-key form,
+       never render existing values, double-confirm with
+       the bearer token on submit, dedicated audit
+       category. Last in the sequence by design — the
+       attack surface is the highest, the substrate
+       deserves to be trusted first. Mode-checks the file
+       (0600) after write, refuses to write to a world-
+       readable path, refuses to log values at any level.
+- [ ] F16. **Typed dashboard action buttons.** Refresh
+       aliases, Restart MCP, Verify audit, Pause/Resume
+       cron, Run eval. Each button is a typed POST to a
+       named endpoint, never a generic command runner.
+       Rides F10's CSRF + audit substrate. **Not** a
+       way to run arbitrary `fitt` CLI commands; that
+       posture stays explicitly off the table for security
+       reasons (see operator-feedback note 2026-05-24).
+- [ ] F17. **Dashboard live turns view (SSE).** Was Slice
+       7.5 Task 26c, deferred. Subscribes to the existing
+       `/v1/sessions/<s>/turns/stream` SSE endpoint, prepends
+       new turns to the list view as they arrive. Independent
+       of F10-F16; can land any time the operator-friction
+       earns it.
+
+Other tracked followups (not dashboard-specific):
+
 - [ ] F1. **Realistic-prompt eval mode.**
        `fitt eval alias <name> --realistic` constructs the
        system prompt the way live chat does. The diff
@@ -573,9 +642,8 @@ of its own; pick them up when the pain shows up.
 - [ ] F4. **Per-session traceability override.** Operator
        opts in or out for a specific session, overriding
        the per-client default.
-- [ ] F5. **Dashboard edit support.** Editing config /
-       secrets / projects / cron / identity / lessons
-       through the UI. Real work; Phase 8+.
+- [ ] F5. **Dashboard edit support.** *Replaced by F10-F15
+       above.*
 - [ ] F6. **Per-click Telegram approval-button user auth.**
        Hermes audit borrow-list. Few hours; ship before
        a second person joins the operator chat.

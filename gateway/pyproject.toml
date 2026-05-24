@@ -42,6 +42,14 @@ dependencies = [
     # ``/dashboard/login`` POST that takes a pasted bearer
     # token via an HTML form. Lightweight (~30KB) pure-Python.
     "python-multipart>=0.0.9",
+    # Phase 7 Slice 7.5 follow-up (F9): dashboard read-only
+    # introspection. ``markdown-it-py`` renders the identity
+    # markdown files (``user.md``, ``soul.md``, ``tools.md``,
+    # ``lessons.md``) for the ``/dashboard/identity`` view.
+    # Already used by the telegram-bot for the same job; the
+    # gateway now needs it too. Pinned to match the bot's
+    # constraint.
+    "markdown-it-py>=3.0,<4.0",
 ]
 
 [project.optional-dependencies]

@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 import time
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -668,6 +669,378 @@ def _render_turn_detail(
     return templates.TemplateResponse(request, "turns_detail.html", ctx)
 
 
+# --------------------------------------------------------------- settings + projects + identity + skills + sessions + cost (read-only)
+
+
+def _redact_secret_value(value: Any) -> str:
+    """Render a secret as 'configured' or 'not configured' — never
+    the raw bytes. Even the redacted view of secrets.yaml never
+    leaks a token, an api key, or a bot token through the
+    dashboard's response surface. Pure presence flag."""
+    if value is None or value == "":
+        return "not configured"
+    return "configured"
+
+
+def _build_settings_context(request: Request) -> dict[str, Any]:
+    """Render the loaded ``Config`` object plus a redacted view
+    of ``secrets.yaml``. Read-only.
+
+    The settings view is the operator's "what does FITT think
+    its config is" pane. Useful when something behaves
+    unexpectedly and you want to confirm whether a recent edit
+    landed before sshing in to read the file.
+
+    The redaction floor: token names + their ``client:`` tag,
+    presence of provider keys ("configured" / "not
+    configured"), allowlist user IDs from telegram. **No raw
+    values rendered, ever** — even though we're read-only,
+    future-author opening the dashboard with a screen-share
+    running shouldn't accidentally leak the OpenRouter key.
+    """
+    config = request.app.state.config
+    secrets = getattr(config, "secrets", None)
+
+    # Models list. We keep cost rates; they're not secrets, but
+    # they're load-bearing for the cost view.
+    models: list[dict[str, Any]] = []
+    for m in config.models:
+        models.append(
+            {
+                "id": m.id,
+                "backend": m.backend,
+                "model": m.model,
+                "endpoint": m.endpoint or "",
+                "fallback": m.fallback or "",
+                "cost_in": str(m.cost_per_mtok_in),
+                "cost_out": str(m.cost_per_mtok_out),
+            }
+        )
+
+    # MCP server config (raw dicts; the manager describes the
+    # running state on /dashboard/health).
+    mcp_servers: list[dict[str, Any]] = []
+    for raw in config.mcp_servers or []:
+        if isinstance(raw, dict):
+            mcp_servers.append(
+                {
+                    "name": str(raw.get("name", "?")),
+                    "command": str(raw.get("command", "?")),
+                    "args": list(raw.get("args") or []),
+                }
+            )
+
+    # Redacted secrets snapshot.
+    secrets_view: dict[str, Any] = {}
+    if secrets is None:
+        secrets_view = {
+            "loaded": False,
+            "tokens": [],
+            "providers": [],
+            "telegram_configured": False,
+            "telegram_allowlist": [],
+        }
+    else:
+        token_rows: list[dict[str, Any]] = []
+        for t in secrets.allowed_tokens:
+            token_rows.append(
+                {
+                    "name": t.name,
+                    "client": t.client or "(untagged)",
+                }
+            )
+        provider_rows: list[dict[str, Any]] = [
+            {
+                "name": "openrouter",
+                "status": _redact_secret_value(secrets.openrouter_api_key),
+            },
+            {
+                "name": "anthropic",
+                "status": _redact_secret_value(secrets.anthropic_api_key),
+            },
+        ]
+        for model_id, key in (secrets.api_keys or {}).items():
+            provider_rows.append(
+                {
+                    "name": f"api_keys.{model_id}",
+                    "status": _redact_secret_value(key),
+                }
+            )
+        secrets_view = {
+            "loaded": True,
+            "tokens": token_rows,
+            "providers": provider_rows,
+            "telegram_configured": secrets.telegram is not None,
+            "telegram_allowlist": (
+                list(secrets.telegram.allowlist_user_ids) if secrets.telegram is not None else []
+            ),
+        }
+
+    # SSH public key — useful as a copy button for satellite
+    # setup. Private key is never read; only the .pub file.
+    ssh_pubkey: str | None = None
+    ssh_key_path = getattr(request.app.state, "ssh_key_path", None)
+    if ssh_key_path is not None:
+        pub_path = Path(str(ssh_key_path) + ".pub")
+        if pub_path.exists():
+            try:
+                ssh_pubkey = pub_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                ssh_pubkey = None
+
+    # Run the boot validators a second time so the operator
+    # sees what they'd see on a restart.
+    from ..config import check_missing_api_keys
+
+    config_warnings = check_missing_api_keys(config)
+
+    return {
+        "aliases": config.aliases,
+        "models": models,
+        "memory": {
+            "enabled": config.memory.enabled,
+            "max_history_chars": config.memory.max_history_chars,
+            "max_lessons": config.memory.max_lessons,
+            "history_max_days": config.memory.history_max_days,
+            "skills_enabled": config.memory.skills_enabled,
+            "identity_dir": str(config.memory.identity_dir),
+            "sessions_dir": str(config.memory.sessions_dir),
+            "skills_dir": str(config.memory.skills_dir),
+        },
+        "traceability": {
+            "enabled": config.traceability.enabled,
+            "default_capture": list(config.traceability.default_capture),
+        },
+        "web": {"search_backend": config.web.search_backend},
+        "server": {
+            "host": config.server.host,
+            "port": config.server.port,
+            "log_level": config.server.log_level,
+            "log_bodies": config.server.log_bodies,
+            "boot_probe_enabled": config.server.boot_probe_enabled,
+            "context_probe_timeout_s": config.server.context_probe_timeout_s,
+        },
+        "upstream_timeout_secs": config.upstream_timeout_secs,
+        "mcp_servers": mcp_servers,
+        "tools_block_present": config.tools is not None,
+        "events_block_present": config.events is not None,
+        "secrets_view": secrets_view,
+        "ssh_pubkey": ssh_pubkey,
+        "config_warnings": config_warnings,
+    }
+
+
+def _build_projects_context(request: Request) -> dict[str, Any]:
+    registry = getattr(request.app.state, "project_registry", None)
+    rows: list[dict[str, Any]] = []
+    if registry is not None:
+        try:
+            projects = registry.all()
+        except Exception:
+            projects = []
+        for p in projects:
+            rows.append(
+                {
+                    "name": p.name,
+                    "path": p.path,
+                    "ssh_host": p.ssh_host or "(local)",
+                    "is_local": p.is_local,
+                    "test_command": p.test_command,
+                    "build_command": p.build_command,
+                }
+            )
+    return {"project_rows": rows}
+
+
+def _build_identity_context(request: Request) -> dict[str, Any]:
+    """Read the identity files + lessons.md and return a
+    rendered + raw view for each.
+
+    Files: ``user.md``, ``soul.md``, ``tools.md`` per
+    :class:`MemoryStore._load_identity` plus ``lessons.md``.
+    Missing files render empty-state cells; the dashboard
+    doesn't try to seed them (memory.py owns that)."""
+    config = request.app.state.config
+    identity_dir = Path(config.memory.identity_dir)
+
+    files: list[dict[str, Any]] = []
+    for name in ("user.md", "soul.md", "tools.md", "lessons.md"):
+        path = identity_dir / name
+        if not path.exists():
+            files.append({"name": name, "exists": False, "raw": "", "rendered": ""})
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            files.append(
+                {
+                    "name": name,
+                    "exists": True,
+                    "raw": "",
+                    "rendered": f"<em>read failed: {type(exc).__name__}</em>",
+                    "error": str(exc),
+                }
+            )
+            continue
+        files.append(
+            {
+                "name": name,
+                "exists": True,
+                "raw": raw,
+                "rendered": _render_markdown(raw),
+                "mtime": path.stat().st_mtime,
+                "size": path.stat().st_size,
+            }
+        )
+
+    # Also surface the lessons store's parsed view so the
+    # operator can see how the file is interpreted.
+    lessons_store = getattr(request.app.state, "lessons", None)
+    parsed_lessons: list[dict[str, Any]] = []
+    if lessons_store is not None:
+        try:
+            for lesson in lessons_store.read():
+                parsed_lessons.append(
+                    {
+                        "category": lesson.category or "",
+                        "text": lesson.text,
+                    }
+                )
+        except Exception:
+            pass
+
+    return {
+        "identity_dir": str(identity_dir),
+        "files": files,
+        "parsed_lessons": parsed_lessons,
+    }
+
+
+def _render_markdown(text: str) -> str:
+    """Cheap CommonMark → HTML rendering for the dashboard's
+    markdown views. Reuses ``markdown_it`` (already vendored
+    via the telegram-bot but not yet in the gateway). Falls
+    back to ``<pre>`` escaping when markdown_it isn't
+    available so a missing dep doesn't break the view."""
+    try:
+        from markdown_it import MarkdownIt
+    except ImportError:  # pragma: no cover - fallback
+        import html as _html
+
+        return f"<pre>{_html.escape(text)}</pre>"
+    md = MarkdownIt("commonmark")
+    rendered: str = md.render(text)
+    return rendered
+
+
+def _build_skills_context(request: Request) -> dict[str, Any]:
+    skills = getattr(request.app.state, "skills", None) or []
+    rows: list[dict[str, Any]] = []
+    for s in skills:
+        path = s.skill_md_path
+        try:
+            mtime = path.stat().st_mtime if path.exists() else None
+        except OSError:
+            mtime = None
+        rows.append(
+            {
+                "name": s.name,
+                "description": s.description,
+                "description_truncated": s.description_truncated,
+                "prerequisites": list(s.prerequisites),
+                "path": str(path),
+                "mtime_human": _fmt_age(mtime) if mtime else "—",
+            }
+        )
+    config = request.app.state.config
+    return {
+        "skills_dir": str(config.memory.skills_dir),
+        "skills_enabled": config.memory.skills_enabled,
+        "skill_rows": rows,
+    }
+
+
+def _build_sessions_context(request: Request) -> dict[str, Any]:
+    """List known sessions from the registry plus the per-
+    session day-count of history files. Same data
+    ``fitt session list`` shows, plus a hint about how much
+    history each session has."""
+    config = request.app.state.config
+    registry = getattr(request.app.state, "session_registry", None)
+    sessions_dir = Path(config.memory.sessions_dir)
+
+    rows: list[dict[str, Any]] = []
+    if registry is not None:
+        try:
+            sessions = registry.all(include_archived=True)
+        except Exception:
+            sessions = []
+        for s in sessions:
+            history_dir = sessions_dir / s.id / "history"
+            day_count = 0
+            try:
+                if history_dir.exists():
+                    day_count = sum(1 for _ in history_dir.glob("*.md"))
+            except OSError:
+                day_count = 0
+            captures_dir = sessions_dir / s.id / "turns"
+            capture_day_count = 0
+            try:
+                if captures_dir.exists():
+                    capture_day_count = sum(1 for p in captures_dir.iterdir() if p.is_dir())
+            except OSError:
+                capture_day_count = 0
+            rows.append(
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "archived": s.archived,
+                    "created_iso": s.created_at.isoformat(),
+                    "history_days": day_count,
+                    "capture_days": capture_day_count,
+                }
+            )
+    return {
+        "sessions_dir": str(sessions_dir),
+        "session_rows": rows,
+    }
+
+
+def _build_cost_context(request: Request, *, month_prefix: str | None) -> dict[str, Any]:
+    """Aggregate monthly spend from ``gateway.log`` + rotated
+    siblings via :func:`gateway.cost.aggregate_monthly_spend`.
+    Same logic the ``fitt cost`` CLI uses; the dashboard view
+    is a thin renderer over the dict it returns."""
+    from ..cost import aggregate_monthly_spend
+
+    config = request.app.state.config
+    log_dir = Path(config.logging.dir)
+
+    totals, prefix = aggregate_monthly_spend(log_dir, month_prefix=month_prefix)
+
+    rows: list[dict[str, Any]] = []
+    grand = Decimal("0")
+    for model in sorted(totals.keys()):
+        row = totals[model]
+        grand += row["cost_usd"]
+        rows.append(
+            {
+                "model": model,
+                "requests": row["requests"],
+                "input_tokens": row["input_tokens"],
+                "output_tokens": row["output_tokens"],
+                "cost_usd": f"{row['cost_usd']:.4f}",
+            }
+        )
+    return {
+        "month_prefix": prefix,
+        "log_dir": str(log_dir),
+        "log_dir_exists": log_dir.exists(),
+        "cost_rows": rows,
+        "grand_total": f"{grand:.4f}",
+    }
+
+
 # --------------------------------------------------------------- tools / cron / audit / health / gaps
 
 
@@ -1089,6 +1462,65 @@ def build_views_router() -> APIRouter:
         ctx = _build_gaps_context(request)
         ctx["client"] = getattr(request.state, "client", "webui")
         return templates.TemplateResponse(request, "gaps.html", ctx)
+
+    # --------------------------------------------------------- introspection (F9)
+
+    @router.get("/settings", response_class=HTMLResponse)
+    async def settings_view(request: Request) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        ctx = _build_settings_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "settings.html", ctx)
+
+    @router.get("/projects", response_class=HTMLResponse)
+    async def projects_view(request: Request) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        ctx = _build_projects_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "projects.html", ctx)
+
+    @router.get("/identity", response_class=HTMLResponse)
+    async def identity_view(request: Request) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        ctx = _build_identity_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "identity.html", ctx)
+
+    @router.get("/skills", response_class=HTMLResponse)
+    async def skills_view(request: Request) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        ctx = _build_skills_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "skills.html", ctx)
+
+    @router.get("/sessions", response_class=HTMLResponse)
+    async def sessions_view(request: Request) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        ctx = _build_sessions_context(request)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "sessions.html", ctx)
+
+    @router.get("/cost", response_class=HTMLResponse)
+    async def cost_view(
+        request: Request,
+        month: str | None = None,
+    ) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        ctx = _build_cost_context(request, month_prefix=month)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "cost.html", ctx)
 
     return router
 

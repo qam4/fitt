@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% set nav_active = "sessions" %}
+{% block title %}FITT dashboard - sessions{% endblock %}
+{% block content %}
+<h2>Sessions</h2>
+<p class="tagline">
+  Named conversation scopes.
+  Read-only — manage via <code>fitt session new/rename/archive</code>.
+</p>
+
+<div class="card">
+  {% if session_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>Id</th>
+        <th>Name</th>
+        <th>Created</th>
+        <th class="right">History (days)</th>
+        <th class="right">Captures (days)</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for s in session_rows %}
+      <tr>
+        <td>
+          {% if s.archived %}
+            <span class="badge-dim badge">archived</span>
+          {% else %}
+            <span class="pip pip-ok"></span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ s.id }}</td>
+        <td>{{ s.name }}</td>
+        <td class="dim mono" style="font-size: 11px;">{{ s.created_iso }}</td>
+        <td class="right mono">{{ s.history_days }}</td>
+        <td class="right mono">{{ s.capture_days }}</td>
+        <td class="right">
+          <a href="/dashboard/turns/{{ s.id }}">turns →</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">No sessions configured.</div>
+  {% endif %}
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  Storage: <code>{{ sessions_dir }}/&lt;id&gt;/</code> ·
+  history files at <code>history/&lt;date&gt;.md</code>,
+  per-day capture sidecars at <code>turns/&lt;date&gt;/&lt;turn_id&gt;.json</code>.
+</p>
+{% endblock %}

@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% set nav_active = "settings" %}
+{% block title %}FITT dashboard - settings{% endblock %}
+{% block content %}
+<h2>Settings</h2>
+<p class="tagline">
+  What FITT thinks its config is. Read-only — edit via
+  <code>$FITT_HOME/config.yaml</code> + restart for now.
+</p>
+
+{% if config_warnings %}
+<div class="card">
+  <h3>Boot-time warnings</h3>
+  {% for w in config_warnings %}
+  <pre>{{ w }}</pre>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Aliases → models</h3>
+  <table>
+    <thead><tr><th>Alias</th><th>Model id</th></tr></thead>
+    <tbody>
+    {% for alias, model_id in aliases.items() %}
+      <tr>
+        <td class="mono">{{ alias }}</td>
+        <td class="mono dim">{{ model_id }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3>Models</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Id</th>
+        <th>Backend</th>
+        <th>Model</th>
+        <th>Endpoint</th>
+        <th>Fallback</th>
+        <th class="right">$ in/Mtok</th>
+        <th class="right">$ out/Mtok</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for m in models %}
+      <tr>
+        <td class="mono">{{ m.id }}</td>
+        <td class="mono dim">{{ m.backend }}</td>
+        <td class="mono">{{ m.model }}</td>
+        <td class="mono dim" style="font-size: 11px;">{{ m.endpoint or "—" }}</td>
+        <td class="mono dim">{{ m.fallback or "—" }}</td>
+        <td class="right mono">{{ m.cost_in }}</td>
+        <td class="right mono">{{ m.cost_out }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h3>Server</h3>
+    <div class="kv">
+      <div class="k">host</div><div class="v mono">{{ server.host }}</div>
+      <div class="k">port</div><div class="v mono">{{ server.port }}</div>
+      <div class="k">log_level</div><div class="v mono">{{ server.log_level }}</div>
+      <div class="k">log_bodies</div><div class="v mono">{{ server.log_bodies }}</div>
+      <div class="k">boot_probe_enabled</div><div class="v mono">{{ server.boot_probe_enabled }}</div>
+      <div class="k">context_probe_timeout_s</div><div class="v mono">{{ server.context_probe_timeout_s }}</div>
+      <div class="k">upstream_timeout_secs</div><div class="v mono">{{ upstream_timeout_secs }}</div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Memory</h3>
+    <div class="kv">
+      <div class="k">enabled</div><div class="v mono">{{ memory.enabled }}</div>
+      <div class="k">max_history_chars</div><div class="v mono">{{ memory.max_history_chars }}</div>
+      <div class="k">max_lessons</div><div class="v mono">{{ memory.max_lessons }}</div>
+      <div class="k">history_max_days</div><div class="v mono">{{ memory.history_max_days }}</div>
+      <div class="k">skills_enabled</div><div class="v mono">{{ memory.skills_enabled }}</div>
+      <div class="k">identity_dir</div><div class="v mono">{{ memory.identity_dir }}</div>
+      <div class="k">sessions_dir</div><div class="v mono">{{ memory.sessions_dir }}</div>
+      <div class="k">skills_dir</div><div class="v mono">{{ memory.skills_dir }}</div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Traceability</h3>
+    <div class="kv">
+      <div class="k">enabled</div><div class="v mono">{{ traceability.enabled }}</div>
+      <div class="k">default_capture</div>
+      <div class="v mono">
+        {% for c in traceability.default_capture %}<code>{{ c }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Other</h3>
+    <div class="kv">
+      <div class="k">web.search_backend</div><div class="v mono">{{ web.search_backend }}</div>
+      <div class="k">tools block</div><div class="v mono">{{ "configured" if tools_block_present else "default" }}</div>
+      <div class="k">events block</div><div class="v mono">{{ "configured" if events_block_present else "default" }}</div>
+    </div>
+  </div>
+</div>
+
+{% if mcp_servers %}
+<div class="card">
+  <h3>MCP servers (configured)</h3>
+  <table>
+    <thead><tr><th>Name</th><th>Command</th></tr></thead>
+    <tbody>
+    {% for s in mcp_servers %}
+      <tr>
+        <td class="mono">{{ s.name }}</td>
+        <td class="mono dim" style="font-size: 11px;">{{ s.command }} {{ s.args|join(" ") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="dim" style="font-size: 11px;">
+    Running state on <a href="/dashboard/health">Health</a>.
+  </p>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Secrets (redacted)</h3>
+  {% if not secrets_view.loaded %}
+  <p class="dim">No secrets file loaded.</p>
+  {% else %}
+  <h4 style="font-size: 12px; color: var(--text-dim); margin-top: 8px;">Allowed tokens</h4>
+  <table>
+    <thead><tr><th>Name</th><th>Client tag</th></tr></thead>
+    <tbody>
+    {% for t in secrets_view.tokens %}
+      <tr>
+        <td class="mono">{{ t.name }}</td>
+        <td class="mono dim">{{ t.client }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h4 style="font-size: 12px; color: var(--text-dim); margin-top: 16px;">Provider keys</h4>
+  <table>
+    <thead><tr><th>Provider</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for p in secrets_view.providers %}
+      <tr>
+        <td class="mono">{{ p.name }}</td>
+        <td>{% if p.status == "configured" %}<span class="badge">{{ p.status }}</span>{% else %}<span class="badge-dim badge">{{ p.status }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h4 style="font-size: 12px; color: var(--text-dim); margin-top: 16px;">Telegram</h4>
+  <div class="kv">
+    <div class="k">configured</div>
+    <div class="v mono">{{ secrets_view.telegram_configured }}</div>
+    <div class="k">allowlist user ids</div>
+    <div class="v mono">
+      {% if secrets_view.telegram_allowlist %}
+        {{ secrets_view.telegram_allowlist|join(", ") }}
+      {% else %}—{% endif %}
+    </div>
+  </div>
+  {% endif %}
+  <p class="dim" style="font-size: 11px; margin-top: 12px;">
+    No raw token values, API keys, or bot tokens are rendered through the dashboard.
+  </p>
+</div>
+
+{% if ssh_pubkey %}
+<div class="card">
+  <h3>SSH public key (gateway → satellite)</h3>
+  <p class="dim" style="font-size: 12px;">
+    Paste this into <code>~/.ssh/authorized_keys</code> on each satellite that
+    FITT should be able to reach for project tools.
+  </p>
+  <pre>{{ ssh_pubkey }}</pre>
+</div>
+{% endif %}
+{% endblock %}

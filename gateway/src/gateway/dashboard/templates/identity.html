@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% set nav_active = "identity" %}
+{% block title %}FITT dashboard - identity{% endblock %}
+{% block content %}
+<h2>Identity</h2>
+<p class="tagline">
+  Markdown files injected into every system prompt.
+  Read-only — edit at <code>{{ identity_dir }}</code> for now.
+</p>
+
+{% for f in files %}
+<div class="card">
+  <h3>{{ f.name }}</h3>
+  {% if not f.exists %}
+  <div class="empty">File not present.</div>
+  {% else %}
+    {% if f.error %}
+    <div class="empty" style="color: var(--error);">{{ f.error }}</div>
+    {% else %}
+    <div class="dim" style="font-size: 11px; margin-bottom: 8px;">
+      {{ f.size }} bytes
+    </div>
+    <details open>
+      <summary class="dim" style="font-size: 12px; cursor: pointer;">rendered</summary>
+      <div style="background: var(--code-bg); padding: 12px; border-radius: 4px; margin-top: 8px;">
+        {{ f.rendered|safe }}
+      </div>
+    </details>
+    <details>
+      <summary class="dim" style="font-size: 12px; cursor: pointer;">raw</summary>
+      <pre>{{ f.raw }}</pre>
+    </details>
+    {% endif %}
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if parsed_lessons %}
+<div class="card">
+  <h3>Lessons (parsed)</h3>
+  <p class="dim" style="font-size: 12px;">
+    How the lessons store interprets <code>lessons.md</code> after the bullet parser.
+  </p>
+  <table>
+    <thead><tr><th>Category</th><th>Text</th></tr></thead>
+    <tbody>
+    {% for l in parsed_lessons %}
+      <tr>
+        <td class="mono dim">{{ l.category or "—" }}</td>
+        <td>{{ l.text }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

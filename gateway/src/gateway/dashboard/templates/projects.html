@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% set nav_active = "projects" %}
+{% block title %}FITT dashboard - projects{% endblock %}
+{% block content %}
+<h2>Projects</h2>
+<p class="tagline">
+  Registered projects that file/git/shell tools can target.
+  Read-only — edit via <code>fitt project add/update/remove</code>.
+</p>
+
+<div class="card">
+  {% if project_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Path</th>
+        <th>Host</th>
+        <th>Test command</th>
+        <th>Build command</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in project_rows %}
+      <tr>
+        <td class="mono">{{ p.name }}</td>
+        <td class="mono">{{ p.path }}</td>
+        <td class="mono dim">{% if p.is_local %}<span class="badge-dim badge">local</span>{% else %}{{ p.ssh_host }}{% endif %}</td>
+        <td class="mono dim" style="font-size: 11px;">{{ p.test_command or "—" }}</td>
+        <td class="mono dim" style="font-size: 11px;">{{ p.build_command or "—" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    No projects registered. Add one via
+    <code>fitt project add &lt;name&gt; --path &lt;path&gt; [--ssh-host &lt;host&gt;]</code>.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

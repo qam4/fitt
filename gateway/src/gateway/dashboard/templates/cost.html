@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% set nav_active = "cost" %}
+{% block title %}FITT dashboard - cost{% endblock %}
+{% block content %}
+<h2>Cost</h2>
+<p class="tagline">
+  Spend aggregated from <code>gateway.log</code>'s
+  <code>chat.completion</code> events.
+</p>
+
+<form method="get" action="/dashboard/cost" style="margin-bottom: 16px;">
+  <label for="month" style="font-size: 12px; color: var(--text-dim);">month:</label>
+  <input type="text" id="month" name="month" value="{{ month_prefix }}"
+         style="width: 100px; margin-left: 8px;" placeholder="YYYY-MM">
+  <button type="submit" style="margin-left: 8px;">show</button>
+</form>
+
+<div class="card">
+  {% if not log_dir_exists %}
+  <div class="empty">
+    Log directory <code>{{ log_dir }}</code> does not exist yet.
+    Has the gateway served any requests?
+  </div>
+  {% elif cost_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th class="right">Requests</th>
+        <th class="right">Input tokens</th>
+        <th class="right">Output tokens</th>
+        <th class="right">Cost (USD)</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in cost_rows %}
+      <tr>
+        <td class="mono">{{ r.model }}</td>
+        <td class="right mono">{{ r.requests }}</td>
+        <td class="right mono">{{ "{:,}".format(r.input_tokens) }}</td>
+        <td class="right mono">{{ "{:,}".format(r.output_tokens) }}</td>
+        <td class="right mono">${{ r.cost_usd }}</td>
+      </tr>
+    {% endfor %}
+      <tr style="border-top: 2px solid var(--border);">
+        <td><strong>TOTAL</strong></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td class="right mono"><strong>${{ grand_total }}</strong></td>
+      </tr>
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    No <code>chat.completion</code> events found for {{ month_prefix }}.
+  </div>
+  {% endif %}
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  Local Ollama models always show $0.00 — local inference is electricity, not money.
+  Same aggregator the <code>fitt cost</code> CLI uses.
+</p>
+{% endblock %}

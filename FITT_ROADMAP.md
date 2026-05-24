@@ -1018,6 +1018,46 @@ everything that ships per-turn detail today; Phase 7 adds capture
 `.kiro/specs/phase7-visibility-traceability/` when this phase
 starts, in the same shape as Phase 4.8's spec.*
 
+**Status (2026-05-24):** spec promoted, all five slices
+shipped. Slice 7.5 v0 (read-only operator dashboard) is on
+`origin/main` plus the F9 introspection follow-up
+(settings / projects / identity / skills / sessions / cost).
+Two-week Principle 9 window is in progress before flipping
+the phase to DONE.
+
+**Phase 7 v1 (the dashboard's edit + actions road).** A
+deliberate sequence captured in `tasks.md` followups F10-F17,
+scheduled to land after the v0 surface earns its keep:
+
+- F10 — dashboard edit substrate (CSRF + optimistic-mtime
+  + audit-on-edit). Foundation only; no surfaces yet.
+- F11 — edit for `identity.md` + `lessons.md`. First user
+  of F10. Smallest blast radius.
+- F12 — edit for `projects.yaml` + `cron.json`. Reuses the
+  existing `cron_*` tools' code path.
+- F13 — edit for `skills/<name>/SKILL.md`. Frontmatter
+  validation; restart-to-reload banner.
+- F14 — edit for `config.yaml`. Validation runs the boot
+  graph; restart-to-apply default unless live use makes
+  hot-reload obviously earn its complexity.
+- F15 — edit for `secrets.yaml`. Per-key form, never
+  render values, double-confirm, dedicated audit
+  category. Last by design — highest attack surface.
+- F16 — typed dashboard action buttons (Refresh aliases,
+  Restart MCP, Verify audit, Pause/Resume cron, Run
+  eval). Each button is a typed POST to a named endpoint;
+  no generic `fitt` CLI runner (security posture, see
+  operator-feedback note 2026-05-24).
+- F17 — dashboard live turns view (SSE-subscribe to
+  the existing `/v1/sessions/<s>/turns/stream`). Was
+  Slice 7.5 Task 26c, deferred.
+
+Each item earns the next based on real use, not anticipated
+use. The shape mirrors what MeshClaw / OpenClaw dashboards
+do well: section-per-feature including config introspection,
+not just operational debug. The schedule is committed; the
+calendar isn't — Principle 9 stays load-bearing.
+
 ---
 
 ## Phase 8 — Compaction (Spec-driven, ~1 weekend)

@@ -731,3 +731,276 @@ def test_gaps_view_renders_ranked_entries(tmp_path: Path) -> None:
     docker_pos = body.index("docker container")
     slack_pos = body.index("slack messages")
     assert docker_pos < slack_pos
+
+
+# --------------------------------------------------------------- settings view
+
+
+def test_settings_view_renders_aliases_and_models(client: TestClient) -> None:
+    r = client.get("/dashboard/settings", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # Aliases table renders.
+    assert "fitt-default" in body
+    assert "fitt-smart" in body
+    # Models table renders.
+    assert "qwen2.5-coder:14b" in body
+    assert "anthropic/claude-sonnet-4.5" in body
+
+
+def test_settings_redacts_secrets(client: TestClient) -> None:
+    """Bearer tokens, API keys, and bot tokens MUST NEVER
+    appear in the rendered HTML — even when the secrets
+    object holds them. This is the load-bearing security
+    contract of the read-only introspection commit."""
+    r = client.get("/dashboard/settings", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # The fixture token must not leak.
+    assert PERSONAL_TOKEN not in body
+    # The fixture API key must not leak.
+    assert "sk-or-test-xxxxx" not in body
+    # Provider presence flags are visible instead.
+    assert "openrouter" in body
+    assert "configured" in body
+
+
+def test_settings_renders_secrets_view_for_telegram(tmp_path: Path) -> None:
+    """When telegram secrets are configured, the dashboard
+    surfaces the allowlist user ids — they're not secrets,
+    they're operator-configured identifiers — but not the
+    bot token."""
+    from gateway.config import (
+        AllowedToken,
+        Secrets,
+        TelegramSecrets,
+    )
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    cfg.secrets = Secrets(
+        allowed_tokens=[AllowedToken(name="personal", token=PERSONAL_TOKEN)],
+        openrouter_api_key="sk-or-test-xxxxx",
+        telegram=TelegramSecrets(
+            bot_token="123456:SUPER-SECRET-BOT-TOKEN-XYZ",
+            allowlist_user_ids=[111, 222],
+        ),
+    )
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/settings", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # Allowlist user ids are non-secret; render them.
+    assert "111" in body
+    assert "222" in body
+    # Bot token is a secret. Never render it.
+    assert "SUPER-SECRET-BOT-TOKEN" not in body
+    assert "123456:" not in body
+
+
+def test_settings_view_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/settings")
+    assert r.status_code == 302
+
+
+# --------------------------------------------------------------- projects view
+
+
+def test_projects_view_renders_empty(client: TestClient) -> None:
+    r = client.get("/dashboard/projects", headers=_auth())
+    assert r.status_code == 200
+    assert "No projects registered" in r.text
+
+
+def test_projects_view_lists_registered(tmp_path: Path) -> None:
+    from gateway.projects import Project, default_projects_path
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    # Populate the registry by writing the YAML directly; the
+    # registry re-reads on every call.
+    import yaml
+
+    projects_path = default_projects_path()
+    projects_path.parent.mkdir(parents=True, exist_ok=True)
+    projects_path.write_text(
+        yaml.safe_dump(
+            {
+                "projects": [
+                    Project(
+                        name="fitt",
+                        path="/home/fred/src/fitt",
+                        ssh_host="laptop.tailnet",
+                        test_command="uv run pytest -q",
+                    ).to_dict(),
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    r = tc.get("/dashboard/projects", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "fitt" in body
+    assert "/home/fred/src/fitt" in body
+    assert "laptop.tailnet" in body
+    assert "uv run pytest -q" in body
+
+
+# --------------------------------------------------------------- identity view
+
+
+def test_identity_view_renders_empty_when_no_files(client: TestClient) -> None:
+    """Memory disabled by default in build_test_config; the
+    identity dir doesn't exist. The view renders all four
+    expected files as empty rather than crashing."""
+    r = client.get("/dashboard/identity", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    for name in ("user.md", "soul.md", "tools.md", "lessons.md"):
+        assert name in body
+
+
+def test_identity_view_renders_existing_files(tmp_path: Path) -> None:
+    """When identity files exist, both rendered HTML and raw
+    markdown are accessible in the view."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    identity_dir = cfg.memory.identity_dir
+    identity_dir.mkdir(parents=True, exist_ok=True)
+    (identity_dir / "user.md").write_text(
+        "# Who I am\n\nFred. I run **FITT**.\n",
+        encoding="utf-8",
+    )
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/identity", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # Rendered markdown produces an <h1> for the heading.
+    assert "Who I am" in body
+    # Raw view contains the markdown source.
+    assert "**FITT**" in body
+
+
+def test_identity_view_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/identity")
+    assert r.status_code == 302
+
+
+# --------------------------------------------------------------- skills view
+
+
+def test_skills_view_renders_empty(client: TestClient) -> None:
+    r = client.get("/dashboard/skills", headers=_auth())
+    assert r.status_code == 200
+    assert "No skills loaded" in r.text
+
+
+def test_skills_view_lists_loaded_skills(tmp_path: Path) -> None:
+    """A loaded SKILL.md surfaces in the dashboard."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    skills_dir = cfg.memory.skills_dir
+    skill_dir = skills_dir / "test-skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: test-skill\ndescription: a smoke-test skill\n---\n# Body\n",
+        encoding="utf-8",
+    )
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/skills", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "test-skill" in body
+    assert "smoke-test skill" in body
+
+
+# --------------------------------------------------------------- sessions view
+
+
+def test_sessions_view_renders_main(client: TestClient) -> None:
+    """The session registry's ``main`` always exists."""
+    r = client.get("/dashboard/sessions", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "main" in body
+
+
+def test_sessions_view_shows_archived_state(tmp_path: Path) -> None:
+    """Archived sessions render with an archived badge."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    registry = app.state.session_registry
+    registry.create("retro", name="Retro project")
+    registry.archive("retro")
+
+    r = tc.get("/dashboard/sessions", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "retro" in body
+    assert "archived" in body.lower()
+
+
+# --------------------------------------------------------------- cost view
+
+
+def test_cost_view_renders_empty(client: TestClient) -> None:
+    r = client.get("/dashboard/cost", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # No log dir or no events → either renders the
+    # "log directory does not exist" branch or the
+    # "no events" branch.
+    assert "Cost" in body
+
+
+def test_cost_view_aggregates_completion_events(tmp_path: Path) -> None:
+    """Writes a synthetic gateway.log line and confirms it
+    aggregates into the per-month total."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    log_dir = Path(cfg.logging.dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    import json
+
+    # Use a far-future month to avoid races with anything else.
+    line = json.dumps(
+        {
+            "event": "chat.completion",
+            "timestamp": "2026-05-22T12:00:00Z",
+            "model": "qwen2.5-coder:14b",
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "cost_usd": "0.0123",
+        }
+    )
+    (log_dir / "gateway.log").write_text(line + "\n", encoding="utf-8")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/cost?month=2026-05", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "qwen2.5-coder:14b" in body
+    assert "1,000" in body or "1000" in body
+    assert "$0.0123" in body or "0.0123" in body
+
+
+def test_cost_view_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/cost")
+    assert r.status_code == 302

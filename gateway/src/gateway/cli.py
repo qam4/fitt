@@ -15,9 +15,7 @@ from any shell on the machine where the gateway is installed.
 
 from __future__ import annotations
 
-import json
 import sys
-from collections import defaultdict
 from datetime import UTC
 from decimal import Decimal
 from pathlib import Path
@@ -85,48 +83,10 @@ def cost(log_dir: Path | None, month: str | None) -> None:
         _console.print(f"[yellow]No log dir at {log_dir}. Has the gateway run?[/yellow]")
         sys.exit(0)
 
-    prefix = month
-    if prefix is None:
-        from datetime import datetime
+    from .cost import aggregate_monthly_spend
 
-        prefix = datetime.now(UTC).strftime("%Y-%m")
-
-    totals: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"requests": 0, "cost_usd": Decimal("0"), "input_tokens": 0, "output_tokens": 0}
-    )
-
-    # gateway.log is the current file; rotated files are gateway.log.YYYY-MM-DD
-    log_files = [log_dir / "gateway.log", *sorted(log_dir.glob("gateway.log.*"))]
-    seen_any = False
-    for path in log_files:
-        if not path.exists():
-            continue
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("event") != "chat.completion":
-                    continue
-                ts = event.get("timestamp", "")
-                if not ts.startswith(prefix):
-                    continue
-                seen_any = True
-                model = event.get("model", "unknown")
-                totals[model]["requests"] += 1
-                totals[model]["input_tokens"] += int(event.get("input_tokens", 0) or 0)
-                totals[model]["output_tokens"] += int(event.get("output_tokens", 0) or 0)
-                try:
-                    c = Decimal(str(event.get("cost_usd", "0")))
-                except Exception:
-                    c = Decimal("0")
-                totals[model]["cost_usd"] += c
-
-    if not seen_any:
+    totals, prefix = aggregate_monthly_spend(log_dir, month_prefix=month)
+    if not totals:
         _console.print(f"[yellow]No chat.completion events found for {prefix}.[/yellow]")
         sys.exit(0)
 
@@ -876,7 +836,7 @@ def _print_audit_entry(entry: dict[str, Any]) -> None:
     """Render one audit entry to the console in the compact
     ``fitt audit tail`` shape. Factored out so both initial
     and follow paths use the same formatter."""
-    from datetime import UTC, datetime
+    from datetime import datetime
     from time import time as _now
 
     ts_str = datetime.fromtimestamp(entry.get("ts", _now()), UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -900,7 +860,7 @@ def _parse_since(s: str) -> float:
     - an ISO date ``2026-05-06`` (UTC midnight)
     - a relative duration ``30m`` / ``2h`` / ``7d`` (from now, backwards)
     """
-    from datetime import UTC, date, datetime
+    from datetime import date, datetime
     from time import time as _now
 
     s = s.strip()
@@ -1048,7 +1008,7 @@ def capability_gaps_cmd(
     groups by canonical action text and shows the most-asked-for
     tools first — the natural backlog for 'what should I build
     next'."""
-    from datetime import UTC, datetime
+    from datetime import datetime
 
     from .capabilities import CapabilityGapLog, default_gap_log_path
     from .config import fitt_home
