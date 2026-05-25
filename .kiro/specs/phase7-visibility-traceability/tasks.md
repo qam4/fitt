@@ -652,7 +652,7 @@ two-week Principle 9 window plus per-item readiness checks.
        operator is currently authed with, must validate the
        result still has at least one usable token. Same
        audit + double-confirm posture as F15.
-- [ ] F16. **Typed dashboard action buttons.** Refresh
+- [x] F16. **Typed dashboard action buttons.** Refresh
        aliases, Restart MCP, Verify audit, Pause/Resume
        cron, Run eval. Each button is a typed POST to a
        named endpoint, never a generic command runner.
@@ -660,6 +660,17 @@ two-week Principle 9 window plus per-item readiness checks.
        way to run arbitrary `fitt` CLI commands; that
        posture stays explicitly off the table for security
        reasons (see operator-feedback note 2026-05-24).
+       *Shipped 2026-05-24. Refresh aliases (re-run
+       context-window discovery), Restart MCP server (per-
+       row on /dashboard/health), Verify audit chain
+       (/dashboard/audit), Run eval per alias (/dashboard/
+       aliases per-row), Prune now (history + events
+       pruners on /dashboard/health). Pause/Resume cron
+       was already shipped in F12. All routes flow through
+       a single `_run_typed_action()` helper that does
+       CSRF + audit-on-success / audit-on-failure
+       uniformly; per-action functions stay one-method
+       calls.*
 - [ ] F17. **Dashboard live turns view (SSE).** Was Slice
        7.5 Task 26c, deferred. Subscribes to the existing
        `/v1/sessions/<s>/turns/stream` SSE endpoint, prepends

@@ -5,7 +5,22 @@
    report. The recent-dispatches column reads from the audit log
    (last 24h) so the operator can tell at a glance whether an
    alias has been used and whether anything's been odd.
+
+   Action buttons (F16) at the top + per-row let the operator
+   re-probe context windows or re-run an eval without dropping
+   to the CLI. Each button is a typed POST; CSRF + audit ride
+   F10's substrate.
 #}
+<div class="card" style="display: flex; gap: 12px; align-items: center;">
+  <form method="post" action="/dashboard/actions/refresh-aliases" style="display: inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Refresh context windows</button>
+  </form>
+  <span class="dim" style="font-size: 11px;">
+    Re-runs <code>fitt context refresh</code> across every binding.
+  </span>
+</div>
+
 <div class="card">
   {% if alias_rows %}
   <table>
@@ -20,6 +35,7 @@
         <th>Last probe</th>
         <th class="right">Last eval</th>
         <th class="right">Dispatched 24h</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -34,6 +50,16 @@
         <td class="dim">{{ row.last_probe_text }}</td>
         <td class="right">{{ row.last_eval_text|safe }}</td>
         <td class="right mono">{{ row.dispatched_24h }}</td>
+        <td class="right">
+          <form method="post" action="/dashboard/actions/run-eval" style="display: inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="alias" value="{{ row.id }}">
+            <button type="submit" style="font-size: 11px; padding: 2px 8px;"
+                    title="Run the eval suite — long-running (~30-60s)">
+              run eval
+            </button>
+          </form>
+        </td>
       </tr>
     {% endfor %}
     </tbody>

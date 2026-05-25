@@ -5,6 +5,12 @@
 <h2>Aliases</h2>
 <p class="tagline">Per-binding state — model, backend, context window, last probe, last eval.</p>
 
+{% if banner %}
+<div class="card" style="border-color: {{ banner.color }};">
+  <p style="color: {{ banner.color }}; margin: 0;">{{ banner.message }}</p>
+</div>
+{% endif %}
+
 <div hx-get="/dashboard/_partials/aliases" hx-trigger="load, every 60s" hx-swap="innerHTML">
   {% include "_aliases_panel.html" %}
 </div>

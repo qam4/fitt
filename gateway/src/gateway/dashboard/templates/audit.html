@@ -7,6 +7,23 @@
   Append-only HMAC-chained record of every tool call.
 </p>
 
+{% if banner %}
+<div class="card" style="border-color: {{ banner.color }};">
+  <p style="color: {{ banner.color }}; margin: 0;">{{ banner.message }}</p>
+</div>
+{% endif %}
+
+<div class="card" style="display: flex; gap: 12px; align-items: center;">
+  <form method="post" action="/dashboard/actions/audit-verify" style="display: inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Verify chain</button>
+  </form>
+  <span class="dim" style="font-size: 11px;">
+    Walks every entry, re-computes HMAC, reports tampering.
+    Same as <code>fitt audit verify</code>.
+  </span>
+</div>
+
 <form method="get" action="/dashboard/audit" style="margin-bottom: 16px;">
   <label for="tool" style="font-size: 12px; color: var(--text-dim);">filter tool:</label>
   <input type="text" id="tool" name="tool" value="{{ tool_filter or '' }}"

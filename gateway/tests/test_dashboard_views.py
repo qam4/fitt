@@ -2150,6 +2150,228 @@ def test_secrets_edit_redirects_without_auth(client: TestClient) -> None:
     assert r.status_code == 302
 
 
+# --------------------------------------------------------------- typed actions (F16)
+
+
+def test_aliases_view_includes_action_buttons(client: TestClient) -> None:
+    """The aliases page now renders 'Refresh context windows'
+    + per-row 'run eval' buttons."""
+    r = client.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert 'action="/dashboard/actions/refresh-aliases"' in body
+    assert 'action="/dashboard/actions/run-eval"' in body
+
+
+def test_audit_view_includes_verify_button(client: TestClient) -> None:
+    r = client.get("/dashboard/audit", headers=_auth())
+    assert r.status_code == 200
+    assert 'action="/dashboard/actions/audit-verify"' in r.text
+
+
+def test_health_view_includes_action_buttons(client: TestClient) -> None:
+    r = client.get("/dashboard/health", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert 'action="/dashboard/actions/pruner-tick"' in body
+
+
+def test_action_refresh_aliases_calls_cache(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/aliases")
+    csrf = _csrf_from(r.text)
+
+    # Track whether cache.populate was called.
+    calls: list[object] = []
+    cache = app.state.context_windows
+    original = cache.populate
+
+    async def spy(*args, **kwargs):
+        calls.append((args, kwargs))
+        return await original(*args, **kwargs)
+
+    cache.populate = spy  # type: ignore[method-assign]
+
+    r = tc.post(
+        "/dashboard/actions/refresh-aliases",
+        data={"csrf_token": csrf},
+    )
+    assert r.status_code == 303
+    assert "/dashboard/aliases" in r.headers["location"]
+    # The action ran (the redirect carries the success banner).
+    assert "banner_message" in r.headers["location"]
+    assert len(calls) == 1
+
+
+def test_action_audit_verify_returns_ok(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    # Append a real audit entry first so we have something
+    # to verify.
+    from gateway.audit import new_entry
+
+    app.state.audit.append(
+        new_entry(
+            session_key="main",
+            client="cli",
+            tool="read_file",
+            args={"path": "x"},
+            decision="auto",
+            ok=True,
+        )
+    )
+
+    r = tc.get("/dashboard/audit")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/actions/audit-verify",
+        data={"csrf_token": csrf},
+    )
+    assert r.status_code == 303
+    assert "/dashboard/audit" in r.headers["location"]
+    # Success banner.
+    from urllib.parse import unquote_plus
+
+    target = unquote_plus(r.headers["location"])
+    assert "verified" in target.lower()
+
+
+def test_action_pruner_tick_invokes_pruner(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    # Track whether tick was called.
+    calls: list[object] = []
+    pruner = app.state.history_pruner
+    original_tick = pruner.tick
+
+    async def spy(*args, **kwargs):
+        calls.append((args, kwargs))
+        return await original_tick(*args, **kwargs)
+
+    pruner.tick = spy  # type: ignore[method-assign]
+
+    r = tc.get("/dashboard/health")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/actions/pruner-tick",
+        data={"csrf_token": csrf, "which": "history"},
+    )
+    assert r.status_code == 303
+    assert "/dashboard/health" in r.headers["location"]
+    assert len(calls) == 1
+
+
+def test_action_mcp_restart_unknown_server(tmp_path: Path) -> None:
+    """No MCP servers configured in the test fixture; trying
+    to restart one should land an error banner."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/health")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/actions/mcp-restart",
+        data={"csrf_token": csrf, "name": "nonexistent"},
+    )
+    assert r.status_code == 303
+    from urllib.parse import unquote_plus
+
+    target = unquote_plus(r.headers["location"])
+    assert "no mcp server" in target.lower()
+
+
+def test_action_run_eval_unknown_alias(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/aliases")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/actions/run-eval",
+        data={"csrf_token": csrf, "alias": "fitt-nonexistent"},
+    )
+    assert r.status_code == 303
+    from urllib.parse import unquote_plus
+
+    target = unquote_plus(r.headers["location"])
+    assert "unknown alias" in target.lower()
+
+
+def test_actions_reject_bad_csrf(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.post(
+        "/dashboard/actions/refresh-aliases",
+        data={"csrf_token": "garbage"},
+    )
+    assert r.status_code == 303
+    assert "banner_message" in r.headers["location"]
+
+
+def test_actions_emit_audit(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/audit")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/actions/audit-verify",
+        data={"csrf_token": csrf},
+    )
+    assert r.status_code == 303
+
+    entries = app.state.audit.iter_entries()
+    action_entries = [e for e in entries if (e.get("tool") or "").startswith("dashboard.action.")]
+    assert len(action_entries) >= 1
+    e = action_entries[-1]
+    assert e["tool"] == "dashboard.action.audit_verify"
+    assert e["ok"] is True
+
+
+def test_actions_redirect_without_auth(client: TestClient) -> None:
+    r = client.post(
+        "/dashboard/actions/refresh-aliases",
+        data={"csrf_token": "x"},
+    )
+    assert r.status_code == 302
+    r = client.post(
+        "/dashboard/actions/audit-verify",
+        data={"csrf_token": "x"},
+    )
+    assert r.status_code == 302
+
+
 # --------------------------------------------------------------- skills view
 
 

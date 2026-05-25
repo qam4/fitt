@@ -408,6 +408,28 @@ def _build_aliases_context(request: Request) -> dict[str, Any]:
     }
 
 
+def _aliases_context_with_csrf(request: Request) -> dict[str, Any]:
+    """Aliases context plus a fresh CSRF token. Same data as
+    :func:`_build_aliases_context` plus the token used by the
+    F16 action buttons (refresh-aliases at the top, per-row
+    run-eval). Used by both the page route and the partial
+    refresh route so the buttons keep working across HTMX
+    swaps."""
+    from .edit import issue_csrf as _issue_csrf
+
+    ctx = _build_aliases_context(request)
+    auth = request.app.state.dashboard_auth
+    ctx["csrf_token"] = _issue_csrf(request, key=auth.key())
+    # Surface a one-shot banner when the action handler
+    # redirected back here. The page route reads
+    # banner_message + banner_color from the query string
+    # and stuffs them into ctx; the partial route doesn't
+    # see them (HTMX swaps in place without query strings)
+    # so we set them empty here.
+    ctx.setdefault("banner", None)
+    return ctx
+
+
 # --------------------------------------------------------------- turns
 
 
@@ -1276,6 +1298,215 @@ def _secrets_redirect(message: str, *, color: str, key: str | None) -> Response:
     return _Redirect(url=target, status_code=303)
 
 
+# --------------------------------------------------------------- typed actions (F16)
+
+
+async def _action_refresh_aliases(request: Request) -> tuple[bool, str]:
+    """Re-run context-window discovery for every alias."""
+    cache = getattr(request.app.state, "context_windows", None)
+    if cache is None:
+        return False, "context cache not initialised"
+    config = request.app.state.config
+    timeout_s = float(getattr(config.server, "context_probe_timeout_s", 5.0))
+    await cache.populate(config, timeout_s=timeout_s)
+    return True, "Refreshed context windows for every alias"
+
+
+async def _action_mcp_restart(request: Request, *, name: str) -> tuple[bool, str]:
+    """Stop + start one MCP server by name."""
+    if not name:
+        return False, "Missing server name"
+    manager = getattr(request.app.state, "mcp", None)
+    registry = getattr(request.app.state, "tool_registry", None)
+    if manager is None or registry is None:
+        return False, "MCP not configured on this gateway"
+    try:
+        await manager.restart(name, registry)
+    except KeyError:
+        return False, f"No MCP server named {name!r}"
+    except Exception as exc:
+        return False, f"Restart failed: {exc}"
+    return True, f"Restarted MCP server {name!r}"
+
+
+async def _action_audit_verify(request: Request) -> tuple[bool, str]:
+    """Walk the audit chain, re-compute every HMAC."""
+    audit = getattr(request.app.state, "audit", None)
+    if audit is None:
+        return False, "Audit log not configured"
+    result = audit.verify()
+    if result.ok:
+        return True, f"Audit chain verified — {result.total_lines} entries"
+    return (
+        False,
+        f"Audit chain BROKEN at line {result.bad_line}: {result.reason}",
+    )
+
+
+async def _action_pruner_tick(request: Request, *, which: str) -> tuple[bool, str]:
+    """Force a pruner sweep right now."""
+    if which == "history":
+        pruner = getattr(request.app.state, "history_pruner", None)
+        label = "history"
+    elif which == "events":
+        pruner = getattr(request.app.state, "event_pruner", None)
+        label = "events"
+    else:
+        return False, f"Unknown pruner {which!r}"
+    if pruner is None:
+        return False, f"{label} pruner not configured"
+    try:
+        removed = await pruner.tick(now=None)
+    except Exception as exc:
+        return False, f"{label} pruner failed: {exc}"
+    if removed is None:
+        return True, f"{label} pruner ran (nothing was due)"
+    return True, f"{label} pruner removed {removed} item(s)"
+
+
+async def _action_run_eval(request: Request, *, alias: str) -> tuple[bool, str]:
+    """Run the eval suite for one alias — same code path
+    POST /v1/eval/<alias> uses."""
+    if not alias:
+        return False, "Missing alias"
+    config = request.app.state.config
+    if alias not in config.aliases:
+        return False, f"Unknown alias {alias!r}"
+    from ..alias_eval import (
+        default_cases,
+        run_eval_suite,
+        write_report,
+    )
+    from ..router import AliasRouter
+
+    eval_router = AliasRouter(config)
+    cases = default_cases()
+    try:
+        report = await run_eval_suite(alias, eval_router, cases=cases)
+    except Exception as exc:
+        return False, f"Eval failed: {type(exc).__name__}: {exc}"
+
+    try:
+        from ..config import fitt_home as _fh
+
+        write_report(report, _fh())
+    except Exception:
+        # Persistence failure shouldn't fail the action;
+        # the report's already in memory and the audit
+        # trail captures the run.
+        pass
+    return True, (f"Eval ran — {report.passed}/{report.total} passed ({report.pass_rate:.0%})")
+
+
+def _action_redirect(target: str, message: str, *, color: str) -> Response:
+    """Redirect to ``target`` with a one-shot banner."""
+    from urllib.parse import quote_plus as _quote
+
+    from fastapi.responses import RedirectResponse as _Redirect
+
+    sep = "&" if "?" in target else "?"
+    url = f"{target}{sep}banner_message={_quote(message)}&banner_color={_quote(color)}"
+    return _Redirect(url=url, status_code=303)
+
+
+async def _run_typed_action(
+    request: Request,
+    *,
+    csrf_token: str,
+    action_name: str,
+    action_args: dict[str, Any],
+    redirect_target: str,
+    run: Any,
+) -> Response:
+    """Common handler for the F16 button-driven typed POSTs.
+
+    Each route hands in:
+
+    * the submitted CSRF token,
+    * an action name (used as the audit ``tool`` namespace),
+    * an args dict (rendered into the audit entry),
+    * the redirect target on success/failure,
+    * a zero-arg async callable that does the work and
+      returns ``(ok: bool, message: str)``.
+
+    The helper handles auth, CSRF, audit-on-success,
+    audit-on-failure, and the redirect-with-banner. Each
+    action stays a one-method-call function; the bookkeeping
+    lives here.
+
+    No generic command runner. ``run`` is a typed Python
+    callable produced by the route handler — there's no
+    string interpolation, no shell, no eval. The action's
+    surface is fully constrained by its named function.
+    """
+    from .actions import ActionTimer, audit_action
+    from .edit import CsrfMismatch, csrf_required
+
+    guard = authorize_request(request)
+    if guard is not None:
+        return guard
+    client = getattr(request.state, "client", "webui")
+    audit_log = getattr(request.app.state, "audit", None)
+
+    tool_name = f"dashboard.action.{action_name}"
+
+    try:
+        csrf_required(request, csrf_token)
+    except CsrfMismatch:
+        audit_action(
+            audit_log,
+            tool=tool_name,
+            args=action_args,
+            client=client,
+            ok=False,
+            decision="rejected",
+            error="CSRF token mismatch",
+            extra={"reason": "csrf_mismatch"},
+        )
+        return _action_redirect(
+            redirect_target,
+            "CSRF token did not match — reload and try again",
+            color="var(--error)",
+        )
+
+    with ActionTimer() as timer:
+        try:
+            ok, message = await run()
+        except Exception as exc:
+            audit_action(
+                audit_log,
+                tool=tool_name,
+                args=action_args,
+                client=client,
+                ok=False,
+                decision="error",
+                error=f"{type(exc).__name__}: {exc}",
+                duration_ms=timer.elapsed_ms,
+                extra={"reason": "exception"},
+            )
+            return _action_redirect(
+                redirect_target,
+                f"Action failed: {type(exc).__name__}",
+                color="var(--error)",
+            )
+
+    audit_action(
+        audit_log,
+        tool=tool_name,
+        args=action_args,
+        client=client,
+        ok=ok,
+        decision="approved" if ok else "rejected",
+        error="" if ok else message,
+        duration_ms=timer.elapsed_ms,
+    )
+    return _action_redirect(
+        redirect_target,
+        message,
+        color="var(--accent)" if ok else "var(--error)",
+    )
+
+
 def _build_identity_context(request: Request) -> dict[str, Any]:
     """Read the identity files + lessons.md and return a
     rendered + raw view for each.
@@ -1888,12 +2119,21 @@ def build_views_router() -> APIRouter:
     # --------------------------------------------------------- aliases
 
     @router.get("/aliases", response_class=HTMLResponse)
-    async def aliases_view(request: Request) -> Response:
+    async def aliases_view(
+        request: Request,
+        banner_message: str | None = None,
+        banner_color: str | None = None,
+    ) -> Response:
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        ctx = _build_aliases_context(request)
+        ctx = _aliases_context_with_csrf(request)
         ctx["client"] = getattr(request.state, "client", "webui")
+        if banner_message:
+            ctx["banner"] = {
+                "message": banner_message,
+                "color": banner_color or "var(--accent)",
+            }
         return templates.TemplateResponse(request, "aliases.html", ctx)
 
     @router.get("/_partials/aliases", response_class=HTMLResponse)
@@ -1901,7 +2141,7 @@ def build_views_router() -> APIRouter:
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        ctx = _build_aliases_context(request)
+        ctx = _aliases_context_with_csrf(request)
         return templates.TemplateResponse(request, "_aliases_panel.html", ctx)
 
     # --------------------------------------------------------- turns
@@ -1997,6 +2237,8 @@ def build_views_router() -> APIRouter:
         request: Request,
         tool: str | None = None,
         limit: int = 100,
+        banner_message: str | None = None,
+        banner_color: str | None = None,
     ) -> Response:
         guard = authorize_request(request)
         if guard is not None:
@@ -2007,15 +2249,41 @@ def build_views_router() -> APIRouter:
         clamped = max(1, min(limit, 1000))
         ctx = _build_audit_context(request, tool_filter=tool, limit=clamped)
         ctx["client"] = getattr(request.state, "client", "webui")
+        from .edit import issue_csrf as _issue_csrf
+
+        auth = request.app.state.dashboard_auth
+        ctx["csrf_token"] = _issue_csrf(request, key=auth.key())
+        if banner_message:
+            ctx["banner"] = {
+                "message": banner_message,
+                "color": banner_color or "var(--accent)",
+            }
+        else:
+            ctx["banner"] = None
         return templates.TemplateResponse(request, "audit.html", ctx)
 
     @router.get("/health", response_class=HTMLResponse)
-    async def health_view(request: Request) -> Response:
+    async def health_view(
+        request: Request,
+        banner_message: str | None = None,
+        banner_color: str | None = None,
+    ) -> Response:
         guard = authorize_request(request)
         if guard is not None:
             return guard
         ctx = _build_health_context(request)
         ctx["client"] = getattr(request.state, "client", "webui")
+        from .edit import issue_csrf as _issue_csrf
+
+        auth = request.app.state.dashboard_auth
+        ctx["csrf_token"] = _issue_csrf(request, key=auth.key())
+        if banner_message:
+            ctx["banner"] = {
+                "message": banner_message,
+                "color": banner_color or "var(--accent)",
+            }
+        else:
+            ctx["banner"] = None
         return templates.TemplateResponse(request, "health.html", ctx)
 
     @router.get("/_partials/health", response_class=HTMLResponse)
@@ -2024,6 +2292,10 @@ def build_views_router() -> APIRouter:
         if guard is not None:
             return guard
         ctx = _build_health_context(request)
+        from .edit import issue_csrf as _issue_csrf
+
+        auth = request.app.state.dashboard_auth
+        ctx["csrf_token"] = _issue_csrf(request, key=auth.key())
         return templates.TemplateResponse(request, "_health_panel.html", ctx)
 
     @router.get("/gaps", response_class=HTMLResponse)
@@ -2734,6 +3006,84 @@ def build_views_router() -> APIRouter:
         ctx = _build_cost_context(request, month_prefix=month)
         ctx["client"] = getattr(request.state, "client", "webui")
         return templates.TemplateResponse(request, "cost.html", ctx)
+
+    # --------------------------------------------------------- typed actions (F16)
+
+    @router.post("/actions/refresh-aliases", response_class=HTMLResponse)
+    async def refresh_aliases_action(
+        request: Request,
+        csrf_token: str = Form(""),
+    ) -> Response:
+        return await _run_typed_action(
+            request,
+            csrf_token=csrf_token,
+            action_name="refresh_aliases",
+            action_args={},
+            redirect_target="/dashboard/aliases",
+            run=lambda: _action_refresh_aliases(request),
+        )
+
+    @router.post("/actions/mcp-restart", response_class=HTMLResponse)
+    async def mcp_restart_action(
+        request: Request,
+        csrf_token: str = Form(""),
+        name: str = Form(""),
+    ) -> Response:
+        cleaned = name.strip()
+        return await _run_typed_action(
+            request,
+            csrf_token=csrf_token,
+            action_name="mcp_restart",
+            action_args={"name": cleaned},
+            redirect_target="/dashboard/health",
+            run=lambda: _action_mcp_restart(request, name=cleaned),
+        )
+
+    @router.post("/actions/audit-verify", response_class=HTMLResponse)
+    async def audit_verify_action(
+        request: Request,
+        csrf_token: str = Form(""),
+    ) -> Response:
+        return await _run_typed_action(
+            request,
+            csrf_token=csrf_token,
+            action_name="audit_verify",
+            action_args={},
+            redirect_target="/dashboard/audit",
+            run=lambda: _action_audit_verify(request),
+        )
+
+    @router.post("/actions/pruner-tick", response_class=HTMLResponse)
+    async def pruner_tick_action(
+        request: Request,
+        csrf_token: str = Form(""),
+        which: str = Form(""),
+    ) -> Response:
+        cleaned = which.strip()
+        return await _run_typed_action(
+            request,
+            csrf_token=csrf_token,
+            action_name="pruner_tick",
+            action_args={"which": cleaned},
+            redirect_target="/dashboard/health",
+            run=lambda: _action_pruner_tick(request, which=cleaned),
+        )
+
+    @router.post("/actions/run-eval", response_class=HTMLResponse)
+    async def run_eval_action(
+        request: Request,
+        csrf_token: str = Form(""),
+        alias: str = Form(""),
+    ) -> Response:
+        cleaned = alias.strip()
+        return await _run_typed_action(
+            request,
+            csrf_token=csrf_token,
+            action_name="run_eval",
+            action_args={"alias": cleaned},
+            redirect_target="/dashboard/aliases",
+            run=lambda: _action_run_eval(request, alias=cleaned),
+        )
 
     return router
 

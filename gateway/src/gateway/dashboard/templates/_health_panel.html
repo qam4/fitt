@@ -30,11 +30,21 @@
     <h3>History pruner</h3>
     <div class="value mono">{{ history_pruner_text }}</div>
     <div class="dim" style="font-size: 12px;">last sweep</div>
+    <form method="post" action="/dashboard/actions/pruner-tick" style="margin-top: 8px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="which" value="history">
+      <button type="submit" style="font-size: 11px; padding: 2px 8px;">prune now</button>
+    </form>
   </div>
   <div class="card compact">
     <h3>Event pruner</h3>
     <div class="value mono">{{ event_pruner_text }}</div>
     <div class="dim" style="font-size: 12px;">last sweep</div>
+    <form method="post" action="/dashboard/actions/pruner-tick" style="margin-top: 8px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="which" value="events">
+      <button type="submit" style="font-size: 11px; padding: 2px 8px;">prune now</button>
+    </form>
   </div>
   <div class="card compact">
     <h3>Telegram bot</h3>
@@ -51,7 +61,7 @@
 <div class="card">
   <h3>MCP servers</h3>
   <table>
-    <thead><tr><th></th><th>Name</th><th>Tools</th><th>Command</th></tr></thead>
+    <thead><tr><th></th><th>Name</th><th>Tools</th><th>Command</th><th></th></tr></thead>
     <tbody>
     {% for s in mcp_servers %}
       <tr>
@@ -59,6 +69,13 @@
         <td class="mono">{{ s.name }}</td>
         <td class="dim mono">{{ s.tools|length }}</td>
         <td class="dim mono" style="font-size: 11px;">{{ s.command }}</td>
+        <td class="right">
+          <form method="post" action="/dashboard/actions/mcp-restart" style="display: inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="name" value="{{ s.name }}">
+            <button type="submit" style="font-size: 11px; padding: 2px 8px;">restart</button>
+          </form>
+        </td>
       </tr>
     {% endfor %}
     </tbody>

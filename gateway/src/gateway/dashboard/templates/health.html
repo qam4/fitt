@@ -5,6 +5,12 @@
 <h2>Health</h2>
 <p class="tagline">System status — same data <code>/v1/status</code> exposes.</p>
 
+{% if banner %}
+<div class="card" style="border-color: {{ banner.color }};">
+  <p style="color: {{ banner.color }}; margin: 0;">{{ banner.message }}</p>
+</div>
+{% endif %}
+
 <div hx-get="/dashboard/_partials/health" hx-trigger="load, every 30s" hx-swap="innerHTML">
   {% include "_health_panel.html" %}
 </div>
