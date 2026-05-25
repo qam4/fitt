@@ -1090,6 +1090,324 @@ def test_identity_edit_save_redirects_without_auth(client: TestClient) -> None:
     assert r.status_code == 302
 
 
+# --------------------------------------------------------------- projects edit (F12)
+
+
+def _login(tc: TestClient) -> None:
+    """Log in via the form so the test client carries the
+    dashboard session cookie."""
+    tc.post(
+        "/dashboard/login",
+        data={"token": PERSONAL_TOKEN, "next": "/dashboard/"},
+    )
+
+
+def _csrf_from(text: str) -> str:
+    import re
+
+    m = re.search(r'name="csrf_token" value="([^"]+)"', text)
+    assert m, "no CSRF token in response"
+    return m.group(1)
+
+
+def test_projects_view_includes_csrf_and_add_form(client: TestClient) -> None:
+    """The read view now also serves as the add-form host."""
+    r = client.get("/dashboard/projects", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert 'action="/dashboard/projects/add"' in body
+    assert 'name="csrf_token"' in body
+
+
+def test_projects_add_round_trip(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    # Get a CSRF from the projects view itself.
+    r = tc.get("/dashboard/projects")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/projects/add",
+        data={
+            "csrf_token": csrf,
+            "name": "fitt",
+            "path": "/home/fred/src/fitt",
+            "ssh_host": "laptop.tailnet",
+            "test_command": "uv run pytest -q",
+            "build_command": "",
+        },
+    )
+    assert r.status_code == 303
+    assert "/dashboard/projects" in r.headers["location"]
+
+    # Project landed.
+    registry = app.state.project_registry
+    project = registry.get("fitt")
+    assert project.path == "/home/fred/src/fitt"
+    assert project.ssh_host == "laptop.tailnet"
+    assert project.test_command == "uv run pytest -q"
+
+
+def test_projects_add_rejects_bad_csrf(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.post(
+        "/dashboard/projects/add",
+        data={
+            "csrf_token": "garbage",
+            "name": "evil",
+            "path": "/tmp",
+        },
+    )
+    # Bounces back to /dashboard/projects with an error banner.
+    assert r.status_code == 303
+    assert "banner_message" in r.headers["location"]
+    # No project was added.
+    registry = app.state.project_registry
+    from gateway.projects import UnknownProject
+
+    with pytest.raises(UnknownProject):
+        registry.get("evil")
+
+
+def test_projects_update_changes_fields(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    # Pre-populate.
+    from gateway.projects import Project
+
+    app.state.project_registry.add(Project(name="fitt", path="/old/path", ssh_host="old-host"))
+
+    r = tc.get("/dashboard/projects/edit?name=fitt")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/projects/update",
+        data={
+            "csrf_token": csrf,
+            "name": "fitt",
+            "path": "/new/path",
+            "ssh_host": "new-host",
+            "test_command": "uv run pytest",
+            "build_command": "",
+        },
+    )
+    assert r.status_code == 303
+
+    project = app.state.project_registry.get("fitt")
+    assert project.path == "/new/path"
+    assert project.ssh_host == "new-host"
+    assert project.test_command == "uv run pytest"
+
+
+def test_projects_remove(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    from gateway.projects import Project, UnknownProject
+
+    app.state.project_registry.add(Project(name="fitt", path="/home/fitt"))
+
+    r = tc.get("/dashboard/projects/edit?name=fitt")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/projects/remove",
+        data={"csrf_token": csrf, "name": "fitt"},
+    )
+    assert r.status_code == 303
+
+    with pytest.raises(UnknownProject):
+        app.state.project_registry.get("fitt")
+
+
+def test_projects_actions_emit_audit(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/projects")
+    csrf = _csrf_from(r.text)
+
+    tc.post(
+        "/dashboard/projects/add",
+        data={
+            "csrf_token": csrf,
+            "name": "audited",
+            "path": "/x",
+        },
+    )
+    entries = app.state.audit.iter_entries()
+    edit_entries = [e for e in entries if (e.get("tool") or "").startswith("dashboard.project_")]
+    assert len(edit_entries) >= 1
+    e = edit_entries[-1]
+    assert e["tool"] == "dashboard.project_add"
+    assert e["ok"] is True
+    assert e["decision"] == "approved"
+
+
+def test_projects_edit_redirects_without_auth(client: TestClient) -> None:
+    r = client.post(
+        "/dashboard/projects/add",
+        data={"csrf_token": "x", "name": "y", "path": "/z"},
+    )
+    assert r.status_code == 302
+
+
+# --------------------------------------------------------------- cron edit (F12)
+
+
+def _make_cron(app, cron_id: str = "cj1", *, enabled: bool = True):
+    from gateway.cron import CronJob, CronSchedule
+
+    job = CronJob(
+        id=cron_id,
+        name=f"job-{cron_id}",
+        message="check inbox",
+        schedule=CronSchedule(kind="every", every_secs=3600),
+        enabled=enabled,
+        created_by_client="cli",
+        created_ts=1779479823.42,
+    )
+    app.state.cron.add(job)
+    return job
+
+
+def test_cron_view_includes_csrf_and_action_forms(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _make_cron(app)
+    _login(tc)
+
+    r = tc.get("/dashboard/cron")
+    assert r.status_code == 200
+    body = r.text
+    assert 'action="/dashboard/cron/toggle"' in body
+    assert 'action="/dashboard/cron/remove"' in body
+
+
+def test_cron_toggle_pauses_then_resumes(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _make_cron(app, "cj-pauseme")
+    _login(tc)
+
+    r = tc.get("/dashboard/cron")
+    csrf = _csrf_from(r.text)
+
+    # Pause.
+    r = tc.post(
+        "/dashboard/cron/toggle",
+        data={"csrf_token": csrf, "cron_id": "cj-pauseme", "enable": "0"},
+    )
+    assert r.status_code == 303
+    assert app.state.cron.get("cj-pauseme").enabled is False
+
+    # Resume.
+    r = tc.get("/dashboard/cron")
+    csrf = _csrf_from(r.text)
+    r = tc.post(
+        "/dashboard/cron/toggle",
+        data={"csrf_token": csrf, "cron_id": "cj-pauseme", "enable": "1"},
+    )
+    assert r.status_code == 303
+    assert app.state.cron.get("cj-pauseme").enabled is True
+
+
+def test_cron_remove_drops_job(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _make_cron(app, "cj-doomed")
+    _login(tc)
+
+    r = tc.get("/dashboard/cron")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/cron/remove",
+        data={"csrf_token": csrf, "cron_id": "cj-doomed"},
+    )
+    assert r.status_code == 303
+    assert app.state.cron.get("cj-doomed") is None
+
+
+def test_cron_actions_reject_bad_csrf(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _make_cron(app, "cj-csrf")
+    _login(tc)
+
+    r = tc.post(
+        "/dashboard/cron/toggle",
+        data={"csrf_token": "garbage", "cron_id": "cj-csrf", "enable": "0"},
+    )
+    assert r.status_code == 303
+    assert "banner_message" in r.headers["location"]
+    # State unchanged.
+    assert app.state.cron.get("cj-csrf").enabled is True
+
+
+def test_cron_actions_emit_audit(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _make_cron(app, "cj-audit")
+    _login(tc)
+
+    r = tc.get("/dashboard/cron")
+    csrf = _csrf_from(r.text)
+    tc.post(
+        "/dashboard/cron/toggle",
+        data={"csrf_token": csrf, "cron_id": "cj-audit", "enable": "0"},
+    )
+
+    entries = app.state.audit.iter_entries()
+    cron_entries = [e for e in entries if (e.get("tool") or "").startswith("dashboard.cron_")]
+    assert len(cron_entries) >= 1
+    e = cron_entries[-1]
+    assert e["tool"] == "dashboard.cron_toggle"
+    assert e["ok"] is True
+
+
+def test_cron_actions_redirect_without_auth(client: TestClient) -> None:
+    r = client.post(
+        "/dashboard/cron/toggle",
+        data={"csrf_token": "x", "cron_id": "y", "enable": "0"},
+    )
+    assert r.status_code == 302
+    r = client.post(
+        "/dashboard/cron/remove",
+        data={"csrf_token": "x", "cron_id": "y"},
+    )
+    assert r.status_code == 302
+
+
 # --------------------------------------------------------------- skills view
 
 

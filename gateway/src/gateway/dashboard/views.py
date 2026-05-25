@@ -852,6 +852,307 @@ def _build_projects_context(request: Request) -> dict[str, Any]:
     return {"project_rows": rows}
 
 
+def _build_project_edit_context(
+    request: Request,
+    *,
+    name: str,
+    csrf_token: str,
+    banner: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    """Look up one project for the edit form. Returns ``None``
+    when the project doesn't exist; the route renders a 404
+    in that case."""
+    registry = getattr(request.app.state, "project_registry", None)
+    if registry is None:
+        return None
+    try:
+        project = registry.get(name)
+    except Exception:
+        return None
+    return {
+        "project": {
+            "name": project.name,
+            "path": project.path,
+            "ssh_host": project.ssh_host,
+            "test_command": project.test_command,
+            "build_command": project.build_command,
+        },
+        "csrf_token": csrf_token,
+        "banner": banner,
+    }
+
+
+async def _projects_action(
+    request: Request,
+    *,
+    csrf_token: str,
+    kind: str,
+    name: str,
+    fields: dict[str, str],
+) -> Response:
+    """Common handler for the three project-mutation POSTs.
+
+    All three (add / update / remove) share the same auth +
+    CSRF + audit flow; only the call to the registry differs.
+    Centralising the shape means the route handlers stay
+    boilerplate-free and the audit emission can't drift
+    between them.
+    """
+
+    from .actions import ActionTimer, audit_action
+    from .edit import CsrfMismatch, csrf_required
+
+    guard = authorize_request(request)
+    if guard is not None:
+        return guard
+    client = getattr(request.state, "client", "webui")
+    audit_log = getattr(request.app.state, "audit", None)
+
+    # CSRF check first.
+    try:
+        csrf_required(request, csrf_token)
+    except CsrfMismatch as exc:
+        audit_action(
+            audit_log,
+            tool=f"dashboard.project_{kind}",
+            args={"name": name, **fields},
+            client=client,
+            ok=False,
+            decision="rejected",
+            error=str(exc),
+            extra={"reason": "csrf_mismatch"},
+        )
+        return _projects_redirect(
+            "CSRF token did not match — reload and try again",
+            color="var(--error)",
+        )
+
+    if not name:
+        audit_action(
+            audit_log,
+            tool=f"dashboard.project_{kind}",
+            args={"name": name, **fields},
+            client=client,
+            ok=False,
+            decision="rejected",
+            error="missing project name",
+            extra={"reason": "validation_failed"},
+        )
+        return _projects_redirect(
+            "Project name is required",
+            color="var(--error)",
+        )
+
+    registry = request.app.state.project_registry
+    from ..projects import Project as _Project
+    from ..projects import ProjectError as _ProjectError
+
+    with ActionTimer() as timer:
+        try:
+            if kind == "add":
+                project = _Project(
+                    name=name,
+                    path=fields.get("path", ""),
+                    ssh_host=fields.get("ssh_host", ""),
+                    test_command=fields.get("test_command", ""),
+                    build_command=fields.get("build_command", ""),
+                )
+                registry.add(project)
+                message = f"Added project {name!r}"
+            elif kind == "update":
+                # Filter out empty strings so we don't blank out
+                # fields the operator left untouched.
+                update_kwargs = {k: v for k, v in fields.items() if v != ""}
+                # ssh_host / test / build are allowed to be
+                # explicitly empty — but the form currently sends
+                # the existing value, so empty really does mean
+                # "clear this field." Pass them as-is.
+                update_kwargs.update({k: v for k, v in fields.items() if k != "path"})
+                # path always present (required field).
+                if "path" in fields:
+                    update_kwargs["path"] = fields["path"]
+                registry.update(name, **update_kwargs)
+                message = f"Updated project {name!r}"
+            elif kind == "remove":
+                registry.remove(name)
+                message = f"Removed project {name!r}"
+            else:  # pragma: no cover - defensive
+                raise _ProjectError(f"unknown kind: {kind!r}")
+        except _ProjectError as exc:
+            audit_action(
+                audit_log,
+                tool=f"dashboard.project_{kind}",
+                args={"name": name, **fields},
+                client=client,
+                ok=False,
+                decision="rejected",
+                error=str(exc),
+                duration_ms=timer.elapsed_ms,
+                extra={"reason": "validation_failed"},
+            )
+            return _projects_redirect(
+                f"Project {kind} failed: {exc}",
+                color="var(--error)",
+            )
+        except Exception as exc:
+            audit_action(
+                audit_log,
+                tool=f"dashboard.project_{kind}",
+                args={"name": name, **fields},
+                client=client,
+                ok=False,
+                decision="error",
+                error=f"{type(exc).__name__}: {exc}",
+                duration_ms=timer.elapsed_ms,
+                extra={"reason": "io_error"},
+            )
+            return _projects_redirect(
+                f"Project {kind} failed unexpectedly",
+                color="var(--error)",
+            )
+
+    audit_action(
+        audit_log,
+        tool=f"dashboard.project_{kind}",
+        args={"name": name, **fields},
+        client=client,
+        ok=True,
+        decision="approved",
+        duration_ms=timer.elapsed_ms,
+    )
+    return _projects_redirect(message, color="var(--accent)")
+
+
+def _projects_redirect(message: str, *, color: str) -> Response:
+    """Redirect to /dashboard/projects with a one-shot banner.
+
+    The banner state lives in a tiny query-string flash; we
+    don't write a cookie because the message is purely
+    cosmetic. ``message`` is escaped at render time by Jinja's
+    autoescape."""
+    from urllib.parse import quote_plus as _quote
+
+    from fastapi.responses import RedirectResponse as _Redirect
+
+    target = f"/dashboard/projects?banner_message={_quote(message)}&banner_color={_quote(color)}"
+    return _Redirect(url=target, status_code=303)
+
+
+async def _cron_action(
+    request: Request,
+    *,
+    csrf_token: str,
+    kind: str,
+    cron_id: str,
+    enable: bool,
+) -> Response:
+    """Common handler for /cron/toggle and /cron/remove POSTs.
+
+    Calls into :class:`gateway.cron.CronService` directly —
+    the same code path the inline ``cron_*`` tools use. So a
+    cron paused from the dashboard and a cron paused from a
+    Telegram tool turn produce identical on-disk and
+    audit-log effects.
+    """
+    from .actions import ActionTimer, audit_action
+    from .edit import CsrfMismatch, csrf_required
+
+    guard = authorize_request(request)
+    if guard is not None:
+        return guard
+    client = getattr(request.state, "client", "webui")
+    audit_log = getattr(request.app.state, "audit", None)
+
+    try:
+        csrf_required(request, csrf_token)
+    except CsrfMismatch as exc:
+        audit_action(
+            audit_log,
+            tool=f"dashboard.cron_{kind}",
+            args={"cron_id": cron_id},
+            client=client,
+            ok=False,
+            decision="rejected",
+            error=str(exc),
+            extra={"reason": "csrf_mismatch"},
+        )
+        return _cron_redirect(
+            "CSRF token did not match — reload and try again",
+            color="var(--error)",
+        )
+
+    if not cron_id:
+        return _cron_redirect("Missing cron id", color="var(--error)")
+
+    cron_service = request.app.state.cron
+    from ..cron import UnknownCron as _UnknownCron
+
+    with ActionTimer() as timer:
+        try:
+            if kind == "toggle":
+                job = cron_service.update(cron_id, enabled=enable)
+                message = f"{'Resumed' if enable else 'Paused'} cron {job.name!r}"
+            elif kind == "remove":
+                existed = cron_service.remove(cron_id)
+                if not existed:
+                    raise _UnknownCron(f"no cron with id {cron_id!r}")
+                message = f"Removed cron {cron_id}"
+            else:  # pragma: no cover
+                raise ValueError(f"unknown cron action: {kind!r}")
+        except _UnknownCron as exc:
+            audit_action(
+                audit_log,
+                tool=f"dashboard.cron_{kind}",
+                args={"cron_id": cron_id, "enable": enable},
+                client=client,
+                ok=False,
+                decision="rejected",
+                error=str(exc),
+                duration_ms=timer.elapsed_ms,
+                extra={"reason": "not_found"},
+            )
+            return _cron_redirect(
+                f"Cron {cron_id!r} not found",
+                color="var(--error)",
+            )
+        except Exception as exc:
+            audit_action(
+                audit_log,
+                tool=f"dashboard.cron_{kind}",
+                args={"cron_id": cron_id, "enable": enable},
+                client=client,
+                ok=False,
+                decision="error",
+                error=f"{type(exc).__name__}: {exc}",
+                duration_ms=timer.elapsed_ms,
+                extra={"reason": "io_error"},
+            )
+            return _cron_redirect(
+                f"Cron {kind} failed unexpectedly",
+                color="var(--error)",
+            )
+
+    audit_action(
+        audit_log,
+        tool=f"dashboard.cron_{kind}",
+        args={"cron_id": cron_id, "enable": enable},
+        client=client,
+        ok=True,
+        decision="approved",
+        duration_ms=timer.elapsed_ms,
+    )
+    return _cron_redirect(message, color="var(--accent)")
+
+
+def _cron_redirect(message: str, *, color: str) -> Response:
+    from urllib.parse import quote_plus as _quote
+
+    from fastapi.responses import RedirectResponse as _Redirect
+
+    target = f"/dashboard/cron?banner_message={_quote(message)}&banner_color={_quote(color)}"
+    return _Redirect(url=target, status_code=303)
+
+
 def _build_identity_context(request: Request) -> dict[str, Any]:
     """Read the identity files + lessons.md and return a
     rendered + raw view for each.
@@ -1493,13 +1794,57 @@ def build_views_router() -> APIRouter:
         return templates.TemplateResponse(request, "tools.html", ctx)
 
     @router.get("/cron", response_class=HTMLResponse)
-    async def cron_view(request: Request) -> Response:
+    async def cron_view(
+        request: Request,
+        banner_message: str | None = None,
+        banner_color: str | None = None,
+    ) -> Response:
         guard = authorize_request(request)
         if guard is not None:
             return guard
         ctx = _build_cron_context(request)
         ctx["client"] = getattr(request.state, "client", "webui")
+        from .edit import issue_csrf as _issue_csrf
+
+        auth = request.app.state.dashboard_auth
+        ctx["csrf_token"] = _issue_csrf(request, key=auth.key())
+        if banner_message:
+            ctx["banner"] = {
+                "message": banner_message,
+                "color": banner_color or "var(--accent)",
+            }
+        else:
+            ctx["banner"] = None
         return templates.TemplateResponse(request, "cron.html", ctx)
+
+    @router.post("/cron/toggle", response_class=HTMLResponse)
+    async def cron_toggle(
+        request: Request,
+        csrf_token: str = Form(""),
+        cron_id: str = Form(""),
+        enable: str = Form("1"),
+    ) -> Response:
+        return await _cron_action(
+            request,
+            csrf_token=csrf_token,
+            kind="toggle",
+            cron_id=cron_id.strip(),
+            enable=(enable.strip() == "1"),
+        )
+
+    @router.post("/cron/remove", response_class=HTMLResponse)
+    async def cron_remove(
+        request: Request,
+        csrf_token: str = Form(""),
+        cron_id: str = Form(""),
+    ) -> Response:
+        return await _cron_action(
+            request,
+            csrf_token=csrf_token,
+            kind="remove",
+            cron_id=cron_id.strip(),
+            enable=False,
+        )
 
     @router.get("/audit", response_class=HTMLResponse)
     async def audit_view(
@@ -1556,13 +1901,108 @@ def build_views_router() -> APIRouter:
         return templates.TemplateResponse(request, "settings.html", ctx)
 
     @router.get("/projects", response_class=HTMLResponse)
-    async def projects_view(request: Request) -> Response:
+    async def projects_view(
+        request: Request,
+        banner_message: str | None = None,
+        banner_color: str | None = None,
+    ) -> Response:
         guard = authorize_request(request)
         if guard is not None:
             return guard
         ctx = _build_projects_context(request)
         ctx["client"] = getattr(request.state, "client", "webui")
+        from .edit import issue_csrf as _issue_csrf
+
+        auth = request.app.state.dashboard_auth
+        ctx["csrf_token"] = _issue_csrf(request, key=auth.key())
+        if banner_message:
+            ctx["banner"] = {
+                "message": banner_message,
+                "color": banner_color or "var(--accent)",
+            }
+        else:
+            ctx["banner"] = None
         return templates.TemplateResponse(request, "projects.html", ctx)
+
+    @router.get("/projects/edit", response_class=HTMLResponse)
+    async def projects_edit_get(
+        request: Request,
+        name: str = "",
+    ) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        from fastapi.responses import RedirectResponse as _Redirect
+
+        from .edit import issue_csrf as _issue_csrf
+
+        auth = request.app.state.dashboard_auth
+        token = _issue_csrf(request, key=auth.key())
+        ctx = _build_project_edit_context(request, name=name, csrf_token=token)
+        if ctx is None:
+            return _Redirect(url="/dashboard/projects", status_code=302)
+        ctx["client"] = getattr(request.state, "client", "webui")
+        return templates.TemplateResponse(request, "projects_edit.html", ctx)
+
+    @router.post("/projects/add", response_class=HTMLResponse)
+    async def projects_add(
+        request: Request,
+        csrf_token: str = Form(""),
+        name: str = Form(""),
+        path: str = Form(""),
+        ssh_host: str = Form(""),
+        test_command: str = Form(""),
+        build_command: str = Form(""),
+    ) -> Response:
+        return await _projects_action(
+            request,
+            csrf_token=csrf_token,
+            kind="add",
+            name=name.strip(),
+            fields={
+                "path": path.strip(),
+                "ssh_host": ssh_host.strip(),
+                "test_command": test_command.strip(),
+                "build_command": build_command.strip(),
+            },
+        )
+
+    @router.post("/projects/update", response_class=HTMLResponse)
+    async def projects_update(
+        request: Request,
+        csrf_token: str = Form(""),
+        name: str = Form(""),
+        path: str = Form(""),
+        ssh_host: str = Form(""),
+        test_command: str = Form(""),
+        build_command: str = Form(""),
+    ) -> Response:
+        return await _projects_action(
+            request,
+            csrf_token=csrf_token,
+            kind="update",
+            name=name.strip(),
+            fields={
+                "path": path.strip(),
+                "ssh_host": ssh_host.strip(),
+                "test_command": test_command.strip(),
+                "build_command": build_command.strip(),
+            },
+        )
+
+    @router.post("/projects/remove", response_class=HTMLResponse)
+    async def projects_remove(
+        request: Request,
+        csrf_token: str = Form(""),
+        name: str = Form(""),
+    ) -> Response:
+        return await _projects_action(
+            request,
+            csrf_token=csrf_token,
+            kind="remove",
+            name=name.strip(),
+            fields={},
+        )
 
     @router.get("/identity", response_class=HTMLResponse)
     async def identity_view(request: Request) -> Response:

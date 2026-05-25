@@ -584,12 +584,15 @@ two-week Principle 9 window plus per-item readiness checks.
        prevents lost updates. Markdown editor surface;
        Save writes through the MemoryStore-aware path.
        *Shipped 2026-05-24.*
-- [ ] F12. **Dashboard edit for projects.yaml + cron.json.**
+- [x] F12. **Dashboard edit for projects.yaml + cron.json.**
        Reuses the inline `cron_*` tools' code path so
        CSRF + audit + scheduling-side-effects come for
        free; projects gets validate-on-save through the
        existing pydantic schema. Both small, structured,
        no cross-references to other config.
+       *Shipped 2026-05-24. Cron add deferred to CLI —
+       lengthy messages live better there. Toggle / remove
+       on dashboard, add via `fitt cron add`.*
 - [ ] F13. **Dashboard edit for skills (SKILL.md).**
        Frontmatter validation needed (name uniqueness,
        description length, prerequisites resolvable).

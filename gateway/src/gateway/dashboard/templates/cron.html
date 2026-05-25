@@ -4,8 +4,16 @@
 {% block content %}
 <h2>Cron</h2>
 <p class="tagline">
-  Scheduled jobs (read-only in v0).
+  Scheduled jobs. Pause / resume / remove from here; add new
+  via <code>fitt cron add</code> (lengthy messages live better
+  in the CLI).
 </p>
+
+{% if banner %}
+<div class="card" style="border-color: {{ banner.color }};">
+  <p style="color: {{ banner.color }}; margin: 0;">{{ banner.message }}</p>
+</div>
+{% endif %}
 
 <div class="card">
   {% if cron_rows %}
@@ -19,6 +27,7 @@
         <th>Last fired</th>
         <th>Last status</th>
         <th class="dim">Created by</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -41,10 +50,29 @@
         <td class="dim">{{ j.last_run_age }}</td>
         <td class="dim">{{ j.last_status or "—" }}</td>
         <td class="dim mono">{{ j.created_by_client or "—" }}</td>
+        <td class="right">
+          <form method="post" action="/dashboard/cron/toggle" style="display: inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="cron_id" value="{{ j.id }}">
+            <input type="hidden" name="enable" value="{{ '0' if j.enabled else '1' }}">
+            <button type="submit" style="font-size: 11px; padding: 2px 8px;">
+              {% if j.enabled %}pause{% else %}resume{% endif %}
+            </button>
+          </form>
+          <form method="post" action="/dashboard/cron/remove" style="display: inline;"
+                onsubmit="return confirm('Remove cron {{ j.name }}?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="cron_id" value="{{ j.id }}">
+            <button type="submit" style="font-size: 11px; padding: 2px 8px;
+                                         background: #5a1a1a; color: #fbb; border-color: #a33;">
+              remove
+            </button>
+          </form>
+        </td>
       </tr>
       <tr>
         <td></td>
-        <td colspan="6" class="dim" style="font-size: 12px; padding-top: 0;">
+        <td colspan="7" class="dim" style="font-size: 12px; padding-top: 0;">
           <details>
             <summary style="cursor: pointer;">{{ j.message_preview }}</summary>
             <pre>{{ j.message }}</pre>
@@ -61,7 +89,6 @@
 
 <p class="dim" style="font-size: 11px; margin-top: 16px;">
   refreshed at {{ generated_at_human }} ·
-  edit jobs from the CLI: <code>fitt cron list</code> /
-  <code>fitt cron rm</code>
+  add a new cron via <code>fitt cron add --schedule ... --message ...</code>
 </p>
 {% endblock %}

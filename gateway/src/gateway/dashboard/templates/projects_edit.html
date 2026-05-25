@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% set nav_active = "projects" %}
+{% block title %}FITT dashboard - edit project {{ project.name }}{% endblock %}
+{% block content %}
+<p style="margin-top: 0;">
+  <a href="/dashboard/projects">← back to projects</a>
+</p>
+
+<h2>Edit project <code>{{ project.name }}</code></h2>
+<p class="tagline">
+  Project name is immutable — to rename, remove and re-add.
+</p>
+
+{% if banner %}
+<div class="card" style="border-color: {{ banner.color }};">
+  <p style="color: {{ banner.color }}; margin: 0;">{{ banner.message }}</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="post" action="/dashboard/projects/update">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="name" value="{{ project.name }}">
+    <div class="kv">
+      <div class="k">name</div>
+      <div class="v mono">{{ project.name }}</div>
+      <div class="k"><label for="path">path</label></div>
+      <div class="v"><input type="text" name="path" id="path" value="{{ project.path }}" required style="width: 100%;"></div>
+      <div class="k"><label for="ssh_host">ssh host</label></div>
+      <div class="v"><input type="text" name="ssh_host" id="ssh_host" value="{{ project.ssh_host }}" placeholder="(empty for local)" style="width: 100%;"></div>
+      <div class="k"><label for="test_command">test command</label></div>
+      <div class="v"><input type="text" name="test_command" id="test_command" value="{{ project.test_command }}" style="width: 100%;"></div>
+      <div class="k"><label for="build_command">build command</label></div>
+      <div class="v"><input type="text" name="build_command" id="build_command" value="{{ project.build_command }}" style="width: 100%;"></div>
+    </div>
+    <div style="margin-top: 12px; display: flex; gap: 12px;">
+      <button type="submit">Save changes</button>
+      <a href="/dashboard/projects" class="dim" style="font-size: 12px; align-self: center;">cancel</a>
+    </div>
+  </form>
+</div>
+
+<div class="card" style="border-color: #5a1a1a;">
+  <h3 style="color: var(--error);">Remove project</h3>
+  <p class="dim" style="font-size: 12px;">
+    Removes <code>{{ project.name }}</code> from the registry.
+    Filesystem contents at <code>{{ project.path }}</code> are untouched.
+  </p>
+  <form method="post" action="/dashboard/projects/remove" onsubmit="return confirm('Remove project {{ project.name }}?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="name" value="{{ project.name }}">
+    <button type="submit" style="background: #5a1a1a; color: #fbb; border-color: #a33;">Remove</button>
+  </form>
+</div>
+{% endblock %}

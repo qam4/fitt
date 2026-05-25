@@ -5,10 +5,18 @@
 <h2>Projects</h2>
 <p class="tagline">
   Registered projects that file/git/shell tools can target.
-  Read-only — edit via <code>fitt project add/update/remove</code>.
+  Edit through this UI or via <code>fitt project add/update/remove</code> —
+  both write the same <code>$FITT_HOME/projects.yaml</code>.
 </p>
 
+{% if banner %}
+<div class="card" style="border-color: {{ banner.color }};">
+  <p style="color: {{ banner.color }}; margin: 0;">{{ banner.message }}</p>
+</div>
+{% endif %}
+
 <div class="card">
+  <h3>Registered projects</h3>
   {% if project_rows %}
   <table>
     <thead>
@@ -18,6 +26,7 @@
         <th>Host</th>
         <th>Test command</th>
         <th>Build command</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -28,15 +37,37 @@
         <td class="mono dim">{% if p.is_local %}<span class="badge-dim badge">local</span>{% else %}{{ p.ssh_host }}{% endif %}</td>
         <td class="mono dim" style="font-size: 11px;">{{ p.test_command or "—" }}</td>
         <td class="mono dim" style="font-size: 11px;">{{ p.build_command or "—" }}</td>
+        <td class="right">
+          <a href="/dashboard/projects/edit?name={{ p.name }}" style="font-size: 12px;">edit</a>
+        </td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   {% else %}
-  <div class="empty">
-    No projects registered. Add one via
-    <code>fitt project add &lt;name&gt; --path &lt;path&gt; [--ssh-host &lt;host&gt;]</code>.
-  </div>
+  <div class="empty">No projects registered.</div>
   {% endif %}
+</div>
+
+<div class="card">
+  <h3>Add a project</h3>
+  <form method="post" action="/dashboard/projects/add">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="kv">
+      <div class="k"><label for="name">name</label></div>
+      <div class="v"><input type="text" name="name" id="name" required style="width: 100%;"></div>
+      <div class="k"><label for="path">path</label></div>
+      <div class="v"><input type="text" name="path" id="path" required style="width: 100%;"></div>
+      <div class="k"><label for="ssh_host">ssh host</label></div>
+      <div class="v"><input type="text" name="ssh_host" id="ssh_host" placeholder="(empty for local)" style="width: 100%;"></div>
+      <div class="k"><label for="test_command">test command</label></div>
+      <div class="v"><input type="text" name="test_command" id="test_command" style="width: 100%;"></div>
+      <div class="k"><label for="build_command">build command</label></div>
+      <div class="v"><input type="text" name="build_command" id="build_command" style="width: 100%;"></div>
+    </div>
+    <div style="margin-top: 12px;">
+      <button type="submit">Add</button>
+    </div>
+  </form>
 </div>
 {% endblock %}
