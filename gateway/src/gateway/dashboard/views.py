@@ -2170,6 +2170,25 @@ def build_views_router() -> APIRouter:
             client=client,
         )
 
+    @router.get("/_partials/turns", response_class=HTMLResponse)
+    async def turns_partial(
+        request: Request,
+        session: str = "main",
+        limit: int = 50,
+    ) -> Response:
+        """HTMX-driven 5s refresh for the turns list. Renders
+        the table fragment only — F17's polling-as-live shape.
+        SSE-driven prepend (the original Slice 7.5 Task 26c
+        spec) rides a follow-up; polling covers the v0 use
+        case."""
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        key = _safe_session_key(session)
+        clamped = max(1, min(limit, 200))
+        ctx = _build_turn_list_context(request, session_key=key, limit=clamped)
+        return templates.TemplateResponse(request, "_turns_list_panel.html", ctx)
+
     @router.get("/tools", response_class=HTMLResponse)
     async def tools_view(request: Request) -> Response:
         guard = authorize_request(request)

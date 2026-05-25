@@ -1,0 +1,58 @@
+{# Turns table fragment. Refreshed every 5s by HTMX so a turn
+   that finishes while the operator's looking at the page
+   shows up without a manual reload. The full SSE-driven live
+   pre-pend (Slice 7.5 Task 26c) is a follow-up; polling
+   covers the v0 use case.
+#}
+<div class="card">
+  {% if turns %}
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>When</th>
+        <th>Alias</th>
+        <th>Model</th>
+        <th class="right">Prompt</th>
+        <th class="right">Fill</th>
+        <th class="right">Tool calls</th>
+        <th>Finish</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for t in turns %}
+      <tr>
+        <td>
+          {% if t.narration_warning %}
+            <span class="badge-warn badge" title="response shape suggests narration">⚠</span>
+          {% elif t.status != "ok" %}
+            <span class="badge-error badge" title="{{ t.status }}">!</span>
+          {% else %}
+            <span class="pip pip-ok"></span>
+          {% endif %}
+        </td>
+        <td class="dim mono" title="{{ t.started_iso }}">{{ t.age_human }}</td>
+        <td class="mono">{{ t.alias }}</td>
+        <td class="mono dim">{{ t.model_used }}</td>
+        <td class="right mono">{{ t.prompt_human }}</td>
+        <td class="right mono">{{ t.fill_human }}</td>
+        <td class="right mono">{{ t.tool_calls_count }}</td>
+        <td class="dim">{{ t.finish_reason or "—" }}</td>
+        <td class="right"><a href="/dashboard/turns/{{ session_key }}/{{ t.turn_id }}">open</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    No captured turns for this session yet. Trigger a tool-using
+    chat from Telegram or the IDE to see them appear here.
+  </div>
+  {% endif %}
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  showing up to {{ limit }} most recent turns · live-updated every 5s ·
+  capture defaults to off for <code>coding-agent</code> clients
+</p>

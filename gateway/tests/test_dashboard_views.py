@@ -2372,6 +2372,73 @@ def test_actions_redirect_without_auth(client: TestClient) -> None:
     assert r.status_code == 302
 
 
+# --------------------------------------------------------------- live turns (F17)
+
+
+def test_turns_list_includes_htmx_refresh_attributes(tmp_path: Path) -> None:
+    """The turns list page wires HTMX poll-every-5s on the
+    table region so a turn that lands while the operator's
+    looking at the page surfaces without a manual reload."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/turns", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert 'hx-get="/dashboard/_partials/turns' in body
+    assert 'hx-trigger="load, every 5s"' in body
+
+
+def test_turns_partial_returns_table_only(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    store = app.state.turn_capture
+    store.write(_make_capture("turn-aaa"))
+
+    r = tc.get("/dashboard/_partials/turns?session=main", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # Fragment renders the table.
+    assert "turn-aaa" in body
+    # No sidebar in the fragment.
+    assert '<aside class="sidebar">' not in body
+
+
+def test_turns_partial_picks_up_new_captures(tmp_path: Path) -> None:
+    """Simulate the live-refresh flow: render the partial
+    once → write a new capture → render the partial again →
+    new capture appears. This is the property F17 exists to
+    deliver, just exercised through polling rather than
+    SSE."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    # First fetch — empty.
+    r1 = tc.get("/dashboard/_partials/turns?session=main", headers=_auth())
+    assert r1.status_code == 200
+    assert "turn-NEW" not in r1.text
+
+    # A turn finishes.
+    app.state.turn_capture.write(_make_capture("turn-NEW"))
+
+    # Second fetch picks it up.
+    r2 = tc.get("/dashboard/_partials/turns?session=main", headers=_auth())
+    assert r2.status_code == 200
+    assert "turn-NEW" in r2.text
+
+
+def test_turns_partial_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/_partials/turns?session=main")
+    assert r.status_code == 302
+
+
 # --------------------------------------------------------------- skills view
 
 

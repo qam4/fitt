@@ -671,12 +671,32 @@ two-week Principle 9 window plus per-item readiness checks.
        CSRF + audit-on-success / audit-on-failure
        uniformly; per-action functions stay one-method
        calls.*
-- [ ] F17. **Dashboard live turns view (SSE).** Was Slice
+- [x] F17. **Dashboard live turns view (SSE).** Was Slice
        7.5 Task 26c, deferred. Subscribes to the existing
        `/v1/sessions/<s>/turns/stream` SSE endpoint, prepends
        new turns to the list view as they arrive. Independent
        of F10-F16; can land any time the operator-friction
        earns it.
+       *Shipped 2026-05-24 as HTMX poll-every-5s. The
+       turns list page renders a partial fragment via
+       `hx-get="/dashboard/_partials/turns?session=..."`
+       on a 5s cadence. Same outcome (turns landing while
+       you watch the page show up automatically) without
+       the EventSource auth-bridge complexity (browser
+       EventSource can't send Authorization headers; a
+       full SSE shape would need a dashboard-cookie-aware
+       proxy in front of the upstream stream). Tracked as
+       F17b if 5s polling proves too coarse — the
+       upstream substrate is already in place.*
+
+- [ ] F17b. **True SSE live updates for the turns view.**
+       Land a `/dashboard/_sse/turns/<session>` proxy that
+       accepts the dashboard cookie and forwards the
+       upstream `/v1/sessions/<s>/turns/stream` SSE. The
+       browser-side EventSource subscribes to the proxy
+       and prepends new turns on `turn_finished`. Pick up
+       if HTMX poll-every-5s is too coarse for an active
+       debugging session.
 
 Other tracked followups (not dashboard-specific):
 
