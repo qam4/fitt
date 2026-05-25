@@ -1820,6 +1820,336 @@ def test_config_edit_redirects_without_auth(client: TestClient) -> None:
     assert r.status_code == 302
 
 
+# --------------------------------------------------------------- secrets edit (F15)
+
+
+def _seed_secrets_file(tmp_path: Path) -> Path:
+    """Write a baseline secrets.yaml under FITT_HOME so the
+    edit handler has something to read first. The file gets
+    chmod'd in the same shape the gateway expects."""
+    from gateway.config import fitt_home
+
+    home = fitt_home()
+    home.mkdir(parents=True, exist_ok=True)
+    target = home / "secrets.yaml"
+    payload = (
+        "allowed_tokens:\n"
+        f"  - name: personal\n    token: {PERSONAL_TOKEN}\n"
+        "openrouter_api_key: sk-or-test-existing\n"
+    )
+    target.write_text(payload, encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(target, 0o600)
+    return target
+
+
+import os  # noqa: E402  (placed near use site for readability)
+
+
+def test_secrets_edit_get_renders_form(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    _seed_secrets_file(tmp_path)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/secrets/edit")
+    assert r.status_code == 200
+    body = r.text
+    # Restart-required disclaimer.
+    assert "Restart" in body
+    # Each scalar key has a form.
+    assert "openrouter_api_key" in body
+    assert "anthropic_api_key" in body
+    # Bearer re-confirm prompt is on the page.
+    assert "re-confirm bearer" in body.lower() or "re-confirm" in body.lower()
+    # The current value is NEVER rendered.
+    assert "sk-or-test-existing" not in body
+
+
+def test_secrets_edit_save_round_trip(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_secrets_file(tmp_path)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/secrets/edit")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/settings/secrets/save",
+        data={
+            "csrf_token": csrf,
+            "key": "openrouter_api_key",
+            "new_value": "sk-or-NEW-VALUE-AAAA",
+            "bearer_token": PERSONAL_TOKEN,
+        },
+    )
+    assert r.status_code == 303
+    assert "/dashboard/settings/secrets/edit" in r.headers["location"]
+
+    # File on disk reflects the new value.
+    import yaml as _yaml
+
+    raw = _yaml.safe_load(target.read_text(encoding="utf-8"))
+    assert raw["openrouter_api_key"] == "sk-or-NEW-VALUE-AAAA"
+    # The dashboard's redirect doesn't leak the new value
+    # in the location header.
+    assert "sk-or-NEW-VALUE-AAAA" not in r.headers["location"]
+
+
+def test_secrets_edit_save_unsets_with_empty_value(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_secrets_file(tmp_path)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/secrets/edit")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/settings/secrets/save",
+        data={
+            "csrf_token": csrf,
+            "key": "openrouter_api_key",
+            "new_value": "",  # unset
+            "bearer_token": PERSONAL_TOKEN,
+        },
+    )
+    assert r.status_code == 303
+
+    import yaml as _yaml
+
+    raw = _yaml.safe_load(target.read_text(encoding="utf-8"))
+    assert "openrouter_api_key" not in raw
+
+
+def test_secrets_edit_save_rejects_bad_csrf(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_secrets_file(tmp_path)
+    original = target.read_text(encoding="utf-8")
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.post(
+        "/dashboard/settings/secrets/save",
+        data={
+            "csrf_token": "garbage",
+            "key": "openrouter_api_key",
+            "new_value": "sk-evil",
+            "bearer_token": PERSONAL_TOKEN,
+        },
+    )
+    assert r.status_code == 303
+    assert "banner_message" in r.headers["location"]
+    # File untouched.
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_secrets_edit_save_rejects_bad_bearer(tmp_path: Path) -> None:
+    """The bearer re-auth is the F15-specific second factor.
+    A valid CSRF + valid cookie session must still fail
+    if the bearer token doesn't match."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_secrets_file(tmp_path)
+    original = target.read_text(encoding="utf-8")
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/secrets/edit")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/settings/secrets/save",
+        data={
+            "csrf_token": csrf,
+            "key": "openrouter_api_key",
+            "new_value": "sk-evil",
+            "bearer_token": "not-the-real-token",
+        },
+    )
+    assert r.status_code == 303
+    assert "banner_message" in r.headers["location"]
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_secrets_edit_save_rejects_unknown_key(tmp_path: Path) -> None:
+    """Allowlist guards both the form input and the action
+    handler. A POST with a fabricated key must not let the
+    operator write outside the editable set."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_secrets_file(tmp_path)
+    original = target.read_text(encoding="utf-8")
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/secrets/edit")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/settings/secrets/save",
+        data={
+            "csrf_token": csrf,
+            "key": "allowed_tokens",  # not in the editable set
+            "new_value": "[]",
+            "bearer_token": PERSONAL_TOKEN,
+        },
+    )
+    assert r.status_code == 303
+    # Bounce with an error banner; file untouched.
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_secrets_edit_add_new_api_key(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_secrets_file(tmp_path)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/secrets/edit")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/settings/secrets/save_new_api_key",
+        data={
+            "csrf_token": csrf,
+            "model_id": "nvidia-minimax",
+            "new_value": "nvapi-NEW-MINIMAX",
+            "bearer_token": PERSONAL_TOKEN,
+        },
+    )
+    assert r.status_code == 303
+
+    import yaml as _yaml
+
+    raw = _yaml.safe_load(target.read_text(encoding="utf-8"))
+    assert raw["api_keys"]["nvidia-minimax"] == "nvapi-NEW-MINIMAX"
+
+
+def test_secrets_edit_add_new_api_key_rejects_bad_model_id(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_secrets_file(tmp_path)
+    original = target.read_text(encoding="utf-8")
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/secrets/edit")
+    csrf = _csrf_from(r.text)
+
+    # A model id with a slash → rejected at the action wrapper.
+    r = tc.post(
+        "/dashboard/settings/secrets/save_new_api_key",
+        data={
+            "csrf_token": csrf,
+            "model_id": "../evil",
+            "new_value": "x",
+            "bearer_token": PERSONAL_TOKEN,
+        },
+    )
+    assert r.status_code == 303
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_secrets_edit_chmod_to_0600(tmp_path: Path) -> None:
+    """After a save, the file must end up at 0600 on POSIX.
+    On Windows we don't enforce the mode (NTFS ACLs are the
+    actual control); the test is a no-op there."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_secrets_file(tmp_path)
+    if os.name != "nt":
+        # Deliberately wide perms before the edit.
+        os.chmod(target, 0o644)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/secrets/edit")
+    csrf = _csrf_from(r.text)
+
+    r = tc.post(
+        "/dashboard/settings/secrets/save",
+        data={
+            "csrf_token": csrf,
+            "key": "openrouter_api_key",
+            "new_value": "sk-or-CHMOD-CHECK",
+            "bearer_token": PERSONAL_TOKEN,
+        },
+    )
+    assert r.status_code == 303
+    if os.name != "nt":
+        mode = target.stat().st_mode & 0o777
+        assert mode == 0o600
+
+
+def test_secrets_edit_emits_audit_without_value(tmp_path: Path) -> None:
+    """The audit chain captures that an edit happened plus
+    the key path, but never the value."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    _seed_secrets_file(tmp_path)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/secrets/edit")
+    csrf = _csrf_from(r.text)
+
+    secret_value = "sk-or-AUDIT-PROBE-VALUE-WHICH-MUST-NOT-LEAK"
+    tc.post(
+        "/dashboard/settings/secrets/save",
+        data={
+            "csrf_token": csrf,
+            "key": "openrouter_api_key",
+            "new_value": secret_value,
+            "bearer_token": PERSONAL_TOKEN,
+        },
+    )
+
+    entries = app.state.audit.iter_entries()
+    secret_entries = [e for e in entries if e.get("tool") == "dashboard.secret_set"]
+    assert len(secret_entries) >= 1
+    e = secret_entries[-1]
+    assert e["ok"] is True
+    assert e["args"]["key"] == "openrouter_api_key"
+    # Critical: the value must not appear anywhere in the
+    # serialised entry.
+    import json as _json
+
+    serialised = _json.dumps(e)
+    assert secret_value not in serialised
+
+
+def test_secrets_edit_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/settings/secrets/edit")
+    assert r.status_code == 302
+    r = client.post(
+        "/dashboard/settings/secrets/save",
+        data={
+            "csrf_token": "x",
+            "key": "openrouter_api_key",
+            "new_value": "y",
+            "bearer_token": "z",
+        },
+    )
+    assert r.status_code == 302
+
+
 # --------------------------------------------------------------- skills view
 
 

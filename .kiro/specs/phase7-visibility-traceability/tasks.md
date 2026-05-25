@@ -628,7 +628,7 @@ two-week Principle 9 window plus per-item readiness checks.
        tools at boot; LiteLLM holds connection caches;
        MCP holds subprocesses). Don't build until the
        restart-to-apply friction earns it.
-- [ ] F15. **Dashboard edit for secrets.yaml.** Per-key form,
+- [x] F15. **Dashboard edit for secrets.yaml.** Per-key form,
        never render existing values, double-confirm with
        the bearer token on submit, dedicated audit
        category. Last in the sequence by design — the
@@ -636,6 +636,22 @@ two-week Principle 9 window plus per-item readiness checks.
        deserves to be trusted first. Mode-checks the file
        (0600) after write, refuses to write to a world-
        readable path, refuses to log values at any level.
+       *Shipped 2026-05-24. Per-key edits for
+       openrouter_api_key / anthropic_api_key /
+       telegram.bot_token / api_keys.<model>. Bearer
+       re-auth required on every save (cookie alone is
+       insufficient authority). 0600 chmod after write.
+       allowed_tokens CRUD deferred as F15b — different
+       constraint set (name uniqueness, can't remove
+       active token).*
+
+- [ ] F15b. **Allowed-tokens CRUD.** Adding / removing /
+       renaming bearer-token entries via the dashboard.
+       Different constraint set from F15: name uniqueness,
+       client-tag uniqueness, can't remove the token the
+       operator is currently authed with, must validate the
+       result still has at least one usable token. Same
+       audit + double-confirm posture as F15.
 - [ ] F16. **Typed dashboard action buttons.** Refresh
        aliases, Restart MCP, Verify audit, Pause/Resume
        cron, Run eval. Each button is a typed POST to a

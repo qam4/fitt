@@ -1153,6 +1153,129 @@ def _cron_redirect(message: str, *, color: str) -> Response:
     return _Redirect(url=target, status_code=303)
 
 
+async def _secrets_save_action(
+    request: Request,
+    *,
+    csrf_token: str,
+    key: str,
+    new_value: str,
+    bearer_token: str,
+) -> Response:
+    """Common handler for the F15 secret-set POSTs.
+
+    1. authorize_request — same cookie-or-bearer auth.
+    2. CSRF check — F10 substrate.
+    3. Bearer-token re-auth — F15 special. The session
+       cookie alone is not enough authority for secrets
+       writes; the operator pastes a bearer token in the
+       form which is compared via ``compare_digest``
+       against the configured allow-list.
+    4. write_secret_field — atomic, audit-on-write,
+       chmod-to-0600.
+    5. Redirect with a flash banner. The banner_key
+       parameter tells the rendered page which detail to
+       open after the redirect.
+    """
+    from ..config import default_secrets_path
+    from .actions import audit_action
+    from .edit import CsrfMismatch, csrf_required
+    from .secrets_edit import (
+        SecretsEditError,
+        UnknownKey,
+        verify_bearer_reauth,
+        write_secret_field,
+    )
+
+    guard = authorize_request(request)
+    if guard is not None:
+        return guard
+    client = getattr(request.state, "client", "webui")
+    audit_log = getattr(request.app.state, "audit", None)
+
+    try:
+        csrf_required(request, csrf_token)
+    except CsrfMismatch:
+        audit_action(
+            audit_log,
+            tool="dashboard.secret_set",
+            args={"key": key},
+            client=client,
+            ok=False,
+            decision="rejected",
+            error="CSRF token mismatch",
+            extra={"reason": "csrf_mismatch"},
+        )
+        return _secrets_redirect(
+            "CSRF token did not match — reload and try again",
+            color="var(--error)",
+            key=None,
+        )
+
+    secrets = request.app.state.config.secrets
+    if secrets is None:
+        return _secrets_redirect(
+            "Secrets not loaded; cannot edit",
+            color="var(--error)",
+            key=None,
+        )
+
+    if not verify_bearer_reauth(secrets, submitted=bearer_token):
+        audit_action(
+            audit_log,
+            tool="dashboard.secret_set",
+            args={"key": key},
+            client=client,
+            ok=False,
+            decision="rejected",
+            error="bearer re-auth failed",
+            extra={"reason": "bearer_reauth_failed"},
+        )
+        return _secrets_redirect(
+            "Bearer token did not match — reload and try again",
+            color="var(--error)",
+            key=key,
+        )
+
+    if not key:
+        return _secrets_redirect("Missing key", color="var(--error)", key=None)
+
+    path = default_secrets_path()
+    try:
+        write_secret_field(
+            path=path,
+            key=key,
+            new_value=new_value,
+            audit_log=audit_log,
+            client=client,
+        )
+    except UnknownKey:
+        return _secrets_redirect(f"Unknown key {key!r}", color="var(--error)", key=None)
+    except SecretsEditError as exc:
+        return _secrets_redirect(f"Save failed: {exc}", color="var(--error)", key=key)
+
+    action = "set" if new_value else "unset"
+    return _secrets_redirect(
+        f"Saved {key} ({action}). Restart the gateway to apply.",
+        color="var(--accent)",
+        key=key,
+    )
+
+
+def _secrets_redirect(message: str, *, color: str, key: str | None) -> Response:
+    from urllib.parse import quote_plus as _quote
+
+    from fastapi.responses import RedirectResponse as _Redirect
+
+    parts = [
+        f"banner_message={_quote(message)}",
+        f"banner_color={_quote(color)}",
+    ]
+    if key:
+        parts.append(f"banner_key={_quote(key)}")
+    target = "/dashboard/settings/secrets/edit?" + "&".join(parts)
+    return _Redirect(url=target, status_code=303)
+
+
 def _build_identity_context(request: Request) -> dict[str, Any]:
     """Read the identity files + lessons.md and return a
     rendered + raw view for each.
@@ -2055,6 +2178,103 @@ def build_views_router() -> APIRouter:
             "client": client,
         }
         return templates.TemplateResponse(request, "config_edit.html", ctx)
+
+    # --------------------------------------------------------- secrets edit (F15)
+
+    @router.get("/settings/secrets/edit", response_class=HTMLResponse)
+    async def settings_secrets_edit_get(
+        request: Request,
+        banner_message: str | None = None,
+        banner_color: str | None = None,
+        banner_key: str | None = None,
+    ) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        from ..config import default_secrets_path
+        from .edit import issue_csrf as _issue_csrf
+        from .secrets_edit import _SCALAR_KEYS, _TELEGRAM_KEY, secret_presence
+
+        auth = request.app.state.dashboard_auth
+        token = _issue_csrf(request, key=auth.key())
+        secrets = request.app.state.config.secrets
+
+        if secrets is None:
+            ctx = {
+                "file_path": str(default_secrets_path()),
+                "csrf_token": token,
+                "scalar_keys": [(k, "not configured") for k in _SCALAR_KEYS],
+                "api_keys_entries": [],
+                "telegram_status": "not configured",
+                "banner": {
+                    "message": "secrets.yaml is not loaded",
+                    "color": "var(--warn)",
+                },
+                "banner_key": None,
+                "client": getattr(request.state, "client", "webui"),
+            }
+            return templates.TemplateResponse(request, "secrets_edit.html", ctx, status_code=503)
+
+        presence = secret_presence(secrets)
+        scalar_keys = [(k, presence.get(k, "not configured")) for k in _SCALAR_KEYS]
+        api_keys_entries = sorted((model_id, "configured") for model_id in (secrets.api_keys or {}))
+        ctx = {
+            "file_path": str(default_secrets_path()),
+            "csrf_token": token,
+            "scalar_keys": scalar_keys,
+            "api_keys_entries": api_keys_entries,
+            "telegram_status": presence.get(_TELEGRAM_KEY, "not configured"),
+            "banner": (
+                {"message": banner_message, "color": banner_color or "var(--accent)"}
+                if banner_message
+                else None
+            ),
+            "banner_key": banner_key,
+            "client": getattr(request.state, "client", "webui"),
+        }
+        return templates.TemplateResponse(request, "secrets_edit.html", ctx)
+
+    @router.post("/settings/secrets/save", response_class=HTMLResponse)
+    async def settings_secrets_save(
+        request: Request,
+        csrf_token: str = Form(""),
+        key: str = Form(""),
+        new_value: str = Form(""),
+        bearer_token: str = Form(""),
+    ) -> Response:
+        return await _secrets_save_action(
+            request,
+            csrf_token=csrf_token,
+            key=key.strip(),
+            new_value=new_value,
+            bearer_token=bearer_token,
+        )
+
+    @router.post("/settings/secrets/save_new_api_key", response_class=HTMLResponse)
+    async def settings_secrets_save_new_api_key(
+        request: Request,
+        csrf_token: str = Form(""),
+        model_id: str = Form(""),
+        new_value: str = Form(""),
+        bearer_token: str = Form(""),
+    ) -> Response:
+        # The "add new" form takes a model_id and constructs
+        # the key path. Same audit + bearer-reauth path as
+        # the per-key save.
+        model_id = model_id.strip()
+        if not model_id or "/" in model_id or "\\" in model_id:
+            return _secrets_redirect(
+                "Invalid model id",
+                color="var(--error)",
+                key=None,
+            )
+        return await _secrets_save_action(
+            request,
+            csrf_token=csrf_token,
+            key=f"api_keys.{model_id}",
+            new_value=new_value,
+            bearer_token=bearer_token,
+        )
 
     @router.get("/projects", response_class=HTMLResponse)
     async def projects_view(
