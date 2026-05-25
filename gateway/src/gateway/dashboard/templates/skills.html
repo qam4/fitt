@@ -25,7 +25,10 @@
     <tbody>
     {% for s in skill_rows %}
       <tr>
-        <td class="mono">{{ s.name }}</td>
+        <td class="mono">
+          {{ s.name }}
+          <a href="/dashboard/skills/edit?skill_name={{ s.name }}" style="font-size: 11px; margin-left: 8px;">edit →</a>
+        </td>
         <td>
           {{ s.description }}
           {% if s.description_truncated %}<span class="badge-dim badge" title="description was truncated for system prompt">…</span>{% endif %}

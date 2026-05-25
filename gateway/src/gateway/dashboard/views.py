@@ -1358,6 +1358,29 @@ def _identity_path(request: Request, filename: str) -> Path | None:
     return Path(config.memory.identity_dir) / filename
 
 
+def _skill_path(request: Request, skill_name: str) -> Path | None:
+    """Resolve a skill name to its SKILL.md path under the
+    configured skills_dir.
+
+    The name is allowlisted against the loaded skills to
+    refuse path-traversal payloads. We don't allow creating
+    new skills via this surface — the F13 commit's contract
+    is "edit existing"; create-new rides a follow-up if it
+    earns its weight. Any unknown name returns None so the
+    route handler can 302 the operator back to the listing.
+    """
+    if not skill_name:
+        return None
+    if "/" in skill_name or "\\" in skill_name or skill_name.startswith("."):
+        return None
+    skills = getattr(request.app.state, "skills", None) or []
+    valid_names = {s.name for s in skills}
+    if skill_name not in valid_names:
+        return None
+    config = request.app.state.config
+    return Path(config.memory.skills_dir) / skill_name / "SKILL.md"
+
+
 def _build_identity_edit_context(
     request: Request,
     *,
@@ -2177,6 +2200,166 @@ def build_views_router() -> APIRouter:
         ctx = _build_skills_context(request)
         ctx["client"] = getattr(request.state, "client", "webui")
         return templates.TemplateResponse(request, "skills.html", ctx)
+
+    @router.get("/skills/edit", response_class=HTMLResponse)
+    async def skills_edit_get(
+        request: Request,
+        skill_name: str = "",
+    ) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        from fastapi.responses import RedirectResponse as _Redirect
+
+        path = _skill_path(request, skill_name)
+        if path is None:
+            return _Redirect(url="/dashboard/skills", status_code=302)
+
+        from .edit import issue_csrf as _issue_csrf
+
+        auth = request.app.state.dashboard_auth
+        token = _issue_csrf(request, key=auth.key())
+
+        content = ""
+        expected_mtime: float | str = ""
+        if path.exists():
+            try:
+                content = path.read_text(encoding="utf-8")
+                expected_mtime = path.stat().st_mtime
+            except OSError:
+                pass
+        ctx = {
+            "skill_name": skill_name,
+            "file_path": str(path),
+            "csrf_token": token,
+            "content": content,
+            "expected_mtime": expected_mtime,
+            "client": getattr(request.state, "client", "webui"),
+        }
+        return templates.TemplateResponse(request, "skills_edit.html", ctx)
+
+    @router.post("/skills/save", response_class=HTMLResponse)
+    async def skills_edit_save(
+        request: Request,
+        csrf_token: str = Form(""),
+        skill_name: str = Form(""),
+        expected_mtime: str = Form(""),
+        content: str = Form(""),
+    ) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        client = getattr(request.state, "client", "webui")
+
+        from .edit import (
+            CsrfMismatch,
+            MtimeConflict,
+            ValidationFailed,
+            csrf_required,
+            issue_csrf,
+            save_file_with_mtime,
+        )
+
+        auth = request.app.state.dashboard_auth
+        next_token = issue_csrf(request, key=auth.key())
+
+        path = _skill_path(request, skill_name)
+        if path is None:
+            ctx = {
+                "skill_name": skill_name,
+                "file_path": "<invalid>",
+                "csrf_token": next_token,
+                "content": content,
+                "expected_mtime": "",
+                "error_code": "validation_failed",
+                "error_detail": f"unknown skill: {skill_name!r}",
+                "client": client,
+            }
+            return templates.TemplateResponse(request, "skills_edit.html", ctx, status_code=400)
+
+        try:
+            csrf_required(request, csrf_token)
+        except CsrfMismatch:
+            ctx = {
+                "skill_name": skill_name,
+                "file_path": str(path),
+                "csrf_token": next_token,
+                "content": content,
+                "expected_mtime": expected_mtime,
+                "error_code": "csrf_mismatch",
+                "client": client,
+            }
+            return templates.TemplateResponse(request, "skills_edit.html", ctx, status_code=403)
+
+        expected_ts: float | None
+        if expected_mtime.strip():
+            try:
+                expected_ts = float(expected_mtime)
+            except ValueError:
+                expected_ts = None
+        else:
+            expected_ts = None
+
+        from ..skills import validate_skill_content
+
+        audit_log = getattr(request.app.state, "audit", None)
+
+        try:
+            result = save_file_with_mtime(
+                path=path,
+                new_content=content,
+                expected_mtime=expected_ts,
+                audit_log=audit_log,
+                client=client,
+                validate=validate_skill_content,
+            )
+        except MtimeConflict as exc:
+            ctx = {
+                "skill_name": skill_name,
+                "file_path": str(path),
+                "csrf_token": next_token,
+                "content": content,
+                "expected_mtime": expected_ts or "",
+                "error_code": "mtime_conflict",
+                "current_mtime": exc.current_mtime,
+                "client": client,
+            }
+            return templates.TemplateResponse(request, "skills_edit.html", ctx, status_code=409)
+        except ValidationFailed as exc:
+            ctx = {
+                "skill_name": skill_name,
+                "file_path": str(path),
+                "csrf_token": next_token,
+                "content": content,
+                "expected_mtime": expected_ts or "",
+                "error_code": "validation_failed",
+                "error_detail": exc.detail,
+                "client": client,
+            }
+            return templates.TemplateResponse(request, "skills_edit.html", ctx, status_code=400)
+        except Exception:
+            ctx = {
+                "skill_name": skill_name,
+                "file_path": str(path),
+                "csrf_token": next_token,
+                "content": content,
+                "expected_mtime": expected_ts or "",
+                "error_code": "io_error",
+                "client": client,
+            }
+            return templates.TemplateResponse(request, "skills_edit.html", ctx, status_code=500)
+
+        ctx = {
+            "skill_name": skill_name,
+            "file_path": str(path),
+            "csrf_token": next_token,
+            "content": content,
+            "expected_mtime": result.new_mtime,
+            "saved_at": time.time(),
+            "bytes_written": result.bytes_written,
+            "client": client,
+        }
+        return templates.TemplateResponse(request, "skills_edit.html", ctx)
 
     @router.get("/sessions", response_class=HTMLResponse)
     async def sessions_view(request: Request) -> Response:

@@ -593,12 +593,18 @@ two-week Principle 9 window plus per-item readiness checks.
        *Shipped 2026-05-24. Cron add deferred to CLI —
        lengthy messages live better there. Toggle / remove
        on dashboard, add via `fitt cron add`.*
-- [ ] F13. **Dashboard edit for skills (SKILL.md).**
+- [x] F13. **Dashboard edit for skills (SKILL.md).**
        Frontmatter validation needed (name uniqueness,
        description length, prerequisites resolvable).
        Same edit-and-restart contract the loader has
        today; the dashboard surfaces a "restart to
        reload" banner after save.
+       *Shipped 2026-05-24. Validation reuses the
+       skills loader's frontmatter parser via the new
+       `validate_skill_content()` public wrapper. Edits
+       are restricted to skills already known to the
+       loader; create-new from the dashboard rides a
+       follow-up if it earns its weight.*
 - [ ] F14. **Dashboard edit for config.yaml.** Validation
        runs the same pydantic graph the boot does. Decision
        point at this commit: hot-reload vs restart-to-apply.

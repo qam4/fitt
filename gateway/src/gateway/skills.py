@@ -388,6 +388,34 @@ class SkillsLoader:
         )
 
 
+# --------------------------------------------------------------- public validator
+
+
+def validate_skill_content(text: str) -> str | None:
+    """Validate proposed ``SKILL.md`` content against the
+    loader's frontmatter contract.
+
+    Returns ``None`` on pass (the loader would accept this
+    file), an operator-readable error string on fail. Used
+    by the dashboard's edit save handler to refuse invalid
+    saves before they hit disk — same validators the boot-
+    time loader runs, surfaced as a thin wrapper so the
+    dashboard doesn't have to import private symbols.
+
+    Note: the directory-name vs frontmatter-name mismatch is
+    a warning at load time, not a fail. We mirror that
+    posture here — the validator passes a mismatch, the
+    loader logs the warning on next boot.
+    """
+    try:
+        yaml_text, _body = _split_frontmatter(text)
+        raw = _parse_frontmatter(yaml_text)
+        _validate_fields(raw)
+    except SkillSkipped as exc:
+        return f"{exc.__class__.reason}: {exc}"
+    return None
+
+
 # --------------------------------------------------------------- frontmatter helpers
 
 

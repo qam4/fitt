@@ -1408,6 +1408,200 @@ def test_cron_actions_redirect_without_auth(client: TestClient) -> None:
     assert r.status_code == 302
 
 
+# --------------------------------------------------------------- skills edit (F13)
+
+
+def _make_skill(cfg, name: str, *, valid: bool = True) -> Path:
+    """Drop a SKILL.md under the configured skills_dir."""
+    skill_dir = cfg.memory.skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    body = (
+        f"---\nname: {name}\ndescription: a smoke-test skill\n---\n# Body\n"
+        if valid
+        else "no frontmatter at all\n"
+    )
+    path = skill_dir / "SKILL.md"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_skills_edit_get_renders_form(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    _make_skill(cfg, "test-skill")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/skills/edit?skill_name=test-skill")
+    assert r.status_code == 200
+    body = r.text
+    assert "test-skill" in body
+    assert 'name="content"' in body
+    assert 'name="csrf_token"' in body
+    # Pre-filled with the actual file content.
+    assert "smoke-test skill" in body
+
+
+def test_skills_edit_get_redirects_for_unknown(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/skills/edit?skill_name=nonexistent")
+    assert r.status_code == 302
+
+
+def test_skills_edit_get_rejects_path_traversal(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    _make_skill(cfg, "good-skill")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    # A skill name that's actually a path → bounce to listing.
+    r = tc.get("/dashboard/skills/edit?skill_name=../../etc/passwd")
+    assert r.status_code == 302
+
+
+def test_skills_edit_save_round_trip(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    skill_path = _make_skill(cfg, "test-skill")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/skills/edit?skill_name=test-skill")
+    csrf = _csrf_from(r.text)
+    import re
+
+    mtime = re.search(r'name="expected_mtime" value="([^"]+)"', r.text).group(1)
+
+    new_content = "---\nname: test-skill\ndescription: updated description\n---\n# New body\n"
+    r = tc.post(
+        "/dashboard/skills/save",
+        data={
+            "csrf_token": csrf,
+            "skill_name": "test-skill",
+            "expected_mtime": mtime,
+            "content": new_content,
+        },
+    )
+    assert r.status_code == 200
+    assert "Saved" in r.text
+    assert skill_path.read_text(encoding="utf-8") == new_content
+
+
+def test_skills_edit_save_rejects_invalid_frontmatter(tmp_path: Path) -> None:
+    """The dashboard refuses to write a SKILL.md the boot
+    loader would skip — frontmatter that fails validation is
+    rejected before disk write."""
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    skill_path = _make_skill(cfg, "test-skill")
+    original = skill_path.read_text(encoding="utf-8")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/skills/edit?skill_name=test-skill")
+    csrf = _csrf_from(r.text)
+    import re
+
+    mtime = re.search(r'name="expected_mtime" value="([^"]+)"', r.text).group(1)
+
+    # No frontmatter fence → MissingOpenFence on validate.
+    r = tc.post(
+        "/dashboard/skills/save",
+        data={
+            "csrf_token": csrf,
+            "skill_name": "test-skill",
+            "expected_mtime": mtime,
+            "content": "no frontmatter here\n",
+        },
+    )
+    assert r.status_code == 400
+    assert "validation" in r.text.lower() or "frontmatter" in r.text.lower()
+    # File untouched.
+    assert skill_path.read_text(encoding="utf-8") == original
+
+
+def test_skills_edit_save_rejects_bad_csrf(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    skill_path = _make_skill(cfg, "test-skill")
+    original = skill_path.read_text(encoding="utf-8")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.post(
+        "/dashboard/skills/save",
+        data={
+            "csrf_token": "garbage",
+            "skill_name": "test-skill",
+            "expected_mtime": "0",
+            "content": "anything\n",
+        },
+    )
+    assert r.status_code == 403
+    assert skill_path.read_text(encoding="utf-8") == original
+
+
+def test_skills_edit_save_emits_audit(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path, memory_enabled=True)
+    cfg.server.boot_probe_enabled = False
+    _make_skill(cfg, "test-skill")
+
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/skills/edit?skill_name=test-skill")
+    csrf = _csrf_from(r.text)
+    import re
+
+    mtime = re.search(r'name="expected_mtime" value="([^"]+)"', r.text).group(1)
+
+    tc.post(
+        "/dashboard/skills/save",
+        data={
+            "csrf_token": csrf,
+            "skill_name": "test-skill",
+            "expected_mtime": mtime,
+            "content": "---\nname: test-skill\ndescription: updated\n---\n# x\n",
+        },
+    )
+    entries = app.state.audit.iter_entries()
+    edit_entries = [e for e in entries if e.get("tool") == "dashboard.edit"]
+    assert len(edit_entries) >= 1
+    e = edit_entries[-1]
+    assert e["ok"] is True
+    assert e["args"]["path"].endswith("SKILL.md")
+
+
+def test_skills_edit_redirects_without_auth(client: TestClient) -> None:
+    r = client.post(
+        "/dashboard/skills/save",
+        data={
+            "csrf_token": "x",
+            "skill_name": "y",
+            "expected_mtime": "0",
+            "content": "anything",
+        },
+    )
+    assert r.status_code == 302
+
+
 # --------------------------------------------------------------- skills view
 
 
