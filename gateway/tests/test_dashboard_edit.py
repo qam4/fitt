@@ -393,6 +393,12 @@ def test_save_chain_grows_across_multiple_attempts(tmp_path: Path) -> None:
         client="ide",
     )
     expected_mtime = target.stat().st_mtime
+    # Force a meaningful mtime delta on filesystems with coarse
+    # resolution (Windows NTFS rounds to ~10ms; some FAT
+    # variants are 2s). Without this, v1 and v2 can land at
+    # the same mtime, making the deliberate-stale-mtime check
+    # below pass when it shouldn't.
+    time.sleep(0.05)
     save_file_with_mtime(
         path=target,
         new_content="v2\n",

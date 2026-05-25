@@ -1923,6 +1923,139 @@ def build_views_router() -> APIRouter:
         ctx["client"] = getattr(request.state, "client", "webui")
         return templates.TemplateResponse(request, "settings.html", ctx)
 
+    @router.get("/settings/config/edit", response_class=HTMLResponse)
+    async def settings_config_edit_get(request: Request) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        from ..config import default_config_path
+        from .edit import issue_csrf as _issue_csrf
+
+        path = default_config_path()
+        auth = request.app.state.dashboard_auth
+        token = _issue_csrf(request, key=auth.key())
+
+        content = ""
+        expected_mtime: float | str = ""
+        if path.exists():
+            try:
+                content = path.read_text(encoding="utf-8")
+                expected_mtime = path.stat().st_mtime
+            except OSError:
+                pass
+
+        ctx = {
+            "file_path": str(path),
+            "csrf_token": token,
+            "content": content,
+            "expected_mtime": expected_mtime,
+            "client": getattr(request.state, "client", "webui"),
+        }
+        return templates.TemplateResponse(request, "config_edit.html", ctx)
+
+    @router.post("/settings/config/save", response_class=HTMLResponse)
+    async def settings_config_save(
+        request: Request,
+        csrf_token: str = Form(""),
+        expected_mtime: str = Form(""),
+        content: str = Form(""),
+    ) -> Response:
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        client = getattr(request.state, "client", "webui")
+
+        from ..config import default_config_path, validate_config_yaml
+        from .edit import (
+            CsrfMismatch,
+            MtimeConflict,
+            ValidationFailed,
+            csrf_required,
+            issue_csrf,
+            save_file_with_mtime,
+        )
+
+        auth = request.app.state.dashboard_auth
+        next_token = issue_csrf(request, key=auth.key())
+        path = default_config_path()
+
+        # CSRF first.
+        try:
+            csrf_required(request, csrf_token)
+        except CsrfMismatch:
+            ctx = {
+                "file_path": str(path),
+                "csrf_token": next_token,
+                "content": content,
+                "expected_mtime": expected_mtime,
+                "error_code": "csrf_mismatch",
+                "client": client,
+            }
+            return templates.TemplateResponse(request, "config_edit.html", ctx, status_code=403)
+
+        expected_ts: float | None
+        if expected_mtime.strip():
+            try:
+                expected_ts = float(expected_mtime)
+            except ValueError:
+                expected_ts = None
+        else:
+            expected_ts = None
+
+        audit_log = getattr(request.app.state, "audit", None)
+
+        try:
+            result = save_file_with_mtime(
+                path=path,
+                new_content=content,
+                expected_mtime=expected_ts,
+                audit_log=audit_log,
+                client=client,
+                validate=validate_config_yaml,
+            )
+        except MtimeConflict:
+            ctx = {
+                "file_path": str(path),
+                "csrf_token": next_token,
+                "content": content,
+                "expected_mtime": expected_ts or "",
+                "error_code": "mtime_conflict",
+                "client": client,
+            }
+            return templates.TemplateResponse(request, "config_edit.html", ctx, status_code=409)
+        except ValidationFailed as exc:
+            ctx = {
+                "file_path": str(path),
+                "csrf_token": next_token,
+                "content": content,
+                "expected_mtime": expected_ts or "",
+                "error_code": "validation_failed",
+                "error_detail": exc.detail,
+                "client": client,
+            }
+            return templates.TemplateResponse(request, "config_edit.html", ctx, status_code=400)
+        except Exception:
+            ctx = {
+                "file_path": str(path),
+                "csrf_token": next_token,
+                "content": content,
+                "expected_mtime": expected_ts or "",
+                "error_code": "io_error",
+                "client": client,
+            }
+            return templates.TemplateResponse(request, "config_edit.html", ctx, status_code=500)
+
+        ctx = {
+            "file_path": str(path),
+            "csrf_token": next_token,
+            "content": content,
+            "expected_mtime": result.new_mtime,
+            "saved_at": time.time(),
+            "bytes_written": result.bytes_written,
+            "client": client,
+        }
+        return templates.TemplateResponse(request, "config_edit.html", ctx)
+
     @router.get("/projects", response_class=HTMLResponse)
     async def projects_view(
         request: Request,

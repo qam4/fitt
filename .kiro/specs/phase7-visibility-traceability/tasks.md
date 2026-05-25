@@ -605,7 +605,7 @@ two-week Principle 9 window plus per-item readiness checks.
        are restricted to skills already known to the
        loader; create-new from the dashboard rides a
        follow-up if it earns its weight.*
-- [ ] F14. **Dashboard edit for config.yaml.** Validation
+- [x] F14. **Dashboard edit for config.yaml.** Validation
        runs the same pydantic graph the boot does. Decision
        point at this commit: hot-reload vs restart-to-apply.
        Restart-to-apply is the v0 default unless live use
@@ -613,6 +613,21 @@ two-week Principle 9 window plus per-item readiness checks.
        Cross-reference checks (every alias points at a
        configured model; every fallback resolves) surface
        structured errors above the form on save failure.
+       *Shipped 2026-05-24 as restart-to-apply v0. Save
+       writes to disk, banner reminds the operator to
+       `docker compose restart gateway`. Hot-reload tracked
+       as F14b — pick up if restart friction shows up.*
+
+- [ ] F14b. **config.yaml hot-reload.** Read config from
+       disk on a SIGHUP / restart-on-change webhook /
+       file-watch trigger and rebuild the in-process state
+       (MemoryStore, ToolRegistry, LiteLLM client cache,
+       MCP supervisor, alias probe). Real engineering —
+       different subsystems have different hot-swap stories
+       (MemoryStore swaps cleanly; ToolRegistry rebuilds
+       tools at boot; LiteLLM holds connection caches;
+       MCP holds subprocesses). Don't build until the
+       restart-to-apply friction earns it.
 - [ ] F15. **Dashboard edit for secrets.yaml.** Per-key form,
        never render existing values, double-confirm with
        the bearer token on submit, dedicated audit

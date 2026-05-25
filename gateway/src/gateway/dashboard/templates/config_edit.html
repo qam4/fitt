@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% set nav_active = "settings" %}
+{% block title %}FITT dashboard - edit config.yaml{% endblock %}
+{% block content %}
+<p style="margin-top: 0;">
+  <a href="/dashboard/settings">← back to settings</a>
+</p>
+
+<h2>Edit <code>config.yaml</code></h2>
+<p class="tagline">
+  Save here, then <strong>restart the gateway</strong> for
+  the change to take effect — config is read once at boot.
+  Hot-reload is a follow-up.
+</p>
+
+<div class="card" style="border-color: var(--warn);">
+  <h3 style="color: var(--warn);">⚠ Restart required</h3>
+  <p>
+    Saved changes apply on the next gateway boot. Run
+    <code>docker compose restart gateway</code> on the hub
+    after a successful save.
+  </p>
+  <p class="dim" style="font-size: 12px;">
+    Validation runs the same pydantic graph the boot loader
+    uses, so a save the dashboard accepts is a save the
+    gateway will boot on. If validation fails, the on-disk
+    file isn't touched.
+  </p>
+</div>
+
+{% if error_code == "mtime_conflict" %}
+<div class="card" style="border-color: var(--warn);">
+  <h3 style="color: var(--warn);">⚠ File changed on disk</h3>
+  <p>
+    config.yaml changed between when you opened the editor
+    and when you saved. Reload the page to see the on-disk
+    version, then re-apply your changes.
+  </p>
+</div>
+{% elif error_code == "validation_failed" %}
+<div class="card" style="border-color: var(--error);">
+  <h3 style="color: var(--error);">Validation failed</h3>
+  <p style="font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap;">{{ error_detail }}</p>
+  <p class="dim" style="font-size: 12px;">
+    The on-disk file is unchanged. Fix the YAML and re-submit.
+  </p>
+</div>
+{% elif error_code == "csrf_mismatch" %}
+<div class="card" style="border-color: var(--error);">
+  <h3 style="color: var(--error);">CSRF token mismatch</h3>
+  <p>The form expired. Reload and try again.</p>
+</div>
+{% elif error_code == "io_error" %}
+<div class="card" style="border-color: var(--error);">
+  <h3 style="color: var(--error);">Write failed</h3>
+  <p>The save couldn't complete. Check the gateway logs.</p>
+</div>
+{% endif %}
+
+{% if saved_at %}
+<div class="card" style="border-color: var(--accent);">
+  <p style="color: var(--accent); margin: 0;">
+    ✓ Saved — {{ bytes_written }} bytes written.
+    <strong>Restart the gateway to apply.</strong>
+  </p>
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="post" action="/dashboard/settings/config/save">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="expected_mtime" value="{{ expected_mtime }}">
+    <textarea name="content" rows="40" style="
+      width: 100%;
+      box-sizing: border-box;
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 13px;
+      background: var(--code-bg);
+      color: var(--text-bright);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px;
+    ">{{ content }}</textarea>
+    <div style="margin-top: 12px; display: flex; gap: 12px; align-items: center;">
+      <button type="submit">Save</button>
+      <a href="/dashboard/settings" class="dim" style="font-size: 12px;">cancel</a>
+      <span class="dim" style="font-size: 11px; margin-left: auto;">
+        loaded at mtime {{ expected_mtime }}
+      </span>
+    </div>
+  </form>
+</div>
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  File path: <code>{{ file_path }}</code> ·
+  Validation = <code>Config.model_validate(yaml.safe_load(content))</code>.
+</p>
+{% endblock %}

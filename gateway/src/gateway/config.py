@@ -567,6 +567,40 @@ def load_config(
 # ----------------------------------------------------------------- boot-time checks
 
 
+def validate_config_yaml(yaml_text: str) -> str | None:
+    """Validate proposed ``config.yaml`` content against the
+    boot-time loader's schema.
+
+    Returns ``None`` on pass — the boot loader would accept this
+    file (the cross-references resolve, the alias graph is
+    consistent, every fallback points at a known model). Returns
+    an operator-readable error string on fail.
+
+    Used by the dashboard's edit save handler (F14) to refuse
+    invalid saves before they hit disk. Same validators
+    :func:`load_config` runs at boot, so a config the dashboard
+    accepts is a config the gateway will boot on after the
+    operator restarts.
+
+    The check intentionally runs only structural validation —
+    it doesn't call :func:`check_missing_api_keys` because
+    secrets aren't part of the config.yaml save and an empty
+    secrets context would always trip those warnings."""
+    try:
+        raw = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        return f"YAML parse error: {exc}"
+    if raw is None:
+        return "config is empty"
+    if not isinstance(raw, dict):
+        return f"config must be a YAML mapping at top level, got {type(raw).__name__}"
+    try:
+        Config.model_validate(raw)
+    except Exception as exc:
+        return f"validation failed: {exc}"
+    return None
+
+
 def check_missing_api_keys(config: Config) -> list[str]:
     """Return a list of human-readable warnings for
     ``openai``-backend models whose ``api_keys`` entry is missing

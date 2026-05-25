@@ -1602,6 +1602,224 @@ def test_skills_edit_redirects_without_auth(client: TestClient) -> None:
     assert r.status_code == 302
 
 
+# --------------------------------------------------------------- config edit (F14)
+
+
+_VALID_CONFIG_YAML = """\
+aliases:
+  fitt-default: qwen-big
+models:
+  - id: qwen-big
+    backend: ollama
+    endpoint: http://laptop.tailnet:11434
+    model: qwen2.5-coder:14b
+"""
+
+
+def _seed_config_file(tmp_path: Path) -> Path:
+    """Write a real config.yaml to FITT_HOME for the edit tests
+    that need an on-disk file to read first. The dashboard's
+    config edit handler resolves the path via
+    ``default_config_path()`` which honours FITT_HOME."""
+    from gateway.config import fitt_home
+
+    home = fitt_home()
+    home.mkdir(parents=True, exist_ok=True)
+    target = home / "config.yaml"
+    target.write_text(_VALID_CONFIG_YAML, encoding="utf-8")
+    return target
+
+
+def test_config_edit_get_renders_form(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_config_file(tmp_path)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/config/edit")
+    assert r.status_code == 200
+    body = r.text
+    assert "config.yaml" in body
+    # Disclaimer about restart-to-apply.
+    assert "Restart" in body
+    # Pre-filled with the on-disk content.
+    assert "qwen2.5-coder:14b" in body
+    # CSRF + mtime hints present.
+    assert 'name="csrf_token"' in body
+    assert 'name="expected_mtime"' in body
+    # Sanity: target is the file we seeded.
+    assert target.exists()
+
+
+def test_config_save_round_trip(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_config_file(tmp_path)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/config/edit")
+    csrf = _csrf_from(r.text)
+    import re
+
+    mtime = re.search(r'name="expected_mtime" value="([^"]+)"', r.text).group(1)
+
+    new_yaml = _VALID_CONFIG_YAML + "upstream_timeout_secs: 600.0\n"
+    r = tc.post(
+        "/dashboard/settings/config/save",
+        data={
+            "csrf_token": csrf,
+            "expected_mtime": mtime,
+            "content": new_yaml,
+        },
+    )
+    assert r.status_code == 200
+    assert "Saved" in r.text
+    # Disclaimer surfaces in the response so the operator sees
+    # "restart required" right after a successful save.
+    assert "Restart" in r.text
+    assert target.read_text(encoding="utf-8") == new_yaml
+
+
+def test_config_save_rejects_invalid_yaml(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_config_file(tmp_path)
+    original = target.read_text(encoding="utf-8")
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/config/edit")
+    csrf = _csrf_from(r.text)
+    import re
+
+    mtime = re.search(r'name="expected_mtime" value="([^"]+)"', r.text).group(1)
+
+    # Trailing colon with no value at the end is malformed YAML.
+    r = tc.post(
+        "/dashboard/settings/config/save",
+        data={
+            "csrf_token": csrf,
+            "expected_mtime": mtime,
+            "content": "aliases:\n  fitt-default: qwen-big\nmodels:\n  - id: incomplete:\n",
+        },
+    )
+    assert r.status_code == 400
+    assert "Validation" in r.text or "validation" in r.text.lower()
+    # File untouched.
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_config_save_rejects_unknown_alias_target(tmp_path: Path) -> None:
+    """Cross-reference validation: alias points at a model id
+    that doesn't exist → caught by Config.model_validate, save
+    refuses, file unchanged."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_config_file(tmp_path)
+    original = target.read_text(encoding="utf-8")
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/config/edit")
+    csrf = _csrf_from(r.text)
+    import re
+
+    mtime = re.search(r'name="expected_mtime" value="([^"]+)"', r.text).group(1)
+
+    # alias points at a model id that doesn't exist.
+    bad_yaml = """\
+aliases:
+  fitt-default: nonexistent-model
+models:
+  - id: qwen-big
+    backend: ollama
+    endpoint: http://laptop:11434
+    model: qwen2.5-coder:14b
+"""
+    r = tc.post(
+        "/dashboard/settings/config/save",
+        data={
+            "csrf_token": csrf,
+            "expected_mtime": mtime,
+            "content": bad_yaml,
+        },
+    )
+    assert r.status_code == 400
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_config_save_rejects_bad_csrf(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    target = _seed_config_file(tmp_path)
+    original = target.read_text(encoding="utf-8")
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.post(
+        "/dashboard/settings/config/save",
+        data={
+            "csrf_token": "garbage",
+            "expected_mtime": "0",
+            "content": "anything",
+        },
+    )
+    assert r.status_code == 403
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_config_save_emits_audit(tmp_path: Path) -> None:
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    _seed_config_file(tmp_path)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/settings/config/edit")
+    csrf = _csrf_from(r.text)
+    import re
+
+    mtime = re.search(r'name="expected_mtime" value="([^"]+)"', r.text).group(1)
+
+    tc.post(
+        "/dashboard/settings/config/save",
+        data={
+            "csrf_token": csrf,
+            "expected_mtime": mtime,
+            "content": _VALID_CONFIG_YAML + "upstream_timeout_secs: 240.0\n",
+        },
+    )
+
+    entries = app.state.audit.iter_entries()
+    edits = [e for e in entries if e.get("tool") == "dashboard.edit"]
+    assert len(edits) >= 1
+    e = edits[-1]
+    assert e["ok"] is True
+    assert e["args"]["path"].endswith("config.yaml")
+
+
+def test_config_edit_redirects_without_auth(client: TestClient) -> None:
+    r = client.get("/dashboard/settings/config/edit")
+    assert r.status_code == 302
+    r = client.post(
+        "/dashboard/settings/config/save",
+        data={
+            "csrf_token": "x",
+            "expected_mtime": "0",
+            "content": "anything",
+        },
+    )
+    assert r.status_code == 302
+
+
 # --------------------------------------------------------------- skills view
 
 
