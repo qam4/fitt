@@ -75,9 +75,17 @@ _SECRET_VALUE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"ghp_[A-Za-z0-9]{30,}"),  # GitHub
     re.compile(r"xoxb-[A-Za-z0-9-]{20,}"),  # Slack bot
     re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),  # JWT
-    # Long hex / base64 strings that look like keys. Conservative
-    # threshold so we don't redact file hashes or UUIDs.
-    re.compile(r"\b[A-Za-z0-9+/_-]{40,}={0,2}\b"),
+    # Long URL-safe base64 strings that look like keys.
+    # Conservative threshold + restriction to ``[A-Za-z0-9_-]``
+    # so we don't redact file hashes, UUIDs, or the path
+    # components that show up in pytest tmp paths on Linux
+    # (``/tmp/pytest-of-runner/.../<long-test-name>/audited.md``
+    # used to round-trip as ``/<redacted>.md`` because ``/``
+    # was in the character class — every modern key format
+    # above uses URL-safe base64, so dropping ``/`` and ``+``
+    # loses no real coverage). Padding-equals tolerated for
+    # the rare legacy base64 case.
+    re.compile(r"\b[A-Za-z0-9_-]{40,}={0,2}\b"),
 ]
 """Value-shape patterns that look like secrets regardless of the
 key name. Applied to every string value before writing."""
@@ -109,8 +117,25 @@ def redact(value: Any) -> Any:
         return [redact(v) for v in value]
     if isinstance(value, str):
         s = value
-        for pat in _SECRET_VALUE_PATTERNS:
+        # Named patterns (sk-, ghp_, JWT, ...) always fire — they
+        # catch keys embedded in larger strings (URL with embedded
+        # token, log line with a key in it).
+        for pat in _SECRET_VALUE_PATTERNS[:-1]:
             s = pat.sub(_REDACTED, s)
+        # The catch-all "long URL-safe base64" pattern only fires
+        # when the string has no path separator. Structured paths
+        # (Linux pytest tmp dirs like
+        # ``/tmp/pytest-of-runner/.../<long-test-name>/file.md``,
+        # Windows ``C:\Users\...\AppData\...\file.md``, URLs)
+        # used to round-trip through the redactor mangled because
+        # a path component happened to be 40+ chars of word-class.
+        # Modern key formats (sk-, sk-ant-, sk-or-, ghp_, JWT, ...)
+        # do not contain ``/`` or ``\`` in their value shapes, so
+        # excluding strings that contain either separator loses
+        # no real coverage on the catch-all rung — and the named
+        # patterns above still catch keys embedded inside URLs.
+        if "/" not in s and "\\" not in s:
+            s = _SECRET_VALUE_PATTERNS[-1].sub(_REDACTED, s)
         return s
     return value
 

@@ -81,6 +81,40 @@ def test_redact_leaves_non_strings_alone() -> None:
     assert got == {"n": 42, "ok": True, "x": None, "lst": [1, 2, 3]}
 
 
+def test_redact_preserves_long_unix_file_paths() -> None:
+    """Linux pytest tmp paths used to round-trip as
+    ``/<redacted>.md`` because the long-base64 catch-all
+    regex included ``/`` in its character class. Pin that
+    file paths survive redaction; modern key formats use
+    URL-safe base64 (``[A-Za-z0-9_-]``), no ``/``."""
+    long_path = (
+        "/tmp/pytest-of-runner/pytest-0/test_save_emits_one_audit_entry_per_success0/audited.md"
+    )
+    got = redact({"path": long_path})
+    assert got["path"] == long_path
+
+
+def test_redact_preserves_windows_file_paths() -> None:
+    """Symmetric Windows-shape coverage so a regression in
+    either direction is caught."""
+    win_path = (
+        r"C:\Users\fredmarc\AppData\Local\Temp\pytest-of-fredmarc"
+        r"\pytest-0\test_save_emits_one_audit_entry_per_success0"
+        r"\audited.md"
+    )
+    got = redact({"path": win_path})
+    assert got["path"] == win_path
+
+
+def test_redact_still_catches_long_url_safe_base64() -> None:
+    """The catch-all is narrower now (no ``/`` or ``+``) but
+    still catches the ``[A-Za-z0-9_-]{40,}`` shape — that's
+    every modern key format we care about."""
+    long_key = "a" * 50  # 50 chars, all in the URL-safe class
+    got = redact({"opaque": long_key})
+    assert got["opaque"] == "<redacted>"
+
+
 # --------------------------------------------------------------- append
 
 
