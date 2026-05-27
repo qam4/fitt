@@ -286,10 +286,18 @@ def _parse_eval_report(path: Path) -> dict[str, Any] | None:
     }
 
 
-def _format_eval_cell(report: dict[str, Any] | None) -> str:
-    """Render the last-eval column. Returns HTML so we can include
-    a colour-coded pass-rate badge. Caller marks the value safe in
-    the template."""
+def _format_eval_cell(alias: str, report: dict[str, Any] | None) -> str:
+    """Render the last-eval column.
+
+    Returns HTML so we can include a colour-coded pass-rate
+    badge wrapped in a link to the per-alias eval detail view.
+    Caller marks the value safe in the template.
+
+    Pre-F18 this just rendered the badge; F18 wraps it in a
+    link to ``/dashboard/eval/<alias>`` so the operator can
+    drill into per-case detail without dropping to the CLI.
+    The "—" placeholder for missing reports stays unlinked
+    because there's nothing to drill into."""
     if report is None:
         return '<span class="dim">—</span>'
     passed = report["passed"]
@@ -301,7 +309,8 @@ def _format_eval_cell(report: dict[str, Any] | None) -> str:
         cls = "badge-warn"
     else:
         cls = "badge-error"
-    return f'<span class="{cls}">{passed}/{total} ({pct}%)</span>'
+    badge = f'<span class="{cls}">{passed}/{total} ({pct}%)</span>'
+    return f'<a href="/dashboard/eval/{alias}" class="bare">{badge}</a>'
 
 
 def _count_dispatches_last_24h(audit: Any) -> dict[str, int]:
@@ -339,6 +348,326 @@ def _count_dispatches_last_24h(audit: Any) -> dict[str, int]:
         if isinstance(alias, str) and alias:
             counts[alias] = counts.get(alias, 0) + 1
     return counts
+
+
+# --------------------------------------------------------------- F18: eval detail
+
+
+# Parsing the per-case sections of the markdown report. Mirrors
+# :func:`gateway.alias_eval.render_report_markdown`'s output:
+#
+#   ### ✅ `case_name` — pass
+#   ### ❌ `case_name` — narrated
+#
+# Each case section has a status, latency, optional tool_called
+# and finish_reason, a free-form detail line, and an optional
+# reply preview inside a fenced block.
+_EVAL_CASE_HEADER_RE = re.compile(r"^###\s+(?:✅|❌)\s+`(?P<name>[^`]+)`\s+—\s+(?P<status>\S+)\s*$")
+_EVAL_CASE_LATENCY_RE = re.compile(r"^-\s+Latency:\s+(?P<ms>\d+)\s*ms")
+_EVAL_CASE_TOOL_CALLED_RE = re.compile(r"^-\s+Tool called:\s+`(?P<name>[^`]+)`")
+_EVAL_CASE_FINISH_RE = re.compile(r"^-\s+Finish reason:\s+`(?P<reason>[^`]+)`")
+_EVAL_CASE_DETAIL_RE = re.compile(r"^-\s+Detail:\s+(?P<detail>.+)$")
+_EVAL_CASE_MODEL_RE = re.compile(r"^-\s+Model:\s+`(?P<model>[^`]+)`")
+_EVAL_CASE_DURATION_RE = re.compile(r"^-\s+Duration:\s+(?P<ms>\d+)\s*ms")
+
+
+def _parse_eval_report_full(path: Path) -> dict[str, Any] | None:
+    """Parse the full per-alias eval markdown report.
+
+    Returns a dict with the header summary plus a ``cases`` list
+    where each entry mirrors :class:`gateway.alias_eval.CaseResult`'s
+    user-visible fields. Returns ``None`` when the file's missing
+    or so malformed we couldn't even pull the result line.
+
+    The parser deliberately tolerates extra blank lines, missing
+    optional fields (``tool_called`` / ``finish_reason`` /
+    ``reply_preview``), and shrugs at unknown bullet keys —
+    same forgiving posture as :func:`_parse_eval_report`. If a
+    section header lands without any subsequent fields parsing
+    cleanly, the case is still emitted with whatever did parse
+    so the operator gets partial detail rather than a 500."""
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    passed: int | None = None
+    total: int | None = None
+    finished_iso: str | None = None
+    model_id: str | None = None
+    duration_ms: int | None = None
+    cases: list[dict[str, Any]] = []
+
+    cur: dict[str, Any] | None = None
+    in_preview = False
+    preview_lines: list[str] = []
+
+    for raw in text.splitlines():
+        line = raw.rstrip("\r")
+
+        # Reply preview blocks are fenced with ``` indented
+        # under the bullet list. Track open/close.
+        stripped = line.strip()
+        if cur is not None and stripped == "```":
+            if in_preview:
+                cur["reply_preview"] = "\n".join(preview_lines).strip()
+                preview_lines = []
+                in_preview = False
+            else:
+                in_preview = True
+            continue
+        if in_preview:
+            # Strip the two-space indent render_report_markdown
+            # adds to keep the preview inside the bullet.
+            preview_lines.append(line[2:] if line.startswith("  ") else line)
+            continue
+
+        # Header lines (only fire before any case section).
+        if not cases and cur is None:
+            m = _EVAL_RESULT_RE.match(line)
+            if m is not None:
+                passed = int(m.group("passed"))
+                total = int(m.group("total"))
+                continue
+            m = _EVAL_FINISHED_RE.match(line)
+            if m is not None:
+                finished_iso = m.group("iso")
+                continue
+            m = _EVAL_CASE_MODEL_RE.match(line)
+            if m is not None:
+                model_id = m.group("model")
+                continue
+            m = _EVAL_CASE_DURATION_RE.match(line)
+            if m is not None:
+                duration_ms = int(m.group("ms"))
+                continue
+
+        m = _EVAL_CASE_HEADER_RE.match(line)
+        if m is not None:
+            if cur is not None:
+                cases.append(cur)
+            cur = {
+                "name": m.group("name"),
+                "status": m.group("status"),
+                "latency_ms": None,
+                "tool_called": None,
+                "finish_reason": None,
+                "detail": "",
+                "reply_preview": "",
+            }
+            continue
+
+        if cur is None:
+            continue
+
+        m = _EVAL_CASE_LATENCY_RE.match(line)
+        if m is not None:
+            cur["latency_ms"] = int(m.group("ms"))
+            continue
+        m = _EVAL_CASE_TOOL_CALLED_RE.match(line)
+        if m is not None:
+            cur["tool_called"] = m.group("name")
+            continue
+        m = _EVAL_CASE_FINISH_RE.match(line)
+        if m is not None:
+            cur["finish_reason"] = m.group("reason")
+            continue
+        m = _EVAL_CASE_DETAIL_RE.match(line)
+        if m is not None:
+            cur["detail"] = m.group("detail").strip()
+            continue
+
+    # Flush trailing case (the last one has no following header).
+    if cur is not None:
+        cases.append(cur)
+
+    if passed is None or total is None:
+        return None
+
+    return {
+        "passed": passed,
+        "total": total,
+        "pass_rate": passed / total if total > 0 else 0.0,
+        "finished_iso": finished_iso,
+        "model_id": model_id,
+        "duration_ms": duration_ms,
+        "cases": cases,
+    }
+
+
+# Verdict tone classes for the badge / banner.
+_VERDICT_RECOMMENDED = "recommended"
+_VERDICT_WORKABLE = "workable"
+_VERDICT_RISKY = "risky"
+_VERDICT_NOT_RECOMMENDED = "not_recommended"
+_VERDICT_INCOMPLETE = "incomplete"
+
+
+def _eval_verdict(parsed: dict[str, Any] | None) -> dict[str, str]:
+    """Map a parsed eval report to a verdict bucket + reason.
+
+    The pass-rate alone doesn't tell the operator whether a
+    binding is safe — ``4/5`` with the ``no_tool_small_talk``
+    case failing is workable; ``4/5`` with one of the tool-
+    required cases narrating is the granite-incident shape
+    and should be treated as risky.
+
+    Returns ``{"label", "tone", "reason"}`` where ``tone`` is
+    one of the ``_VERDICT_*`` constants for CSS class mapping.
+    Sharp version: one short reason per bucket; the per-case
+    detail in the page below carries the explanation if the
+    operator wants to dig.
+
+    Buckets:
+
+    * ``recommended`` — every case passed.
+    * ``workable`` — only the ``no_tool_expected_but_called``
+      case failed (over-eager but tool-calling discipline
+      otherwise intact). Or a single ``wrong_tool`` on the
+      disambiguation case, which is shaky but salvageable.
+    * ``risky`` — any tool-required case failed with
+      ``narrated`` (granite shape) or ``truncated``. The
+      binding will silently fail real Telegram tool turns.
+    * ``not_recommended`` — multiple failures, or pass rate
+      below 60%.
+    * ``incomplete`` — at least one ``transport_error``;
+      can't make a verdict until the model is reachable
+      and the suite re-runs cleanly.
+    """
+    if parsed is None or not parsed.get("cases"):
+        return {
+            "label": "No eval yet",
+            "tone": _VERDICT_INCOMPLETE,
+            "reason": "Run the eval suite from the Aliases tab to see a verdict.",
+        }
+
+    cases: list[dict[str, Any]] = parsed["cases"]
+    statuses = [c.get("status", "") for c in cases]
+    failed = [s for s in statuses if s != "pass"]
+    transport_errors = [s for s in statuses if s == "transport_error"]
+    narrated = [s for s in statuses if s == "narrated"]
+    truncated = [s for s in statuses if s == "truncated"]
+    over_eager = [s for s in statuses if s == "no_tool_expected_but_called"]
+    wrong_tool = [s for s in statuses if s == "wrong_tool"]
+
+    if transport_errors:
+        return {
+            "label": "Incomplete",
+            "tone": _VERDICT_INCOMPLETE,
+            "reason": (
+                f"{len(transport_errors)} case(s) failed to dispatch. "
+                "The model wasn't reachable when eval ran — re-test after "
+                "the model is warm."
+            ),
+        }
+
+    if not failed:
+        return {
+            "label": "Recommended",
+            "tone": _VERDICT_RECOMMENDED,
+            "reason": "All five tool-call patterns work. Safe to bind.",
+        }
+
+    if narrated:
+        return {
+            "label": "Risky",
+            "tone": _VERDICT_RISKY,
+            "reason": (
+                f"{len(narrated)} case(s) returned narrated text instead of "
+                "real tool_calls. The granite-incident shape; expect "
+                "failures on real tool-use turns under FITT's full prompt."
+            ),
+        }
+
+    if truncated:
+        return {
+            "label": "Risky",
+            "tone": _VERDICT_RISKY,
+            "reason": (
+                f"{len(truncated)} case(s) hit the max_tokens cap before "
+                "emitting tool_calls. Raise max_tokens or rebind."
+            ),
+        }
+
+    # Pure-overeager: tool_required cases passed, only the
+    # negative case failed. Workable.
+    if len(failed) == 1 and over_eager:
+        return {
+            "label": "Workable",
+            "tone": _VERDICT_WORKABLE,
+            "reason": (
+                "Tool-calling discipline is intact, but the model is "
+                "slightly over-eager — it called a tool on small talk. "
+                "Expect occasional unnecessary tool calls."
+            ),
+        }
+
+    # One wrong_tool on disambiguation, otherwise clean.
+    if len(failed) == 1 and wrong_tool:
+        return {
+            "label": "Workable",
+            "tone": _VERDICT_WORKABLE,
+            "reason": (
+                "Tool-calling works but disambiguation is shaky. OK for "
+                "single-tool flows; expect confusion when multiple "
+                "relevant tools are offered."
+            ),
+        }
+
+    # Multiple failures — not recommended.
+    pct = round(parsed["pass_rate"] * 100)
+    if pct < 60:
+        return {
+            "label": "Not recommended",
+            "tone": _VERDICT_NOT_RECOMMENDED,
+            "reason": (
+                f"Only {parsed['passed']}/{parsed['total']} cases passed. Pick a different model."
+            ),
+        }
+
+    return {
+        "label": "Risky",
+        "tone": _VERDICT_RISKY,
+        "reason": (
+            f"{len(failed)} case(s) failed across multiple patterns. "
+            "Read the per-case detail below before binding."
+        ),
+    }
+
+
+def _build_eval_context(request: Request, *, alias: str) -> dict[str, Any]:
+    """Build the per-alias eval detail page context.
+
+    Reads the rolling latest report at
+    ``$FITT_HOME/eval/<alias>-latest.md`` and parses it via
+    :func:`_parse_eval_report_full`. Adds a verdict banner
+    computed from the parsed cases so the operator gets a
+    bind-or-not signal without having to read every case.
+
+    Unknown aliases (typo in URL, or alias renamed since the
+    report was written) still render — we don't gate on
+    "alias is in config" because the report file itself is
+    what matters. The page shows "No eval found" in the
+    empty case."""
+    home = _fitt_home()
+    eval_dir = default_eval_dir(home)
+    report_path = eval_dir / f"{alias}-latest.md"
+    parsed = _parse_eval_report_full(report_path)
+    verdict = _eval_verdict(parsed)
+
+    config = request.app.state.config
+    alias_known = alias in config.alias_names()
+
+    return {
+        "alias": alias,
+        "alias_known": alias_known,
+        "report": parsed,
+        "verdict": verdict,
+        "report_path_human": str(report_path),
+        "client": getattr(request.state, "client", "webui"),
+    }
 
 
 def _build_aliases_context(request: Request) -> dict[str, Any]:
@@ -397,7 +726,7 @@ def _build_aliases_context(request: Request) -> dict[str, Any]:
                 "context_source": cw_source,
                 "pip": pip,
                 "last_probe_text": last_probe_text,
-                "last_eval_text": _format_eval_cell(eval_report),
+                "last_eval_text": _format_eval_cell(alias, eval_report),
                 "dispatched_24h": dispatch_counts.get(alias, 0),
             }
         )
@@ -2143,6 +2472,27 @@ def build_views_router() -> APIRouter:
             return guard
         ctx = _aliases_context_with_csrf(request)
         return templates.TemplateResponse(request, "_aliases_panel.html", ctx)
+
+    # --------------------------------------------------------- F18: eval detail
+
+    @router.get("/eval/{alias}", response_class=HTMLResponse)
+    async def eval_view(request: Request, alias: str) -> Response:
+        """Render the per-alias eval report with a verdict
+        banner and per-case detail.
+
+        Lands as F18 to close the dashboard's pre-existing
+        gap: the aliases tab showed a pass-rate badge but no
+        way to see *which* case failed or whether the
+        failure is the granite-shape (narration on a
+        tool-required case) or merely an over-eager model.
+        Same data ``$FITT_HOME/eval/<alias>-latest.md`` already
+        contained; just rendered in the browser instead of
+        requiring a docker exec."""
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        ctx = _build_eval_context(request, alias=alias)
+        return templates.TemplateResponse(request, "eval.html", ctx)
 
     # --------------------------------------------------------- turns
     @router.get("/turns", response_class=HTMLResponse)

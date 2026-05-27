@@ -1,0 +1,118 @@
+{# Per-alias eval report (F18).
+
+   Renders the markdown report file written by
+   :func:`gateway.alias_eval.write_report` as a structured
+   page: verdict banner at the top (so the operator gets the
+   bind-or-not answer without reading every case), header
+   summary, and per-case detail with status, latency, and the
+   reply preview when a case failed.
+
+   The verdict logic lives in :func:`_eval_verdict`; this
+   template just renders what came back. Tones map to CSS
+   badge classes — see style.css.
+#}
+{% extends "base.html" %}
+{% set nav_active = "aliases" %}
+{% block title %}FITT dashboard — eval: {{ alias }}{% endblock %}
+{% block content %}
+<h2>Eval: <code>{{ alias }}</code></h2>
+{% if not alias_known %}
+<p class="dim">
+  This alias isn't in the current <code>config.yaml</code>.
+  The report below is from a previous binding — useful for
+  history, less useful for a current decision.
+</p>
+{% endif %}
+
+<div class="card verdict verdict-{{ verdict.tone }}">
+  <div class="verdict-label">{{ verdict.label }}</div>
+  <p class="verdict-reason">{{ verdict.reason }}</p>
+</div>
+
+{% if report %}
+<div class="card">
+  <table>
+    <tbody>
+      <tr>
+        <th class="right">Result</th>
+        <td><strong>{{ report.passed }}/{{ report.total }} passed</strong>
+          ({{ (report.pass_rate * 100)|round|int }}%)</td>
+      </tr>
+      {% if report.model_id %}
+      <tr>
+        <th class="right">Model</th>
+        <td class="mono">{{ report.model_id }}</td>
+      </tr>
+      {% endif %}
+      {% if report.finished_iso %}
+      <tr>
+        <th class="right">Finished</th>
+        <td class="mono dim">{{ report.finished_iso }}</td>
+      </tr>
+      {% endif %}
+      {% if report.duration_ms is not none %}
+      <tr>
+        <th class="right">Duration</th>
+        <td class="mono dim">{{ report.duration_ms }} ms</td>
+      </tr>
+      {% endif %}
+      <tr>
+        <th class="right">Report file</th>
+        <td class="mono dim">{{ report_path_human }}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>Cases</h3>
+{% for case in report.cases %}
+<div class="card eval-case eval-case-{{ case.status }}">
+  <div class="eval-case-header">
+    {% if case.status == "pass" %}
+    <span class="badge">pass</span>
+    {% elif case.status == "transport_error" %}
+    <span class="badge-warn">{{ case.status }}</span>
+    {% else %}
+    <span class="badge-error">{{ case.status }}</span>
+    {% endif %}
+    <code class="eval-case-name">{{ case.name }}</code>
+    {% if case.latency_ms is not none %}
+    <span class="dim mono" style="font-size: 11px; margin-left: 8px;">
+      {{ case.latency_ms }} ms
+    </span>
+    {% endif %}
+  </div>
+  <p class="eval-case-detail">{{ case.detail }}</p>
+  {% if case.tool_called %}
+  <div class="dim" style="font-size: 12px;">
+    Tool called: <code>{{ case.tool_called }}</code>
+  </div>
+  {% endif %}
+  {% if case.finish_reason %}
+  <div class="dim" style="font-size: 12px;">
+    Finish reason: <code>{{ case.finish_reason }}</code>
+  </div>
+  {% endif %}
+  {% if case.reply_preview %}
+  <details style="margin-top: 8px;">
+    <summary class="dim" style="font-size: 12px;">Reply preview</summary>
+    <pre class="eval-reply-preview">{{ case.reply_preview }}</pre>
+  </details>
+  {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<div class="card">
+  <div class="empty">
+    No eval report on disk for <code>{{ alias }}</code>.
+    Run the eval suite from the
+    <a href="/dashboard/aliases">Aliases tab</a> to populate it.
+  </div>
+</div>
+{% endif %}
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  same data <code>fitt eval alias {{ alias }}</code> CLI surfaces ·
+  <a href="/dashboard/aliases">back to aliases</a>
+</p>
+{% endblock %}

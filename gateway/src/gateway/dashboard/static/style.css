@@ -350,3 +350,76 @@ hr {
   border-top: 1px solid var(--border);
   margin: 16px 0;
 }
+
+/* ------------------------------------------------------ F18: eval verdict */
+
+a.bare {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.bare:hover {
+  text-decoration: none;
+  filter: brightness(1.2);
+}
+
+.verdict {
+  border-left-width: 4px;
+  border-left-style: solid;
+}
+
+.verdict-label {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 4px;
+}
+
+.verdict-reason {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.verdict-recommended { border-left-color: var(--accent); }
+.verdict-recommended .verdict-label { color: var(--accent); }
+
+.verdict-workable { border-left-color: var(--warn); }
+.verdict-workable .verdict-label { color: var(--warn); }
+
+.verdict-risky { border-left-color: var(--error); }
+.verdict-risky .verdict-label { color: var(--error); }
+
+.verdict-not_recommended { border-left-color: var(--error); }
+.verdict-not_recommended .verdict-label { color: var(--error); }
+
+.verdict-incomplete { border-left-color: var(--text-dim); }
+.verdict-incomplete .verdict-label { color: var(--text-dim); }
+
+/* ------------------------------------------------------ F18: eval cases */
+
+.eval-case-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.eval-case-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.eval-case-detail {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.eval-reply-preview {
+  margin-top: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
