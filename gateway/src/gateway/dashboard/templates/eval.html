@@ -1,15 +1,12 @@
-{# Per-alias eval report (F18).
+{# Per-alias eval report (F18 + coding suite).
 
-   Renders the markdown report file written by
-   :func:`gateway.alias_eval.write_report` as a structured
-   page: verdict banner at the top (so the operator gets the
-   bind-or-not answer without reading every case), header
-   summary, and per-case detail with status, latency, and the
-   reply preview when a case failed.
+   Renders both the default suite report and the coding-agent
+   suite report when each exists. Each suite gets its own
+   verdict banner, header summary, and per-case detail.
 
-   The verdict logic lives in :func:`_eval_verdict`; this
-   template just renders what came back. Tones map to CSS
-   badge classes — see style.css.
+   The "Run again" button at the top of each suite POSTs to
+   /dashboard/actions/run-eval with the suite name so the
+   operator can re-run without dropping to the CLI.
 #}
 {% extends "base.html" %}
 {% set nav_active = "aliases" %}
@@ -24,48 +21,78 @@
 </p>
 {% endif %}
 
-<div class="card verdict verdict-{{ verdict.tone }}">
-  <div class="verdict-label">{{ verdict.label }}</div>
-  <p class="verdict-reason">{{ verdict.reason }}</p>
+<p class="tagline">
+  Two suites measure different things. The <strong>default</strong>
+  suite tests tool-call discipline against FITT's own tool shape;
+  the <strong>coding agent</strong> suite tests it under a
+  realistic coding-agent system prompt + read/edit/glob/shell
+  tools, useful for picking models for router-mode
+  (<code>X-FITT-Client: coding-agent</code>) work with OpenCode,
+  Cursor, Claude Code, etc.
+</p>
+
+{% for suite in suites %}
+<div class="card">
+  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+    <h3 style="margin: 0; flex-grow: 1;">{{ suite.label }}
+      <span class="dim mono" style="font-size: 11px;">({{ suite.name }})</span>
+    </h3>
+    {% if alias_known %}
+    <form method="post" action="/dashboard/actions/run-eval" style="display: inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="alias" value="{{ alias }}">
+      <input type="hidden" name="suite" value="{{ suite.name }}">
+      <button type="submit" style="font-size: 11px; padding: 2px 8px;"
+              title="Re-run this suite (~30-60s)">
+        run {{ suite.name }} eval
+      </button>
+    </form>
+    {% endif %}
+  </div>
 </div>
 
-{% if report %}
+<div class="card verdict verdict-{{ suite.verdict.tone }}">
+  <div class="verdict-label">{{ suite.verdict.label }}</div>
+  <p class="verdict-reason">{{ suite.verdict.reason }}</p>
+</div>
+
+{% if suite.report %}
 <div class="card">
   <table>
     <tbody>
       <tr>
         <th class="right">Result</th>
-        <td><strong>{{ report.passed }}/{{ report.total }} passed</strong>
-          ({{ (report.pass_rate * 100)|round|int }}%)</td>
+        <td><strong>{{ suite.report.passed }}/{{ suite.report.total }} passed</strong>
+          ({{ (suite.report.pass_rate * 100)|round|int }}%)</td>
       </tr>
-      {% if report.model_id %}
+      {% if suite.report.model_id %}
       <tr>
         <th class="right">Model</th>
-        <td class="mono">{{ report.model_id }}</td>
+        <td class="mono">{{ suite.report.model_id }}</td>
       </tr>
       {% endif %}
-      {% if report.finished_iso %}
+      {% if suite.report.finished_iso %}
       <tr>
         <th class="right">Finished</th>
-        <td class="mono dim">{{ report.finished_iso }}</td>
+        <td class="mono dim">{{ suite.report.finished_iso }}</td>
       </tr>
       {% endif %}
-      {% if report.duration_ms is not none %}
+      {% if suite.report.duration_ms is not none %}
       <tr>
         <th class="right">Duration</th>
-        <td class="mono dim">{{ report.duration_ms }} ms</td>
+        <td class="mono dim">{{ suite.report.duration_ms }} ms</td>
       </tr>
       {% endif %}
       <tr>
         <th class="right">Report file</th>
-        <td class="mono dim">{{ report_path_human }}</td>
+        <td class="mono dim">{{ suite.report_path_human }}</td>
       </tr>
     </tbody>
   </table>
 </div>
 
-<h3>Cases</h3>
-{% for case in report.cases %}
+<h4 style="margin-top: 16px;">Cases</h4>
+{% for case in suite.report.cases %}
 <div class="card eval-case eval-case-{{ case.status }}">
   <div class="eval-case-header">
     {% if case.status == "pass" %}
@@ -104,15 +131,17 @@
 {% else %}
 <div class="card">
   <div class="empty">
-    No eval report on disk for <code>{{ alias }}</code>.
-    Run the eval suite from the
-    <a href="/dashboard/aliases">Aliases tab</a> to populate it.
+    No <code>{{ suite.name }}</code> eval report on disk.
+    Click "run {{ suite.name }} eval" above to populate it.
   </div>
 </div>
 {% endif %}
 
+<hr>
+{% endfor %}
+
 <p class="dim" style="font-size: 11px; margin-top: 16px;">
-  same data <code>fitt eval alias {{ alias }}</code> CLI surfaces ·
+  same data <code>fitt eval alias {{ alias }} --suite &lt;name&gt;</code> CLI surfaces ·
   <a href="/dashboard/aliases">back to aliases</a>
 </p>
 {% endblock %}

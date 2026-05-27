@@ -1516,21 +1516,36 @@ def eval_group() -> None:
         "pre-swap gates."
     ),
 )
+@click.option(
+    "--suite",
+    type=click.Choice(["default", "coding"]),
+    default="default",
+    help=(
+        "Which suite to run. ``default`` (FITT's own tool "
+        "shape) is the conservative bind check. ``coding`` "
+        "tests the binding under a coding-agent system "
+        "prompt + read/edit/glob/shell tools, useful for "
+        "router-mode (X-FITT-Client: coding-agent) work."
+    ),
+)
 @click.option("--config-file", type=click.Path(path_type=Path), default=None)
 def eval_alias_cmd(
     alias: str,
     timeout_s: float,
     min_pass_rate: float | None,
+    suite: str,
     config_file: Path | None,
 ) -> None:
-    """Run the default eval suite against one alias.
+    """Run an eval suite against one alias.
 
     Writes a markdown report to ``$FITT_HOME/eval/<alias>-<ts>.md``
-    and a rolling ``<alias>-latest.md`` that gets overwritten on
-    every run. Prints a one-line summary to stdout."""
+    (or ``<alias>-coding-<ts>.md`` for the coding suite) and a
+    rolling ``-latest.md`` that gets overwritten on every run.
+    Prints a one-line summary to stdout."""
     import asyncio
 
     from .alias_eval import run_eval_suite, write_report
+    from .alias_eval_coding import default_coding_cases
     from .config import fitt_home
     from .router import AliasRouter
 
@@ -1544,15 +1559,16 @@ def eval_alias_cmd(
         )
         sys.exit(2)
 
+    cases = default_coding_cases() if suite == "coding" else None
     router = AliasRouter(cfg)
-    report = asyncio.run(run_eval_suite(alias, router, timeout_s=timeout_s))
-    ts_path, latest_path = write_report(report, fitt_home())
+    report = asyncio.run(run_eval_suite(alias, router, cases=cases, timeout_s=timeout_s))
+    ts_path, latest_path = write_report(report, fitt_home(), suite=suite)
 
     colour = "green" if report.passed == report.total else "yellow"
     _console.print(
         f"[{colour}]{report.passed}/{report.total} passed[/{colour}] "
         f"({report.pass_rate * 100:.0f}%) — "
-        f"model=`{report.model_id or 'unknown'}`, "
+        f"suite={suite}, model=`{report.model_id or 'unknown'}`, "
         f"latest={latest_path}, audit={ts_path}"
     )
 
@@ -1573,9 +1589,15 @@ def eval_alias_cmd(
     default=15.0,
     help="Per-case dispatch timeout in seconds (default: 15).",
 )
+@click.option(
+    "--suite",
+    type=click.Choice(["default", "coding"]),
+    default="default",
+    help="Which suite to run for every alias (default or coding).",
+)
 @click.option("--config-file", type=click.Path(path_type=Path), default=None)
-def eval_all_cmd(timeout_s: float, config_file: Path | None) -> None:
-    """Run the default suite against every configured alias.
+def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None:
+    """Run a suite against every configured alias.
 
     Sequential across aliases (same rate-limit posture as the
     per-alias run). One summary line per alias; reports land
@@ -1584,6 +1606,7 @@ def eval_all_cmd(timeout_s: float, config_file: Path | None) -> None:
     import asyncio
 
     from .alias_eval import run_eval_suite, write_report
+    from .alias_eval_coding import default_coding_cases
     from .config import fitt_home
     from .router import AliasRouter
 
@@ -1594,18 +1617,20 @@ def eval_all_cmd(timeout_s: float, config_file: Path | None) -> None:
     router = AliasRouter(cfg)
     any_failed = False
 
+    cases = default_coding_cases() if suite == "coding" else None
+
     async def _run_all() -> None:
         nonlocal any_failed
         for alias in cfg.alias_names():
-            report = await run_eval_suite(alias, router, timeout_s=timeout_s)
-            write_report(report, fitt_home())
+            report = await run_eval_suite(alias, router, cases=cases, timeout_s=timeout_s)
+            write_report(report, fitt_home(), suite=suite)
             colour = "green" if report.passed == report.total else "yellow"
             if report.passed != report.total:
                 any_failed = True
             _console.print(
                 f"[{colour}]{alias}: {report.passed}/{report.total} "
                 f"passed[/{colour}] ({report.pass_rate * 100:.0f}%) — "
-                f"model=`{report.model_id or 'unknown'}`"
+                f"suite={suite}, model=`{report.model_id or 'unknown'}`"
             )
 
     asyncio.run(_run_all())

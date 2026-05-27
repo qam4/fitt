@@ -469,6 +469,47 @@ def test_write_report_creates_both_files(tmp_path: Path) -> None:
     assert ts_path.read_text(encoding="utf-8") == latest_path.read_text(encoding="utf-8")
 
 
+def test_write_report_namespaces_coding_suite(tmp_path: Path) -> None:
+    """The coding suite's reports get a ``-coding-`` infix so
+    they don't overwrite the default suite's rolling file.
+    Each suite's latest is independently overwritten on
+    re-run, but the two suites coexist."""
+    home = tmp_path / "home"
+    report = EvalReport(
+        alias="fitt-smart",
+        model_id="m",
+        started_at=datetime(2026, 5, 11, 12, 0, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 5, 11, 12, 0, 10, tzinfo=UTC),
+        cases=[CaseResult(case_name="c", status="pass", detail="", latency_ms=1)],
+    )
+    ts_path, latest_path = write_report(report, home, suite="coding")
+
+    assert latest_path.name == "fitt-smart-coding-latest.md"
+    assert "2026-05-11T12-00-10" in ts_path.name
+    assert "fitt-smart-coding-2026-05-11T12-00-10.md" == ts_path.name
+    # Default rolling path is NOT touched by a coding-suite write.
+    default_rolling = home / "eval" / "fitt-smart-latest.md"
+    assert not default_rolling.exists()
+
+
+def test_write_report_default_suite_keeps_legacy_path(tmp_path: Path) -> None:
+    """``suite='default'`` (the implicit value) writes to the
+    pre-existing ``<alias>-latest.md`` path so existing
+    operator-saved reports keep their names."""
+    home = tmp_path / "home"
+    report = EvalReport(
+        alias="x",
+        model_id="m",
+        started_at=datetime(2026, 5, 11, 12, 0, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 5, 11, 12, 0, 10, tzinfo=UTC),
+        cases=[CaseResult(case_name="c", status="pass", detail="", latency_ms=1)],
+    )
+    _, latest_default = write_report(report, home, suite="default")
+    _, latest_implicit = write_report(report, home)
+    assert latest_default == latest_implicit
+    assert latest_default.name == "x-latest.md"
+
+
 def test_rolling_latest_file_is_overwritten_on_rerun(tmp_path: Path) -> None:
     """Re-running against the same alias overwrites the
     ``-latest.md`` file; the timestamped file is preserved as
@@ -524,6 +565,42 @@ def test_default_cases_covers_the_core_shapes() -> None:
     assert "read_file_basic" in names
     assert "no_tool_small_talk" in names
     assert "tool_disambiguation" in names
+
+
+def test_default_coding_cases_covers_the_router_mode_shapes() -> None:
+    """The coding suite mirrors the default suite's contract
+    but exercises the tool surface a coding agent (OpenCode,
+    Cursor, Claude Code) would offer."""
+    from gateway.alias_eval_coding import default_coding_cases
+
+    cases = default_coding_cases()
+    assert 3 <= len(cases) <= 10
+    names = {c.name for c in cases}
+    assert "code_read_basic" in names
+    assert "code_edit_basic" in names
+    assert "code_glob_search" in names
+    assert "code_shell_basic" in names
+    assert "code_no_tool_small_talk" in names
+
+
+def test_default_coding_cases_inject_realistic_system_prompt() -> None:
+    """The coding suite pads each prompt with ~2K tokens of
+    coding-agent system boilerplate so the eval reflects what
+    real router-mode requests look like at the wire. Catches
+    bindings that pass the bare-prompt default suite but
+    narrate under realistic prompt size (the granite shape)."""
+    from gateway.alias_eval_coding import default_coding_cases
+
+    cases = default_coding_cases()
+    for c in cases:
+        # Each prompt carries the system-prompt block.
+        # 1500-char threshold is generous; the real prompt is
+        # roughly 4-5K chars (~1-1.5K tokens) before the user
+        # message gets appended.
+        assert len(c.prompt) > 1500, (
+            f"case {c.name} prompt is {len(c.prompt)} chars; "
+            "expected the realistic system-prompt block to ride along"
+        )
 
 
 def test_default_eval_dir(tmp_path: Path) -> None:

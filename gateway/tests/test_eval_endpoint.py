@@ -180,5 +180,38 @@ def test_eval_handles_runner_exception_returns_500(client: TestClient) -> None:
     assert detail["error"]["type"] == "eval_infrastructure_failure"
 
 
+def test_eval_accepts_coding_suite_param(client: TestClient) -> None:
+    """``?suite=coding`` runs the coding-agent suite. Verify
+    by asserting the cases list passed to the runner is the
+    coding-suite list, not the default list."""
+    from gateway.alias_eval_coding import default_coding_cases
+
+    coding_case_names = {c.name for c in default_coding_cases()}
+    captured: dict[str, Any] = {}
+    report = _make_report("fitt-default")
+
+    async def _stub(*args: Any, **kwargs: Any) -> EvalReport:
+        captured["cases"] = kwargs.get("cases", [])
+        return report
+
+    with patch("gateway.eval_endpoint.run_eval_suite", side_effect=_stub):
+        r = client.post("/v1/eval/fitt-default?suite=coding", headers=_auth())
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["suite"] == "coding"
+    assert {c.name for c in captured["cases"]} == coding_case_names
+
+
+def test_eval_rejects_unknown_suite(client: TestClient) -> None:
+    r = client.post("/v1/eval/fitt-default?suite=nonexistent", headers=_auth())
+    assert r.status_code == 400
+    body = r.json()
+    detail = body.get("detail")
+    assert isinstance(detail, dict)
+    assert detail["error"]["type"] == "unknown_suite"
+    assert "default" in detail["error"]["available"]
+    assert "coding" in detail["error"]["available"]
+
+
 # --------------------------------------------------------------- helpers
 # (None needed; tests use inline async stubs as side_effect.)

@@ -559,9 +559,24 @@ def default_eval_dir(fitt_home: Path) -> Path:
     return fitt_home / "eval"
 
 
-def write_report(report: EvalReport, fitt_home: Path) -> tuple[Path, Path]:
+def write_report(
+    report: EvalReport, fitt_home: Path, *, suite: str = "default"
+) -> tuple[Path, Path]:
     """Persist ``report`` to both the timestamped audit-trail
     file and the rolling per-alias latest-report file.
+
+    ``suite`` namespaces the file paths so the default suite
+    and the coding-agent suite (and any future per-workload
+    suite) don't overwrite each other:
+
+    * ``suite="default"`` → ``<alias>-latest.md`` and
+      ``<alias>-<timestamp>.md`` (the existing paths,
+      preserved so existing operator-saved reports keep
+      their names).
+    * ``suite="coding"`` → ``<alias>-coding-latest.md``
+      and ``<alias>-coding-<timestamp>.md``.
+    * Any other suite name slugs into ``<alias>-<suite>-...``
+      with a forward-compatible naming.
 
     Returns the ``(timestamped_path, rolling_path)`` pair so
     the CLI can tell the operator exactly where the output
@@ -570,8 +585,9 @@ def write_report(report: EvalReport, fitt_home: Path) -> tuple[Path, Path]:
     eval_dir.mkdir(parents=True, exist_ok=True)
     body = render_report_markdown(report)
     ts = report.finished_at.strftime("%Y-%m-%dT%H-%M-%S")
-    timestamped = eval_dir / f"{report.alias}-{ts}.md"
-    rolling = eval_dir / f"{report.alias}-latest.md"
+    suffix = "" if suite == "default" else f"-{suite}"
+    timestamped = eval_dir / f"{report.alias}{suffix}-{ts}.md"
+    rolling = eval_dir / f"{report.alias}{suffix}-latest.md"
     timestamped.write_text(body, encoding="utf-8")
     rolling.write_text(body, encoding="utf-8")
     return timestamped, rolling

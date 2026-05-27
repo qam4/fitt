@@ -554,7 +554,9 @@ def test_eval_view_renders_when_no_report(tmp_path: Path) -> None:
     r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
     assert r.status_code == 200
     body = r.text
-    assert "No eval report on disk" in body
+    # New template says "No <code>{suite.name}</code> eval report on disk"
+    # for each missing suite (default + coding both empty here).
+    assert "eval report on disk" in body
     assert "verdict-incomplete" in body
 
 
@@ -575,6 +577,209 @@ def test_eval_view_for_unknown_alias_renders_with_note(tmp_path: Path) -> None:
 def test_eval_view_redirects_without_auth(client: TestClient) -> None:
     r = client.get("/dashboard/eval/fitt-default")
     assert r.status_code == 302
+
+
+# ------------------------------------------------ coding-agent eval suite
+
+
+def _write_eval_report_with_suite(
+    tmp_path: Path,
+    alias: str,
+    *,
+    suite: str,
+    cases: list[dict[str, Any]],
+    model: str = "qwen2.5-coder:14b",
+) -> Path:
+    """Write a synthetic eval report for the given suite.
+
+    Mirrors :func:`_write_eval_report` but lets the test pin
+    the suite-specific filename (``<alias>-coding-latest.md``
+    vs ``<alias>-latest.md``)."""
+    from gateway.alias_eval import default_eval_dir
+    from gateway.config import fitt_home
+
+    eval_dir = default_eval_dir(fitt_home())
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    passed = sum(1 for c in cases if c["status"] == "pass")
+    total = len(cases)
+    pct = round(passed / total * 100) if total else 0
+    lines = [
+        f"# Eval report — `{alias}`",
+        "",
+        f"- Model: `{model}`",
+        "- Started: 2026-05-22T10:00:00",
+        "- Finished: 2026-05-22T10:00:30",
+        "- Duration: 30000 ms",
+        f"- Result: **{passed}/{total} passed** ({pct}%)",
+        "",
+        "## Cases",
+        "",
+    ]
+    for c in cases:
+        icon = "✅" if c["status"] == "pass" else "❌"
+        lines.append(f"### {icon} `{c['name']}` — {c['status']}")
+        lines.append("")
+        lines.append(f"- Latency: {c.get('latency_ms', 0)} ms")
+        if c.get("tool_called"):
+            lines.append(f"- Tool called: `{c['tool_called']}`")
+        if c.get("finish_reason"):
+            lines.append(f"- Finish reason: `{c['finish_reason']}`")
+        lines.append(f"- Detail: {c.get('detail', '(no detail)')}")
+        lines.append("")
+
+    suffix = "" if suite == "default" else f"-{suite}"
+    path = eval_dir / f"{alias}{suffix}-latest.md"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def test_eval_view_renders_both_suites_when_present(tmp_path: Path) -> None:
+    """When both default and coding reports exist, the page
+    renders both with their own verdict banners."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _write_eval_report_with_suite(
+        tmp_path,
+        "fitt-default",
+        suite="default",
+        cases=[_PASS_CASE, _PASS_CASE_2, _PASS_CASE_3, _PASS_CASE_4, _PASS_CASE_5],
+    )
+    coding_cases = [
+        {
+            "name": "code_read_basic",
+            "status": "pass",
+            "latency_ms": 600,
+            "tool_called": "read_file",
+        },
+        {
+            "name": "code_edit_basic",
+            "status": "pass",
+            "latency_ms": 700,
+            "tool_called": "edit_file",
+        },
+        {
+            "name": "code_glob_search",
+            "status": "pass",
+            "latency_ms": 500,
+            "tool_called": "glob_search",
+        },
+        {"name": "code_shell_basic", "status": "pass", "latency_ms": 800, "tool_called": "shell"},
+        {
+            "name": "code_no_tool_small_talk",
+            "status": "pass",
+            "latency_ms": 300,
+            "detail": "no tool call",
+        },
+    ]
+    _write_eval_report_with_suite(tmp_path, "fitt-default", suite="coding", cases=coding_cases)
+
+    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # Both suite labels render.
+    assert "FITT default" in body
+    assert "Coding agent" in body
+    # Both case names from each suite render.
+    assert "read_file_basic" in body
+    assert "code_read_basic" in body
+    # Two "Recommended" verdicts (one per suite).
+    assert body.count("Recommended") >= 2
+
+
+def test_eval_view_coding_suite_alone_renders_with_default_empty(tmp_path: Path) -> None:
+    """If only the coding report exists, the page shows it
+    plus a 'no eval report on disk' empty state for default."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    coding_cases = [
+        {
+            "name": "code_read_basic",
+            "status": "pass",
+            "latency_ms": 600,
+            "tool_called": "read_file",
+        },
+        {
+            "name": "code_edit_basic",
+            "status": "narrated",
+            "latency_ms": 1500,
+            "detail": "model replied with 380 chars instead of emitting tool_calls",
+            "finish_reason": "stop",
+        },
+        {
+            "name": "code_glob_search",
+            "status": "pass",
+            "latency_ms": 500,
+            "tool_called": "glob_search",
+        },
+        {
+            "name": "code_shell_basic",
+            "status": "narrated",
+            "latency_ms": 1200,
+            "detail": "model replied with 450 chars instead of emitting tool_calls",
+            "finish_reason": "stop",
+        },
+        {"name": "code_no_tool_small_talk", "status": "pass", "latency_ms": 300},
+    ]
+    _write_eval_report_with_suite(tmp_path, "fitt-default", suite="coding", cases=coding_cases)
+
+    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # Default suite has no report → empty state.
+    assert (
+        "No <code>default</code> eval report on disk" in body
+        or "<code>default</code> eval report on disk" in body
+    )
+    # Coding suite renders with risky verdict (narrated cases).
+    assert "Risky" in body
+    assert "code_shell_basic" in body
+
+
+def test_run_eval_action_accepts_suite_form_field(tmp_path: Path) -> None:
+    """The dashboard's run-eval action POSTs with a 'suite'
+    form field. Confirm the route accepts it without error."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    r = tc.get("/dashboard/aliases")
+    csrf = _csrf_from(r.text)
+
+    # Coding suite form post — the action will fail at dispatch
+    # time (no live model) but the form field plumbing must work.
+    r = tc.post(
+        "/dashboard/actions/run-eval",
+        data={
+            "csrf_token": csrf,
+            "alias": "fitt-default",
+            "suite": "coding",
+        },
+    )
+    assert r.status_code == 303
+    assert "/dashboard/aliases" in r.headers["location"]
+
+
+def test_aliases_panel_includes_suite_picker(tmp_path: Path) -> None:
+    """The per-row 'run eval' button now has a suite dropdown
+    so the operator can pick default vs coding without leaving
+    the aliases page."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert 'name="suite"' in body
+    assert '<option value="default"' in body
+    assert '<option value="coding"' in body
 
 
 # --------------------------------------------------------------- turns view

@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from .alias_eval import (
     EvalCase,
@@ -46,6 +46,7 @@ from .alias_eval import (
     run_eval_suite,
     write_report,
 )
+from .alias_eval_coding import default_coding_cases
 from .config import fitt_home
 from .errors import UnknownAlias
 from .router import AliasRouter
@@ -90,14 +91,23 @@ def _summarise_report(report: EvalReport) -> dict[str, Any]:
 async def run_eval(
     alias: str,
     request: Request,
+    suite: str = Query(
+        "default",
+        description=(
+            "Which suite to run. 'default' is FITT's own tool-shape "
+            "suite; 'coding' tests the binding under a coding-agent "
+            "system prompt + read/edit/glob/shell tools."
+        ),
+    ),
 ) -> dict[str, Any]:
-    """Run the curated eval suite against ``alias`` and return
+    """Run the requested eval suite against ``alias`` and return
     a JSON summary. Persists the report under
-    ``$FITT_HOME/eval/`` (timestamped + rolling per-alias).
+    ``$FITT_HOME/eval/`` (timestamped + rolling per-alias,
+    namespaced by suite).
 
-    Returns ``404`` for an unknown alias. Any other failure is
-    captured in per-case ``transport_error`` results — the
-    suite never throws."""
+    Returns ``404`` for an unknown alias, ``400`` for an unknown
+    suite. Any other failure is captured in per-case
+    ``transport_error`` results — the suite never throws."""
     config = request.app.state.config
 
     if alias not in config.alias_names():
@@ -118,9 +128,24 @@ async def run_eval(
     # interfering with the eval's request shape.
     eval_router = AliasRouter(config)
 
-    # Use the default suite. Future extensions (operator-defined
-    # custom cases, --realistic mode) hook in here.
-    cases: list[EvalCase] = default_cases()
+    # Pick the suite. Unknown names get a 400 — operator typo
+    # is the most common reason this fails, and a clear error
+    # is better than silently running the default.
+    if suite == "default":
+        cases: list[EvalCase] = default_cases()
+    elif suite == "coding":
+        cases = default_coding_cases()
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "type": "unknown_suite",
+                    "message": f"suite {suite!r} not recognized",
+                    "available": ["default", "coding"],
+                }
+            },
+        )
     try:
         report = await run_eval_suite(alias, eval_router, cases=cases)
     except UnknownAlias as exc:
@@ -154,14 +179,15 @@ async def run_eval(
     # ``/v1/aliases``'s last_eval lookup picks it up on the
     # next call.
     try:
-        write_report(report, fitt_home())
+        write_report(report, fitt_home(), suite=suite)
     except OSError as exc:
         _log.warning(
             "eval.write_report_failed",
-            extra={"alias": alias, "error": f"{type(exc).__name__}: {exc}"},
+            extra={"alias": alias, "suite": suite, "error": f"{type(exc).__name__}: {exc}"},
         )
 
     summary = _summarise_report(report)
+    summary["suite"] = suite
     # Include the rendered markdown so a dashboard or CLI can
     # show the human-readable form without re-rendering.
     summary["markdown"] = render_report_markdown(report)

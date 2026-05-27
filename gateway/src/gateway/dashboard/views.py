@@ -641,31 +641,55 @@ def _build_eval_context(request: Request, *, alias: str) -> dict[str, Any]:
     """Build the per-alias eval detail page context.
 
     Reads the rolling latest report at
-    ``$FITT_HOME/eval/<alias>-latest.md`` and parses it via
-    :func:`_parse_eval_report_full`. Adds a verdict banner
-    computed from the parsed cases so the operator gets a
-    bind-or-not signal without having to read every case.
+    ``$FITT_HOME/eval/<alias>-latest.md`` (default suite) and
+    ``$FITT_HOME/eval/<alias>-coding-latest.md`` (coding
+    suite) and parses each via :func:`_parse_eval_report_full`.
+    Each suite gets its own verdict so the operator gets
+    bind-or-not signals per workload without having to read
+    every case.
 
     Unknown aliases (typo in URL, or alias renamed since the
     report was written) still render — we don't gate on
     "alias is in config" because the report file itself is
     what matters. The page shows "No eval found" in the
-    empty case."""
+    empty case.
+
+    The CSRF token rides for the per-suite "Run again"
+    buttons that POST to ``/dashboard/actions/run-eval``.
+    """
+    from .edit import issue_csrf as _issue_csrf
+
     home = _fitt_home()
     eval_dir = default_eval_dir(home)
-    report_path = eval_dir / f"{alias}-latest.md"
-    parsed = _parse_eval_report_full(report_path)
-    verdict = _eval_verdict(parsed)
-
     config = request.app.state.config
     alias_known = alias in config.alias_names()
+
+    suites: list[dict[str, Any]] = []
+    for suite_name, suffix, label in (
+        ("default", "", "FITT default"),
+        ("coding", "-coding", "Coding agent (router mode)"),
+    ):
+        report_path = eval_dir / f"{alias}{suffix}-latest.md"
+        parsed = _parse_eval_report_full(report_path)
+        verdict = _eval_verdict(parsed)
+        suites.append(
+            {
+                "name": suite_name,
+                "label": label,
+                "report": parsed,
+                "verdict": verdict,
+                "report_path_human": str(report_path),
+            }
+        )
+
+    auth = request.app.state.dashboard_auth
+    csrf_token = _issue_csrf(request, key=auth.key())
 
     return {
         "alias": alias,
         "alias_known": alias_known,
-        "report": parsed,
-        "verdict": verdict,
-        "report_path_human": str(report_path),
+        "suites": suites,
+        "csrf_token": csrf_token,
         "client": getattr(request.state, "client", "webui"),
     }
 
@@ -1693,9 +1717,11 @@ async def _action_pruner_tick(request: Request, *, which: str) -> tuple[bool, st
     return True, f"{label} pruner removed {removed} item(s)"
 
 
-async def _action_run_eval(request: Request, *, alias: str) -> tuple[bool, str]:
+async def _action_run_eval(
+    request: Request, *, alias: str, suite: str = "default"
+) -> tuple[bool, str]:
     """Run the eval suite for one alias — same code path
-    POST /v1/eval/<alias> uses."""
+    POST /v1/eval/<alias>?suite=<...> uses."""
     if not alias:
         return False, "Missing alias"
     config = request.app.state.config
@@ -1706,10 +1732,17 @@ async def _action_run_eval(request: Request, *, alias: str) -> tuple[bool, str]:
         run_eval_suite,
         write_report,
     )
+    from ..alias_eval_coding import default_coding_cases
     from ..router import AliasRouter
 
+    if suite == "default":
+        cases = default_cases()
+    elif suite == "coding":
+        cases = default_coding_cases()
+    else:
+        return False, f"Unknown suite {suite!r}"
+
     eval_router = AliasRouter(config)
-    cases = default_cases()
     try:
         report = await run_eval_suite(alias, eval_router, cases=cases)
     except Exception as exc:
@@ -1718,13 +1751,15 @@ async def _action_run_eval(request: Request, *, alias: str) -> tuple[bool, str]:
     try:
         from ..config import fitt_home as _fh
 
-        write_report(report, _fh())
+        write_report(report, _fh(), suite=suite)
     except Exception:
         # Persistence failure shouldn't fail the action;
         # the report's already in memory and the audit
         # trail captures the run.
         pass
-    return True, (f"Eval ran — {report.passed}/{report.total} passed ({report.pass_rate:.0%})")
+    return True, (
+        f"Eval ({suite}) ran — {report.passed}/{report.total} passed ({report.pass_rate:.0%})"
+    )
 
 
 def _action_redirect(target: str, message: str, *, color: str) -> Response:
@@ -3443,15 +3478,17 @@ def build_views_router() -> APIRouter:
         request: Request,
         csrf_token: str = Form(""),
         alias: str = Form(""),
+        suite: str = Form("default"),
     ) -> Response:
         cleaned = alias.strip()
+        cleaned_suite = suite.strip() or "default"
         return await _run_typed_action(
             request,
             csrf_token=csrf_token,
             action_name="run_eval",
-            action_args={"alias": cleaned},
+            action_args={"alias": cleaned, "suite": cleaned_suite},
             redirect_target="/dashboard/aliases",
-            run=lambda: _action_run_eval(request, alias=cleaned),
+            run=lambda: _action_run_eval(request, alias=cleaned, suite=cleaned_suite),
         )
 
     return router
