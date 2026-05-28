@@ -223,6 +223,73 @@ async def test_tool_call_executed_rewrites_planned_line() -> None:
     assert edits[0].message_id == r.state.stream_message_id
 
 
+async def test_unknown_tool_renders_backticks_as_code_tags() -> None:
+    """Slice 7.4 follow-up: tools not in ``_KNOWN_TOOL_VERBS``
+    fall back to ``"Running `<name>`"`` / ``"Ran `<name>`"``.
+    Those backticks must render as Telegram <code> tags, not
+    appear literally on phone."""
+    bot = _FakeBot()
+    r = _make_renderer(bot, _Clock())
+    await r.handle_event(
+        {
+            "kind": "tool_call_planned",
+            "meta": {
+                "tool_name": "some_new_unregistered_tool",
+                "args": {},
+                "call_id": "c1",
+            },
+        }
+    )
+    planned_text = bot.sends()[-1].text
+    # Pre-fix this read 'Running `some_new_unregistered_tool`'.
+    assert "<code>some_new_unregistered_tool</code>" in planned_text
+    assert "`" not in planned_text  # no literal backticks
+
+
+async def test_known_tool_with_path_arg_renders_code_for_path() -> None:
+    """``_format_tool_action`` adds a primary-arg hint like
+    ``"Reading `README.md`"`` for tools with a ``path`` arg.
+    The path's backticks should render as ``<code>``."""
+    bot = _FakeBot()
+    r = _make_renderer(bot, _Clock())
+    await r.handle_event(
+        {
+            "kind": "tool_call_planned",
+            "meta": {
+                "tool_name": "read_file",
+                "args": {"path": "README.md"},
+                "call_id": "c1",
+            },
+        }
+    )
+    planned_text = bot.sends()[-1].text
+    assert "<code>README.md</code>" in planned_text
+    assert "`README.md`" not in planned_text
+
+
+async def test_web_search_has_dedicated_verb_pair() -> None:
+    """``web_search`` is a registered tool now; it should get
+    a clean 'Searching the web' / 'Searched the web' verb,
+    not the 'Running `web_search`' fallback."""
+    bot = _FakeBot()
+    r = _make_renderer(bot, _Clock())
+    await r.handle_event(
+        {
+            "kind": "tool_call_planned",
+            "meta": {
+                "tool_name": "web_search",
+                "args": {"query": "latest python release"},
+                "call_id": "c1",
+            },
+        }
+    )
+    planned_text = bot.sends()[-1].text
+    assert "Searching the web" in planned_text
+    # Fallback verb is gone.
+    assert "Running" not in planned_text
+    assert "<code>web_search</code>" not in planned_text
+
+
 async def test_tool_call_executed_failure_uses_gerund_not_past_tense() -> None:
     """A failed tool call should render with the gerund verb
     ("Reading"/"Editing"/"Writing"), not past tense ("Read"/

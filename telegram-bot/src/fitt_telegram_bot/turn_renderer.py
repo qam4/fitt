@@ -499,13 +499,18 @@ class TurnRenderer:
 
         Phase 7 Slice 7.4: bubble is sent with
         ``parse_mode="HTML"``. Bot-authored task lines (the
-        emoji-prefixed "🔵 Reading X…" entries) are escaped
-        for HTML so any literal ``<``/``>``/``&`` characters
-        embedded in tool args don't break the parser. The
+        emoji-prefixed "🔵 Reading X…" entries) carry markdown
+        in their primary-arg hint (e.g. ``"Reading `README.md`"``
+        or ``"Ran `web_search`"`` for unregistered tools), so
+        they go through ``markdown_to_telegram_html`` too —
+        the renderer handles bare ``<``/``>``/``&`` escaping
+        and converts ``\u0060code\u0060`` to ``<code>``. Pre-F18b
+        we ``_html.escape``'d the line, which produced literal
+        backticks in the rendered bubble. The
         LLM-controlled ``reply_text`` is rendered through
-        :func:`markdown_to_telegram_html` so ``**bold**`` /
-        ``[link](url)`` / fenced code render correctly. The
-        truncation marker is bot-authored plain text, escaped."""
+        the same path so ``**bold**`` / ``[link](url)`` /
+        fenced code render correctly. The truncation marker
+        is bot-authored plain text, escaped."""
         import html as _html
 
         from .markdown_render import markdown_to_telegram_html
@@ -513,7 +518,7 @@ class TurnRenderer:
         lines: list[str] = []
         for task in self.state.tool_tasks:
             line = task.final or task.placeholder
-            lines.append(_html.escape(line))
+            lines.append(markdown_to_telegram_html(line))
         if self.state.reply_text:
             if lines:
                 lines.append("")
@@ -599,6 +604,12 @@ _KNOWN_TOOL_VERBS: dict[str, tuple[str, str]] = {
     "cron_remove": ("Removing cron", "Removed cron"),
     "send_message": ("Sending message", "Sent message"),
     "learn_lesson": ("Recording lesson", "Recorded lesson"),
+    "web_search": ("Searching the web", "Searched the web"),
+    "list_capabilities": ("Listing capabilities", "Listed capabilities"),
+    "grep_repo": ("Grepping", "Grepped"),
+    "glob_search": ("Searching files", "Searched files"),
+    "list_directory": ("Listing directory", "Listed directory"),
+    "http_get": ("Fetching", "Fetched"),
 }
 """Human-readable (planning, done) verb pairs for common tool
 names. Falls back to using the tool name itself when

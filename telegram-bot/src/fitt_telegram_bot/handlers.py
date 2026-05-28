@@ -24,6 +24,7 @@ from gateway.sessions import (
 )
 
 from .gateway_client import GatewayClient
+from .markdown_render import markdown_to_telegram_html
 from .prefs import ChatPrefs, PrefsStore
 from .streaming import StreamingEditor
 
@@ -253,7 +254,11 @@ async def _reply_session_list(
         lines.append(f"- {s.id}: {s.name}{marker}")
     lines.append("")
     lines.append("Switch with /session <id>, create with /session new <id>.")
-    await bot.send_message(chat_id=chat_id, text="\n".join(lines))
+    await bot.send_message(
+        chat_id=chat_id,
+        text=markdown_to_telegram_html("\n".join(lines)),
+        parse_mode="HTML",
+    )
 
 
 # ---------- /model ------------------------------------------------
@@ -290,18 +295,22 @@ async def handle_model_command(
             fallback = d.get("fitt_fallback")
             marker = " (current)" if alias_id == current.alias else ""
             if model and backend:
-                line = f"- {alias_id} → {model} ({backend}){marker}"
+                line = f"- {alias_id} → `{model}` ({backend}){marker}"
             else:
                 # Older gateways that don't surface the extensions:
                 # degrade to the alias-only display rather than
                 # erroring out.
                 line = f"- {alias_id}{marker}"
             if fallback:
-                line += f"\n  fallback: {fallback}"
+                line += f"\n  fallback: `{fallback}`"
             lines.append(line)
         lines.append("")
         lines.append("Switch with /model <alias>.")
-        await bot.send_message(chat_id=update.chat_id, text="\n".join(lines))
+        await bot.send_message(
+            chat_id=update.chat_id,
+            text=markdown_to_telegram_html("\n".join(lines)),
+            parse_mode="HTML",
+        )
         return
 
     target = update.command_args[0]

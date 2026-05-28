@@ -21,7 +21,7 @@ from fitt_telegram_bot.prefs import PrefsStore
 
 @dataclass
 class FakeBot:
-    sent: list[tuple[int, str]] = field(default_factory=list)
+    sent: list[tuple[int, str, str | None]] = field(default_factory=list)
     edits: list[tuple[int, int, str]] = field(default_factory=list)
 
     async def send_message(
@@ -31,7 +31,7 @@ class FakeBot:
         text: str,
         parse_mode: str | None = None,
     ):
-        self.sent.append((chat_id, text))
+        self.sent.append((chat_id, text, parse_mode))
         return type("M", (), {"message_id": 1000 + len(self.sent)})()
 
     async def edit_message_text(
@@ -422,9 +422,12 @@ async def test_model_list_shows_concrete_model_and_backend(tmp_path: Path) -> No
         svc,
     )
     text = bot.sent[0][1]
-    assert "fitt-default → granite3.3:8b (ollama)" in text
-    assert "fitt-smart → anthropic/claude-sonnet-4.5 (openrouter)" in text
-    assert "fallback: fitt-default-fallback" in text
+    # Phase 7 Slice 7.4: model + fallback render through the
+    # markdown→HTML renderer, so the model name is wrapped in
+    # ``<code>`` rather than left as bare markdown backticks.
+    assert "fitt-default \u2192 <code>granite3.3:8b</code> (ollama)" in text
+    assert "fitt-smart \u2192 <code>anthropic/claude-sonnet-4.5</code> (openrouter)" in text
+    assert "fallback: <code>fitt-default-fallback</code>" in text
     assert "(current)" in text  # marks current alias
 
 
@@ -448,6 +451,55 @@ async def test_model_list_falls_back_when_extensions_missing(tmp_path: Path) -> 
     assert "fitt-default" in text
     # No "→" because the extensions weren't available.
     assert "→" not in text
+
+
+async def test_model_list_renders_markdown_to_telegram_html(tmp_path: Path) -> None:
+    """Slice 7.4 follow-up: the ``*Aliases:*`` header used to
+    render as literal asterisks on Telegram. Confirm it now
+    converts to ``<i>Aliases:</i>`` and the call uses
+    ``parse_mode="HTML"``."""
+    gw = FakeGateway(
+        deltas=[],
+        aliases=["fitt-default"],
+        details=[
+            {
+                "id": "fitt-default",
+                "object": "model",
+                "fitt_backend": "ollama",
+                "fitt_resolved_model": "granite3.3:8b",
+                "fitt_fallback": None,
+            }
+        ],
+    )
+    svc = _services(tmp_path, gateway=gw)
+    bot = FakeBot()
+    await handlers.handle_model_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="model", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    parse_mode = bot.sent[0][2]
+    assert "<i>Aliases:</i>" in text
+    assert "*Aliases:*" not in text  # raw markdown is not present
+    assert parse_mode == "HTML"
+
+
+async def test_session_list_renders_markdown_to_telegram_html(tmp_path: Path) -> None:
+    """Same fix as the model command's, applied to the session
+    listing."""
+    svc = _services(tmp_path)
+    bot = FakeBot()
+    await handlers.handle_session_command(
+        bot,
+        IncomingUpdate(user_id=42, chat_id=100, command="session", command_args=[]),
+        svc,
+    )
+    text = bot.sent[0][1]
+    parse_mode = bot.sent[0][2]
+    assert "<i>Sessions:</i>" in text
+    assert "*Sessions:*" not in text
+    assert parse_mode == "HTML"
 
 
 async def test_model_switch_confirms_with_concrete_model(tmp_path: Path) -> None:
