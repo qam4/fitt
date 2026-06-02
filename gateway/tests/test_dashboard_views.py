@@ -404,7 +404,7 @@ def test_eval_view_renders_for_known_alias(tmp_path: Path) -> None:
         "fitt-default",
         [_PASS_CASE, _PASS_CASE_2, _PASS_CASE_3, _PASS_CASE_4, _PASS_CASE_5],
     )
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     body = r.text
     assert "fitt-default" in body
@@ -421,7 +421,7 @@ def test_eval_view_recommended_verdict_on_full_pass(tmp_path: Path) -> None:
         "fitt-default",
         [_PASS_CASE, _PASS_CASE_2, _PASS_CASE_3, _PASS_CASE_4, _PASS_CASE_5],
     )
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     assert "Recommended" in r.text
     assert "verdict-recommended" in r.text
@@ -445,7 +445,7 @@ def test_eval_view_workable_when_only_negative_case_fails(tmp_path: Path) -> Non
         _PASS_CASE_5,
     ]
     tc = _build_app_with_eval(tmp_path, "fitt-default", cases)
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     assert "Workable" in r.text
     assert "verdict-workable" in r.text
@@ -470,7 +470,7 @@ def test_eval_view_risky_on_narrated_tool_required_case(tmp_path: Path) -> None:
         _PASS_CASE_5,
     ]
     tc = _build_app_with_eval(tmp_path, "fitt-default", cases)
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     assert "Risky" in r.text
     assert "verdict-risky" in r.text
@@ -498,7 +498,7 @@ def test_eval_view_incomplete_on_dispatch_failure(tmp_path: Path) -> None:
         _PASS_CASE_5,
     ]
     tc = _build_app_with_eval(tmp_path, "fitt-default", cases)
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     assert "Incomplete" in r.text
     assert "verdict-incomplete" in r.text
@@ -533,7 +533,7 @@ def test_eval_view_not_recommended_on_low_pass_rate(tmp_path: Path) -> None:
         },
     ]
     tc = _build_app_with_eval(tmp_path, "fitt-default", cases)
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     # Mixed failures: narrated wins (highest-priority signal),
     # but the verdict points at risky vs not_recommended based
@@ -552,7 +552,7 @@ def test_eval_view_renders_when_no_report(tmp_path: Path) -> None:
     cfg.server.boot_probe_enabled = False
     app = create_app(cfg)
     tc = TestClient(app, follow_redirects=False)
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     body = r.text
     # New template says "No <code>{suite.name}</code> eval report on disk"
@@ -569,7 +569,7 @@ def test_eval_view_for_unknown_alias_renders_with_note(tmp_path: Path) -> None:
         "fitt-deprecated",
         [_PASS_CASE, _PASS_CASE_2, _PASS_CASE_3, _PASS_CASE_4, _PASS_CASE_5],
     )
-    r = tc.get("/dashboard/eval/fitt-deprecated", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-deprecated", headers=_auth())
     assert r.status_code == 200
     assert "fitt-deprecated" in r.text
     assert "isn't in the current" in r.text
@@ -676,7 +676,7 @@ def test_eval_view_renders_both_suites_when_present(tmp_path: Path) -> None:
     ]
     _write_eval_report_with_suite(tmp_path, "fitt-default", suite="coding", cases=coding_cases)
 
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     body = r.text
     # Both suite labels render.
@@ -727,7 +727,7 @@ def test_eval_view_coding_suite_alone_renders_with_default_empty(tmp_path: Path)
     ]
     _write_eval_report_with_suite(tmp_path, "fitt-default", suite="coding", cases=coding_cases)
 
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     body = r.text
     # Default suite has no report → empty state.
@@ -786,14 +786,15 @@ def test_aliases_panel_includes_suite_picker(tmp_path: Path) -> None:
 # ------------------------------------------------ F19/F20: probe detail + re-probe
 
 
-def test_aliases_view_surfaces_probe_transport_error_detail(client: TestClient) -> None:
-    """F19: a transport_error probe shows its detail (the
-    exception class + message) inline so the operator sees
-    *why* without docker compose logs."""
+def test_aliases_view_surfaces_probe_failure_detail(client: TestClient) -> None:
+    """F19: a failed probe shows its detail (the exception class
+    + message) inline so the operator sees *why* without docker
+    compose logs. Phase 7.6: the status is the taxonomy's
+    ``unreachable`` rather than the old flat ``transport_error``."""
     client.app.state.alias_probe_results = {
         "fitt-default": ProbeResult(
             alias="fitt-default",
-            status="transport_error",
+            status="unreachable",
             detail="ConnectionError: All connection attempts failed",
             model_used="qwen3:14b",
         )
@@ -801,7 +802,7 @@ def test_aliases_view_surfaces_probe_transport_error_detail(client: TestClient) 
     r = client.get("/dashboard/aliases", headers=_auth())
     assert r.status_code == 200
     body = r.text
-    assert "transport_error" in body
+    assert "unreachable" in body
     assert "All connection attempts failed" in body
 
 
@@ -879,7 +880,7 @@ def test_eval_view_renders_realistic_suite_block(tmp_path: Path) -> None:
         tmp_path, "fitt-default", suite="realistic", cases=realistic_cases
     )
 
-    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     body = r.text
     assert "Realistic" in body
@@ -901,11 +902,11 @@ def test_reprobe_action_refreshes_results(tmp_path: Path) -> None:
     tc = TestClient(app, follow_redirects=False)
     _login(tc)
 
-    # Seed a stale transport_error so we can prove it clears.
+    # Seed a stale unreachable so we can prove it clears.
     app.state.alias_probe_results = {
         "fitt-default": PR(
             alias="fitt-default",
-            status="transport_error",
+            status="unreachable",
             detail="stale",
         )
     }
@@ -933,6 +934,163 @@ def test_reprobe_action_refreshes_results(tmp_path: Path) -> None:
 def test_reprobe_action_redirects_without_auth(client: TestClient) -> None:
     r = client.post("/dashboard/actions/reprobe-aliases", data={"csrf_token": "x"})
     assert r.status_code in (302, 303)
+
+
+# ----------------------------------------- Phase 7.6: unified per-alias page
+
+
+def test_alias_page_renders_config_and_probe(tmp_path: Path) -> None:
+    """The unified per-alias page shows config (model, backend,
+    endpoint) plus the full probe detail (status, latency,
+    reachability)."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    app.state.alias_probe_results = {
+        "fitt-default": ProbeResult(
+            alias="fitt-default",
+            status="upstream_silent",
+            detail="probe timed out after 10s but endpoint is reachable (42ms ping)",
+            latency_ms=10000,
+            model_used="qwen2.5-coder:14b",
+            reachable=True,
+        )
+    }
+    tc = TestClient(app, follow_redirects=False)
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # Config section.
+    assert "qwen2.5-coder:14b" in body
+    assert "ollama" in body
+    assert "http://laptop.tailnet:11434" in body
+    # Probe section.
+    assert "upstream_silent" in body
+    assert "10000 ms" in body
+    assert "reachable" in body
+
+
+def test_alias_page_solo_endpoint_note(tmp_path: Path) -> None:
+    """fitt-default is the only alias on its Ollama endpoint, so
+    the page says 'Sole alias on this endpoint'."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
+    assert r.status_code == 200
+    assert "Sole alias on this endpoint" in r.text
+
+
+def test_alias_page_shows_shares_with(tmp_path: Path) -> None:
+    """Two aliases on the same Ollama endpoint surface a 'shares
+    with' line — the shared-GPU contention insight."""
+
+    from gateway.config import (
+        AllowedToken,
+        Config,
+        LoggingConfig,
+        MemoryConfig,
+        ModelConfig,
+        Secrets,
+        ServerConfig,
+    )
+
+    fitt_home = tmp_path / "fitt"
+    fitt_home.mkdir(exist_ok=True)
+    cfg = Config(
+        server=ServerConfig(host="127.0.0.1", port=8080),
+        aliases={"fitt-a": "ollama-a", "fitt-b": "ollama-b"},
+        models=[
+            ModelConfig(
+                id="ollama-a",
+                backend="ollama",
+                endpoint="http://laptop:11434",
+                model="qwen3:14b",
+            ),
+            ModelConfig(
+                id="ollama-b",
+                backend="ollama",
+                endpoint="http://laptop:11434",
+                model="hermes3:8b",
+            ),
+        ],
+        logging=LoggingConfig(dir=tmp_path / "logs", retention_days=7),
+        memory=MemoryConfig(
+            enabled=False,
+            identity_dir=fitt_home / "identity",
+            sessions_dir=fitt_home / "sessions",
+        ),
+    )
+    cfg.secrets = Secrets(
+        allowed_tokens=[AllowedToken(name="personal", token=PERSONAL_TOKEN)],
+        api_keys={},
+    )
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    r = tc.get("/dashboard/alias/fitt-a", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "Shares" in body
+    assert "fitt-b" in body
+
+
+def test_eval_view_redirects_to_alias_page(tmp_path: Path) -> None:
+    """The old /dashboard/eval/<alias> URL now redirects to the
+    unified per-alias page (anchored at the eval section) so old
+    links keep working and no eval info is lost."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    assert r.status_code == 307
+    assert r.headers["location"] == "/dashboard/alias/fitt-default#eval"
+
+
+def test_alias_page_has_reprobe_button(tmp_path: Path) -> None:
+    """The page offers a per-alias re-probe button posting to the
+    typed-action route."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
+    assert r.status_code == 200
+    assert "/dashboard/actions/reprobe-alias" in r.text
+
+
+def test_reprobe_alias_action_probes_one(tmp_path: Path) -> None:
+    """The per-alias re-probe action runs probe_alias for one
+    alias, updates app.state, and redirects back to that alias's
+    page."""
+    from unittest.mock import patch
+
+    from gateway.alias_probe import ProbeResult as PR
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    fresh = PR(alias="fitt-default", status="ok", detail="ok now", latency_ms=1200, model_used="m")
+
+    async def _stub(*_a: Any, **_k: Any) -> PR:
+        return fresh
+
+    r = tc.get("/dashboard/alias/fitt-default")
+    csrf = _csrf_from(r.text)
+
+    with patch("gateway.alias_probe.probe_alias", side_effect=_stub):
+        r = tc.post(
+            "/dashboard/actions/reprobe-alias",
+            data={"csrf_token": csrf, "alias": "fitt-default"},
+        )
+    assert r.status_code == 303
+    assert "/dashboard/alias/fitt-default" in r.headers["location"]
+    assert app.state.alias_probe_results["fitt-default"].status == "ok"
 
 
 # --------------------------------------------------------------- turns view

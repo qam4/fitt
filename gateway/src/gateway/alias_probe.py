@@ -429,7 +429,7 @@ async def _classify_timeout(
 # --------------------------------------------------------------- batch
 
 
-def _endpoint_key(model: ModelConfig) -> str:
+def endpoint_key(model: ModelConfig) -> str:
     """Group key for "same backend instance" detection.
 
     Two aliases contend for the same GPU iff they hit the same
@@ -438,7 +438,12 @@ def _endpoint_key(model: ModelConfig) -> str:
     (openrouter, anthropic) have no per-instance endpoint and
     don't contend on local VRAM, so each gets a unique key
     (``backend:model.id``) — they probe concurrently with
-    everything else."""
+    everything else.
+
+    Public because the dashboard's per-alias page reuses it for
+    the "shares this endpoint with X, Y" computation: same key =
+    same backend instance = the shared-GPU insight the operator
+    needs in context."""
     if model.endpoint:
         return f"{model.backend}:{model.endpoint.rstrip('/')}"
     return f"{model.backend}:{model.id}"
@@ -500,7 +505,7 @@ async def probe_all_aliases(
                     )
                 )
                 continue
-        by_endpoint.setdefault(_endpoint_key(primary), []).append(alias)
+        by_endpoint.setdefault(endpoint_key(primary), []).append(alias)
 
     async def _probe_endpoint_group(group: list[str]) -> list[ProbeResult]:
         """Probe one endpoint's aliases one at a time so each

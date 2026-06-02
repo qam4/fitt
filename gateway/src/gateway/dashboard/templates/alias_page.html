@@ -1,0 +1,239 @@
+{# Unified per-alias page (Phase 7.6 Decision 6).
+
+   One destination for "tell me about this binding": config +
+   endpoint + "shares with", the full probe detail (status,
+   latency, reachability verdict, narrated-reply preview), the
+   three eval suites (absorbing the former F18 eval view), the
+   context window, and the 24h dispatch count.
+
+   Action buttons: per-suite "run eval" and a per-alias
+   "re-probe this alias".
+#}
+{% extends "base.html" %}
+{% set nav_active = "aliases" %}
+{% block title %}FITT dashboard — alias: {{ alias }}{% endblock %}
+{% block content %}
+<h2>Alias: <code>{{ alias }}</code></h2>
+{% if not alias_known %}
+<p class="dim">
+  This alias isn't in the current <code>config.yaml</code>.
+  Probe/config detail is unavailable; any eval report below is
+  from a previous binding — useful for history, less useful for
+  a current decision.
+</p>
+{% endif %}
+
+<p class="tagline">
+  Everything about this binding in one place — config, probe
+  health, and the eval suites. <a href="/dashboard/aliases">back to aliases</a>
+</p>
+
+{# ---------------------------------------------------------- config #}
+{% if alias_known %}
+<div class="card">
+  <h3>Config</h3>
+  <table>
+    <tbody>
+      <tr><th class="right">Model</th><td class="mono">{{ model }}</td></tr>
+      <tr><th class="right">Backend</th><td class="mono dim">{{ backend }}</td></tr>
+      {% if fallback %}
+      <tr><th class="right">Fallback</th><td class="mono">{{ fallback }}</td></tr>
+      {% endif %}
+      <tr><th class="right">Endpoint</th><td class="mono">{{ endpoint }}</td></tr>
+      <tr>
+        <th class="right">Context window</th>
+        <td class="mono">{{ context_window_human }}
+          <span class="dim" style="font-size: 11px;">({{ context_source }})</span>
+        </td>
+      </tr>
+      <tr><th class="right">Dispatched 24h</th><td class="mono">{{ dispatched_24h }}</td></tr>
+    </tbody>
+  </table>
+  {% if shares_with %}
+  <p class="dim" style="font-size: 12px; margin-top: 8px;">
+    Shares <code>{{ endpoint }}</code> with
+    {% for other in shares_with %}<a href="/dashboard/alias/{{ other }}"><code>{{ other }}</code></a>{% if not loop.last %}, {% endif %}{% endfor %}.
+    On a single-GPU backend these contend for VRAM — the probe
+    tests them one at a time for this reason.
+  </p>
+  {% else %}
+  <p class="dim" style="font-size: 12px; margin-top: 8px;">
+    Sole alias on this endpoint — no VRAM contention with siblings.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ---------------------------------------------------------- probe #}
+<div class="card">
+  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+    <h3 style="margin: 0; flex-grow: 1;">Probe</h3>
+    {% if alias_known %}
+    <form method="post" action="/dashboard/actions/reprobe-alias" style="display: inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="alias" value="{{ alias }}">
+      <button type="submit" style="font-size: 11px; padding: 2px 8px;"
+              title="Re-run the tool-call probe for just this alias (~5-15s)">
+        re-probe this alias
+      </button>
+    </form>
+    {% endif %}
+  </div>
+  {% if probe %}
+  <table>
+    <tbody>
+      <tr>
+        <th class="right">Status</th>
+        <td>
+          <span class="pip pip-{{ probe.pip }}"></span>
+          <code>{{ probe.status }}</code>
+        </td>
+      </tr>
+      <tr><th class="right">Latency</th><td class="mono">{{ probe.latency_ms }} ms</td></tr>
+      {% if probe.reachable is not none %}
+      <tr>
+        <th class="right">Reachability</th>
+        <td>
+          {% if probe.reachable %}
+          <span class="dim">endpoint answered the reachability ping — reachable</span>
+          {% else %}
+          <span class="dim">endpoint did not answer — unreachable</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endif %}
+      {% if probe.model_used %}
+      <tr><th class="right">Model used</th><td class="mono dim">{{ probe.model_used }}</td></tr>
+      {% endif %}
+      {% if probe.finish_reason %}
+      <tr><th class="right">Finish reason</th><td class="mono dim">{{ probe.finish_reason }}</td></tr>
+      {% endif %}
+      <tr><th class="right">Detail</th><td>{{ probe.detail }}</td></tr>
+      {% if probe_ran_at_human %}
+      <tr><th class="right">Last probed</th><td class="mono dim">{{ probe_ran_at_human }}</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+  {% if probe.reply_preview %}
+  <details style="margin-top: 8px;">
+    <summary class="dim" style="font-size: 12px;">Reply preview (narrated instead of calling)</summary>
+    <pre class="eval-reply-preview">{{ probe.reply_preview }}</pre>
+  </details>
+  {% endif %}
+  {% else %}
+  <div class="empty">
+    Not probed yet. Click "re-probe this alias" above, or
+    re-probe all from the <a href="/dashboard/aliases">aliases tab</a>.
+  </div>
+  {% endif %}
+</div>
+
+{# ---------------------------------------------------------- eval (absorbed F18) #}
+<h3 id="eval" style="margin-top: 24px;">Eval</h3>
+<p class="tagline">
+  Three suites measure different things. <strong>default</strong>
+  tests tool-call discipline against FITT's own tool shape;
+  <strong>coding agent</strong> tests it under a realistic
+  coding-agent prompt + read/edit/glob/shell tools (router-mode
+  model picking); <strong>realistic</strong> runs the default
+  cases under FITT's live injected system prompt to surface
+  prompt-size pressure.
+</p>
+
+{% for suite in suites %}
+<div class="card">
+  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+    <h3 style="margin: 0; flex-grow: 1;">{{ suite.label }}
+      <span class="dim mono" style="font-size: 11px;">({{ suite.name }})</span>
+    </h3>
+    {% if alias_known %}
+    <form method="post" action="/dashboard/actions/run-eval" style="display: inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="alias" value="{{ alias }}">
+      <input type="hidden" name="suite" value="{{ suite.name }}">
+      <input type="hidden" name="redirect_to" value="alias">
+      <button type="submit" style="font-size: 11px; padding: 2px 8px;"
+              title="Re-run this suite (~30-60s)">
+        run {{ suite.name }} eval
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card verdict verdict-{{ suite.verdict.tone }}">
+  <div class="verdict-label">{{ suite.verdict.label }}</div>
+  <p class="verdict-reason">{{ suite.verdict.reason }}</p>
+</div>
+
+{% if suite.report %}
+<div class="card">
+  <table>
+    <tbody>
+      <tr>
+        <th class="right">Result</th>
+        <td><strong>{{ suite.report.passed }}/{{ suite.report.total }} passed</strong>
+          ({{ (suite.report.pass_rate * 100)|round|int }}%)</td>
+      </tr>
+      {% if suite.report.model_id %}
+      <tr><th class="right">Model</th><td class="mono">{{ suite.report.model_id }}</td></tr>
+      {% endif %}
+      {% if suite.report.finished_iso %}
+      <tr><th class="right">Finished</th><td class="mono dim">{{ suite.report.finished_iso }}</td></tr>
+      {% endif %}
+      {% if suite.report.duration_ms is not none %}
+      <tr><th class="right">Duration</th><td class="mono dim">{{ suite.report.duration_ms }} ms</td></tr>
+      {% endif %}
+      <tr><th class="right">Report file</th><td class="mono dim">{{ suite.report_path_human }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h4 style="margin-top: 16px;">Cases</h4>
+{% for case in suite.report.cases %}
+<div class="card eval-case eval-case-{{ case.status }}">
+  <div class="eval-case-header">
+    {% if case.status == "pass" %}
+    <span class="badge">pass</span>
+    {% elif case.status in ("upstream_silent", "upstream_rate_limited") %}
+    <span class="badge-warn">{{ case.status }}</span>
+    {% else %}
+    <span class="badge-error">{{ case.status }}</span>
+    {% endif %}
+    <code class="eval-case-name">{{ case.name }}</code>
+    {% if case.latency_ms is not none %}
+    <span class="dim mono" style="font-size: 11px; margin-left: 8px;">{{ case.latency_ms }} ms</span>
+    {% endif %}
+  </div>
+  <p class="eval-case-detail">{{ case.detail }}</p>
+  {% if case.tool_called %}
+  <div class="dim" style="font-size: 12px;">Tool called: <code>{{ case.tool_called }}</code></div>
+  {% endif %}
+  {% if case.finish_reason %}
+  <div class="dim" style="font-size: 12px;">Finish reason: <code>{{ case.finish_reason }}</code></div>
+  {% endif %}
+  {% if case.reply_preview %}
+  <details style="margin-top: 8px;">
+    <summary class="dim" style="font-size: 12px;">Reply preview</summary>
+    <pre class="eval-reply-preview">{{ case.reply_preview }}</pre>
+  </details>
+  {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<div class="card">
+  <div class="empty">
+    No <code>{{ suite.name }}</code> eval report on disk.
+    Click "run {{ suite.name }} eval" above to populate it.
+  </div>
+</div>
+{% endif %}
+
+<hr>
+{% endfor %}
+
+<p class="dim" style="font-size: 11px; margin-top: 16px;">
+  same data <code>fitt eval alias {{ alias }} --suite &lt;name&gt;</code> CLI surfaces ·
+  <a href="/dashboard/aliases">back to aliases</a>
+</p>
+{% endblock %}

@@ -203,28 +203,31 @@ verdict maps the new statuses sensibly.
 Goal: one page per binding; absorb the eval view; add probe
 detail + endpoint + "shares with".
 
-- [ ] 6a. `_build_alias_page_context` in dashboard `views.py`:
+- [x] 6a. `_build_alias_page_context` in dashboard `views.py`:
        assemble config (model/backend/fallback/endpoint), probe
        detail (status, latency, reachability, dimensions), eval
        (reuse `_build_eval_context`'s three-suite assembly),
        context window, 24h dispatches, and the "shares with"
        computation (other aliases on the same endpoint).
-       (Req 6.1, 6.3)
-- [ ] 6b. New route `/dashboard/alias/<id>` + `alias_page.html`
+       (Req 6.1, 6.3) Also added `_probe_pip` (amber/red split,
+       used here + by Commit 7), `_probe_summary` (compact table
+       cell for Commit 7), `endpoint_key` promoted to public in
+       `alias_probe.py`.
+- [x] 6b. New route `/dashboard/alias/<id>` + `alias_page.html`
        template with the sections and the two action buttons
        (run eval ▾, re-probe this alias). (Req 6.1, 6.4)
-- [ ] 6c. Redirect `/dashboard/eval/<alias>` →
-       `/dashboard/alias/<id>#eval` (or remove + re-point the
-       table badge). No eval info lost. (Req 6.2)
-- [ ] 6d. Per-alias re-probe action route
+- [x] 6c. Redirect `/dashboard/eval/<alias>` →
+       `/dashboard/alias/<id>#eval` (307). No eval info lost;
+       orphaned `eval.html` deleted (content absorbed). (Req 6.2)
+- [x] 6d. Per-alias re-probe action route
        `/dashboard/actions/reprobe-alias` (one alias), CSRF +
        typed-action substrate, calls the per-alias probe.
        (Req 4.5)
-- [ ] 6e. Tests: alias page renders all sections; eval content
+- [x] 6e. Tests: alias page renders all sections; eval content
        present; "shares with" line appears for shared endpoints,
        absent for solo; per-alias re-probe action; eval redirect.
        (Req 6)
-- [ ] 6f. ruff/mypy/pytest green.
+- [x] 6f. ruff/mypy/pytest green.
 - [ ] 6g. Commit: `dashboard: unified per-alias page`.
 
 ## Commit 7 — Lean table + endpoint column + amber/red pip + latency

@@ -717,6 +717,178 @@ def _build_eval_context(request: Request, *, alias: str) -> dict[str, Any]:
     }
 
 
+# Probe statuses that are "environmental, not the binding's
+# fault" — amber pip. Phase 7.6 Decision 8: the operator's
+# question is "my problem or the model's problem"; cold-loading
+# and rate-limits are transient/environmental, so they go amber
+# rather than red. A genuinely-wrong binding (narrated/truncated/
+# unreachable/auth) goes red.
+_PROBE_AMBER_STATUSES: frozenset[str] = frozenset(
+    {
+        "upstream_silent",
+        "upstream_rate_limited",
+        "skipped_no_api_key",
+    }
+)
+
+
+def _probe_pip(status: str | None) -> str:
+    """Map a probe status to a pip colour class (Decision 8).
+
+    green (``ok``) · amber (environmental: slow/cold-loading,
+    rate-limited, skipped-no-key) · red (broken binding:
+    narrated, truncated, unreachable, auth/client error, empty
+    reply, server error) · grey (not probed)."""
+    if status is None:
+        return "unknown"
+    if status == "ok":
+        return "ok"
+    if status in _PROBE_AMBER_STATUSES:
+        return "warn"
+    return "error"
+
+
+def _probe_summary(probe: Any) -> str:
+    """Compact one-glance probe summary for the aliases table
+    (Decision 7): ``✓ 1.2s`` / ``⏳ slow 10s+`` / ``✗ unreachable``
+    / ``narrated`` / ``— not probed``. The full detail lives on
+    the per-alias page; this is the index cell."""
+    if probe is None:
+        return "— not probed"
+    status = str(probe.status)
+    latency_ms = getattr(probe, "latency_ms", 0) or 0
+    secs = latency_ms / 1000.0
+    if status == "ok":
+        return f"✓ {secs:.1f}s"
+    if status == "upstream_silent":
+        return f"⏳ slow {secs:.0f}s+"
+    if status == "unreachable":
+        return "✗ unreachable"
+    if status == "skipped_no_api_key":
+        return "skipped"
+    if status == "upstream_rate_limited":
+        return "rate-limited"
+    return status
+
+
+def _shares_endpoint_with(config: Any, alias: str) -> tuple[str, list[str]]:
+    """Return ``(endpoint, [other aliases on the same backend
+    instance])`` for ``alias``'s primary model.
+
+    "Same backend instance" uses :func:`alias_probe.endpoint_key`
+    so the answer matches exactly what the sequential probe
+    serialises on — the shared-GPU contention set. The other-
+    aliases list is the "shares with" insight the per-alias page
+    surfaces in context."""
+    from ..alias_probe import endpoint_key
+
+    primary = config.resolve_alias(alias)[0]
+    my_key = endpoint_key(primary)
+    others: list[str] = []
+    for other in config.alias_names():
+        if other == alias:
+            continue
+        other_primary = config.resolve_alias(other)[0]
+        if endpoint_key(other_primary) == my_key:
+            others.append(other)
+    return primary.endpoint or "(no endpoint)", others
+
+
+def _build_alias_page_context(request: Request, *, alias: str) -> dict[str, Any]:
+    """Assemble the unified per-alias page (Phase 7.6 Decision 6).
+
+    One destination for "tell me about this binding": config
+    (model / backend / fallback / endpoint), the "shares with"
+    line (other aliases on the same backend instance — the
+    shared-GPU insight), the full probe detail (status, latency,
+    reachability verdict, narrated-reply preview), the three eval
+    suites (reusing :func:`_build_eval_context`'s assembly), the
+    context window, and the 24h dispatch count.
+
+    Absorbs the F18 eval view — the eval suites render inline
+    here instead of on a separate ``/dashboard/eval/<alias>``
+    page (which now redirects here). The CSRF token rides for
+    the per-suite "run eval" and the per-alias "re-probe"
+    buttons."""
+    from .edit import issue_csrf as _issue_csrf
+
+    app = request.app
+    config = app.state.config
+    alias_known = alias in config.alias_names()
+
+    # Config + endpoint + "shares with".
+    model_human = backend = fallback_human = None
+    endpoint = "(unknown)"
+    shares_with: list[str] = []
+    context_window_human = "?"
+    context_source = "—"
+    if alias_known:
+        chain = config.resolve_alias(alias)
+        primary = chain[0]
+        fallback = chain[1] if len(chain) > 1 else None
+        model_human = primary.model
+        backend = primary.backend
+        fallback_human = fallback.model if fallback else None
+        endpoint, shares_with = _shares_endpoint_with(config, alias)
+
+        cache = getattr(app.state, "context_windows", None)
+        if cache is not None:
+            cw = cache.get(primary.backend, primary.id)
+            if cw is not None:
+                context_window_human = _fmt_tokens(cw.tokens) if cw.tokens else "?"
+                context_source = cw.source
+
+    # Probe detail.
+    probe_results: dict[str, Any] = getattr(app.state, "alias_probe_results", {}) or {}
+    probe = probe_results.get(alias)
+    probe_view: dict[str, Any] | None = None
+    if probe is not None:
+        probe_view = {
+            "status": probe.status,
+            "pip": _probe_pip(probe.status),
+            "detail": getattr(probe, "detail", "") or "",
+            "latency_ms": getattr(probe, "latency_ms", 0) or 0,
+            "model_used": getattr(probe, "model_used", None),
+            "finish_reason": getattr(probe, "finish_reason", None),
+            "reply_preview": getattr(probe, "reply_preview", "") or "",
+            "reachable": getattr(probe, "reachable", None),
+        }
+    probe_ran_at = getattr(app.state, "alias_probe_ran_at", None)
+    probe_ran_at_human = (
+        datetime.fromtimestamp(probe_ran_at, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        if probe_ran_at
+        else None
+    )
+
+    # Eval suites — reuse the F18 assembly verbatim.
+    eval_ctx = _build_eval_context(request, alias=alias)
+
+    # 24h dispatches.
+    audit = getattr(app.state, "audit", None)
+    dispatch_counts = _count_dispatches_last_24h(audit)
+
+    auth = app.state.dashboard_auth
+    csrf_token = _issue_csrf(request, key=auth.key())
+
+    return {
+        "alias": alias,
+        "alias_known": alias_known,
+        "model": model_human,
+        "backend": backend,
+        "fallback": fallback_human,
+        "endpoint": endpoint,
+        "shares_with": shares_with,
+        "context_window_human": context_window_human,
+        "context_source": context_source,
+        "probe": probe_view,
+        "probe_ran_at_human": probe_ran_at_human,
+        "suites": eval_ctx["suites"],
+        "dispatched_24h": dispatch_counts.get(alias, 0),
+        "csrf_token": csrf_token,
+        "client": getattr(request.state, "client", "webui"),
+    }
+
+
 def _build_aliases_context(request: Request) -> dict[str, Any]:
     """Same alias enumeration as the overview but with the full
     detail set the aliases view renders: fallback model id,
@@ -1736,6 +1908,42 @@ async def _action_reprobe_aliases(request: Request) -> tuple[bool, str]:
     return True, f"Re-probed {total} alias(es) — {ok_count} ok"
 
 
+async def _action_reprobe_alias(request: Request, *, alias: str) -> tuple[bool, str]:
+    """Re-run the tool-call probe for ONE alias (Phase 7.6
+    Decision 4). The per-alias companion to the re-probe-all
+    button: probes just the binding the operator is debugging,
+    so it gets the backend to itself and returns a clean single
+    result without disturbing the siblings or waiting for a full
+    sweep. Updates ``app.state.alias_probe_results[alias]`` in
+    place."""
+    import time as _time
+
+    from ..alias_probe import probe_alias
+    from ..router import AliasRouter
+
+    if not alias:
+        return False, "Missing alias"
+    config = request.app.state.config
+    if alias not in config.alias_names():
+        return False, f"Unknown alias {alias!r}"
+
+    timeout_s = float(getattr(config.server, "boot_probe_timeout_s", 10.0))
+    router = AliasRouter(config)
+    try:
+        result = await probe_alias(alias, router, timeout_s=timeout_s, config=config)
+    except Exception as exc:
+        return False, f"Re-probe failed: {type(exc).__name__}: {exc}"
+
+    results = getattr(request.app.state, "alias_probe_results", None)
+    if isinstance(results, dict):
+        results[alias] = result
+    else:
+        request.app.state.alias_probe_results = {alias: result}
+    request.app.state.alias_probe_ran_at = _time.time()
+
+    return True, f"Re-probed {alias} — {result.status} ({result.latency_ms} ms)"
+
+
 async def _action_mcp_restart(request: Request, *, name: str) -> tuple[bool, str]:
     """Stop + start one MCP server by name."""
     if not name:
@@ -2599,26 +2807,37 @@ def build_views_router() -> APIRouter:
         ctx = _aliases_context_with_csrf(request)
         return templates.TemplateResponse(request, "_aliases_panel.html", ctx)
 
-    # --------------------------------------------------------- F18: eval detail
+    # --------------------------------------------------------- F18 + 7.6: per-alias page
 
-    @router.get("/eval/{alias}", response_class=HTMLResponse)
-    async def eval_view(request: Request, alias: str) -> Response:
-        """Render the per-alias eval report with a verdict
-        banner and per-case detail.
+    @router.get("/alias/{alias}", response_class=HTMLResponse)
+    async def alias_page_view(request: Request, alias: str) -> Response:
+        """Unified per-alias page (Phase 7.6 Decision 6).
 
-        Lands as F18 to close the dashboard's pre-existing
-        gap: the aliases tab showed a pass-rate badge but no
-        way to see *which* case failed or whether the
-        failure is the granite-shape (narration on a
-        tool-required case) or merely an over-eager model.
-        Same data ``$FITT_HOME/eval/<alias>-latest.md`` already
-        contained; just rendered in the browser instead of
-        requiring a docker exec."""
+        One destination for "tell me about this binding":
+        config + endpoint + "shares with", the full probe
+        detail (status, latency, reachability, narrated-reply
+        preview), the three eval suites (absorbing the former
+        F18 ``/dashboard/eval/<alias>`` view), context window,
+        and 24h dispatches. Action buttons: per-suite run-eval
+        and a per-alias re-probe."""
         guard = authorize_request(request)
         if guard is not None:
             return guard
-        ctx = _build_eval_context(request, alias=alias)
-        return templates.TemplateResponse(request, "eval.html", ctx)
+        ctx = _build_alias_page_context(request, alias=alias)
+        return templates.TemplateResponse(request, "alias_page.html", ctx)
+
+    @router.get("/eval/{alias}", response_class=HTMLResponse)
+    async def eval_view(request: Request, alias: str) -> Response:
+        """Phase 7.6: the standalone eval view is absorbed into
+        the unified per-alias page. Redirect to it (anchored at
+        the eval section) so old links / bookmarks keep working
+        and no eval information is lost."""
+        guard = authorize_request(request)
+        if guard is not None:
+            return guard
+        from fastapi.responses import RedirectResponse as _Redirect
+
+        return _Redirect(url=f"/dashboard/alias/{alias}#eval", status_code=307)
 
     # --------------------------------------------------------- turns
     @router.get("/turns", response_class=HTMLResponse)
@@ -3532,6 +3751,26 @@ def build_views_router() -> APIRouter:
             run=lambda: _action_reprobe_aliases(request),
         )
 
+    @router.post("/actions/reprobe-alias", response_class=HTMLResponse)
+    async def reprobe_alias_action(
+        request: Request,
+        csrf_token: str = Form(""),
+        alias: str = Form(""),
+    ) -> Response:
+        """Re-probe ONE alias (Phase 7.6 Decision 4). Redirects
+        back to that alias's page so the operator sees the fresh
+        result in context."""
+        cleaned = alias.strip()
+        target = f"/dashboard/alias/{cleaned}" if cleaned else "/dashboard/aliases"
+        return await _run_typed_action(
+            request,
+            csrf_token=csrf_token,
+            action_name="reprobe_alias",
+            action_args={"alias": cleaned},
+            redirect_target=target,
+            run=lambda: _action_reprobe_alias(request, alias=cleaned),
+        )
+
     @router.post("/actions/mcp-restart", response_class=HTMLResponse)
     async def mcp_restart_action(
         request: Request,
@@ -3584,15 +3823,24 @@ def build_views_router() -> APIRouter:
         csrf_token: str = Form(""),
         alias: str = Form(""),
         suite: str = Form("default"),
+        redirect_to: str = Form(""),
     ) -> Response:
         cleaned = alias.strip()
         cleaned_suite = suite.strip() or "default"
+        # The aliases table posts without redirect_to (stays on
+        # /dashboard/aliases); the per-alias page posts
+        # redirect_to=alias so the operator returns to the page
+        # they ran it from. Only same-origin dashboard paths are
+        # honoured.
+        target = "/dashboard/aliases"
+        if redirect_to == "alias" and cleaned:
+            target = f"/dashboard/alias/{cleaned}#eval"
         return await _run_typed_action(
             request,
             csrf_token=csrf_token,
             action_name="run_eval",
             action_args={"alias": cleaned, "suite": cleaned_suite},
-            redirect_target="/dashboard/aliases",
+            redirect_target=target,
             run=lambda: _action_run_eval(request, alias=cleaned, suite=cleaned_suite),
         )
 
