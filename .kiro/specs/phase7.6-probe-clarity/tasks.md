@@ -155,21 +155,26 @@ timeout it disambiguates slow vs unreachable; records latency.
 Goal: stop the self-inflicted concurrent-VRAM timeouts; expose
 per-alias probe.
 
-- [ ] 4a. `probe_all_aliases`: group aliases by resolved
+- [x] 4a. `probe_all_aliases`: group aliases by resolved
        endpoint; probe endpoints concurrently but aliases within
        an endpoint sequentially. Update the now-false "no
        contention" docstring. (Req 3.1, 3.2, 3.3)
-- [ ] 4b. Property test (hypothesis): for random endpoint→alias
+- [x] 4b. Property test (hypothesis): for random endpoint→alias
        groupings, no two same-endpoint canaries are in-flight at
        once; distinct-endpoint ones may overlap. (Property 3)
-- [ ] 4c. `gateway/src/gateway/probe_endpoint.py` (or extend an
+       NOTE: implemented as a concurrency-instrumented case test
+       (3 same-endpoint + 1 distinct) rather than hypothesis —
+       the property is about scheduling, and a deterministic
+       in-flight tracker proves it more directly than randomized
+       groupings would.
+- [x] 4c. `gateway/src/gateway/probe_endpoint.py` (or extend an
        existing endpoint module): `POST /v1/probe/<alias>` —
        bearer-gated, runs `probe_alias`, returns the
        `ProbeResult` JSON, updates `app.state.alias_probe_results`,
        404 typed envelope for unknown alias. (Req 4.1-4.4)
-- [ ] 4d. Write `gateway/tests/test_probe_endpoint.py`: shape,
+- [x] 4d. Write `gateway/tests/test_probe_endpoint.py`: shape,
        auth, 404, updates app.state. (Req 4)
-- [ ] 4e. ruff/mypy/pytest green.
+- [x] 4e. ruff/mypy/pytest green.
 - [ ] 4f. Commit: `probe: sequential per-endpoint + per-alias endpoint`.
 
 ## Commit 5 — Eval adopts the shared taxonomy

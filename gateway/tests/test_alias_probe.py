@@ -408,11 +408,82 @@ async def test_probe_all_aliases_runs_concurrently(tmp_path: Path) -> None:
     assert by_alias["fitt-default"].status == "narrated"
 
 
+async def test_probe_all_aliases_serializes_same_endpoint(tmp_path: Path) -> None:
+    """Property 3: aliases that resolve to the *same* endpoint
+    are probed one at a time (no two canaries in-flight at once
+    for that endpoint), while distinct endpoints may overlap.
+
+    This is the fix for the 2026-05-28 VRAM-contention incident.
+    We build three aliases on one Ollama endpoint and one alias
+    on a different endpoint, then track concurrency per endpoint
+    via an instrumented dispatch."""
+    fitt_home = tmp_path / "fitt"
+    fitt_home.mkdir(exist_ok=True)
+    cfg = Config(
+        server=ServerConfig(host="127.0.0.1", port=8080),
+        aliases={
+            "a1": "ollama-a",
+            "a2": "ollama-a",
+            "a3": "ollama-a",
+            "b1": "ollama-b",
+        },
+        models=[
+            ModelConfig(id="ollama-a", backend="ollama", endpoint="http://laptop:11434", model="m"),
+            ModelConfig(id="ollama-b", backend="ollama", endpoint="http://hub:11434", model="m"),
+        ],
+        logging=LoggingConfig(dir=tmp_path / "logs", retention_days=7),
+        memory=MemoryConfig(
+            enabled=False,
+            identity_dir=fitt_home / "identity",
+            sessions_dir=fitt_home / "sessions",
+        ),
+    )
+    cfg.secrets = Secrets(
+        allowed_tokens=[AllowedToken(name="personal", token="T" * 32)],
+        api_keys={},
+    )
+
+    # Track max concurrent in-flight dispatches per endpoint.
+    in_flight: dict[str, int] = {}
+    max_seen: dict[str, int] = {}
+    lock = asyncio.Lock()
+
+    ok_response = _make_response(
+        tool_calls=[
+            {"id": "c", "type": "function", "function": {"name": "_fitt_probe", "arguments": "{}"}}
+        ]
+    )
+
+    class _ConcurrencyRouter:
+        async def dispatch(self, alias: str, body: dict[str, Any]) -> DispatchResult:
+            del body
+            primary = cfg.resolve_alias(alias)[0]
+            ep = primary.endpoint or primary.id
+            async with lock:
+                in_flight[ep] = in_flight.get(ep, 0) + 1
+                max_seen[ep] = max(max_seen.get(ep, 0), in_flight[ep])
+            try:
+                await asyncio.sleep(0.02)  # hold the "GPU"
+            finally:
+                async with lock:
+                    in_flight[ep] -= 1
+            return DispatchResult(
+                response=ok_response, stream=None, model_used=primary, fallback_used=False
+            )
+
+    results = await probe_all_aliases(cfg, _ConcurrencyRouter())  # type: ignore[arg-type]
+    assert all(r.status == "ok" for r in results)
+    # The three same-endpoint aliases never overlapped.
+    assert max_seen["http://laptop:11434"] == 1
+    # Results come back in config order regardless of grouping.
+    assert [r.alias for r in results] == ["a1", "a2", "a3", "b1"]
+
+
 async def test_probe_all_aliases_skips_when_api_key_missing(
     tmp_path: Path,
 ) -> None:
     """The api_keys check already logged this misconfiguration;
-    re-probing just produces a duplicate transport failure. The
+    re-probing just produces a duplicate dispatch failure. The
     probe must skip cleanly."""
     cfg = _cfg(tmp_path, has_key=False)
     router = _StubRouter(cfg)

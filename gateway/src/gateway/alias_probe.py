@@ -121,7 +121,7 @@ from .dispatch_outcome import classify_dispatch_exception
 from .reachability import check_reachable_standalone
 
 if TYPE_CHECKING:
-    from .config import Config
+    from .config import Config, ModelConfig
     from .router import AliasRouter
 
 _log = logging.getLogger(__name__)
@@ -429,64 +429,102 @@ async def _classify_timeout(
 # --------------------------------------------------------------- batch
 
 
+def _endpoint_key(model: ModelConfig) -> str:
+    """Group key for "same backend instance" detection.
+
+    Two aliases contend for the same GPU iff they hit the same
+    backend process. For endpoint-bearing backends (ollama,
+    openai-compatible) that's the endpoint URL. Cloud backends
+    (openrouter, anthropic) have no per-instance endpoint and
+    don't contend on local VRAM, so each gets a unique key
+    (``backend:model.id``) — they probe concurrently with
+    everything else."""
+    if model.endpoint:
+        return f"{model.backend}:{model.endpoint.rstrip('/')}"
+    return f"{model.backend}:{model.id}"
+
+
 async def probe_all_aliases(
     config: Config,
     router: AliasRouter,
     *,
     timeout_s: float = 10.0,
 ) -> list[ProbeResult]:
-    """Probe every alias in ``config.aliases``. Runs probes
-    concurrently — there's no contention across aliases
-    (different backends, or same backend with different
-    ratelimits) and a five-alias gateway shouldn't wait 25s at
-    boot because we insisted on serial."""
+    """Probe every alias in ``config.aliases``.
+
+    Phase 7.6 (Decision 3): aliases that resolve to the *same
+    endpoint* are probed **sequentially** — one model gets the
+    GPU at a time — while distinct endpoints probe concurrently.
+    The old all-concurrent ``gather`` was the direct cause of the
+    2026-05-28 incident: three aliases on one laptop's Ollama
+    fired at once, fought over 12GB of VRAM, and two timed out
+    cold-loading while the third loaded. Serial-within-endpoint
+    costs ~Nx wall-clock for N models on one box, but it stops
+    the self-inflicted timeouts and the results mean something.
+
+    Aliases needing an absent api key are skipped (the api_keys
+    check already logged that); the skip is resolved up front so
+    it doesn't occupy an endpoint's serial slot.
+    """
     aliases = config.alias_names()
     secrets = config.secrets
-    tasks: list[asyncio.Task[ProbeResult]] = []
+
+    # Partition aliases into (a) immediate skips and (b) live
+    # probes grouped by endpoint. Skips don't dispatch, so they
+    # don't belong in any endpoint's serial queue.
+    skips: list[ProbeResult] = []
+    by_endpoint: dict[str, list[str]] = {}
 
     for alias in aliases:
-        # Skip aliases whose primary model needs an api key we
-        # don't have. The api_keys check already logged this.
         chain = config.resolve_alias(alias)
         primary = chain[0]
         if primary.backend in ("openai", "openrouter", "anthropic"):
             # Local Ollama is the only backend that doesn't need a
             # key; everything else expects one.
             if secrets is None:
-                # No secrets loaded at all; can't probe anything
-                # that wants auth. Return one skipped result for
-                # consistency.
-                tasks.append(asyncio.create_task(_immediate_skip(alias, "secrets not loaded")))
-                continue
-            key = secrets.api_key_for(primary.backend, model_id=primary.id)
-            if key is None and primary.backend == "openai":
-                # Already logged by check_missing_api_keys.
-                tasks.append(
-                    asyncio.create_task(
-                        _immediate_skip(
-                            alias,
-                            f"no api_keys.{primary.id} entry",
-                        )
+                skips.append(
+                    ProbeResult(
+                        alias=alias,
+                        status="skipped_no_api_key",
+                        detail="secrets not loaded",
                     )
                 )
                 continue
-        tasks.append(
-            asyncio.create_task(probe_alias(alias, router, timeout_s=timeout_s, config=config))
-        )
+            key = secrets.api_key_for(primary.backend, model_id=primary.id)
+            if key is None and primary.backend == "openai":
+                skips.append(
+                    ProbeResult(
+                        alias=alias,
+                        status="skipped_no_api_key",
+                        detail=f"no api_keys.{primary.id} entry",
+                    )
+                )
+                continue
+        by_endpoint.setdefault(_endpoint_key(primary), []).append(alias)
 
-    return list(await asyncio.gather(*tasks))
+    async def _probe_endpoint_group(group: list[str]) -> list[ProbeResult]:
+        """Probe one endpoint's aliases one at a time so each
+        model has the backend to itself."""
+        out: list[ProbeResult] = []
+        for alias in group:
+            out.append(await probe_alias(alias, router, timeout_s=timeout_s, config=config))
+        return out
 
-
-async def _immediate_skip(alias: str, detail: str) -> ProbeResult:
-    """Helper so ``probe_all_aliases`` can return a skipped-no-key
-    result via the same ``gather`` machinery as live probes. The
-    async layer is purely about uniform scheduling — there's no
-    IO in here."""
-    return ProbeResult(
-        alias=alias,
-        status="skipped_no_api_key",
-        detail=detail,
+    # Endpoints run concurrently (no cross-endpoint contention);
+    # aliases inside each endpoint run serially.
+    grouped = await asyncio.gather(
+        *(_probe_endpoint_group(group) for group in by_endpoint.values())
     )
+
+    results: list[ProbeResult] = list(skips)
+    for group_results in grouped:
+        results.extend(group_results)
+
+    # Preserve config order so callers / the dashboard see a
+    # stable, predictable sequence regardless of grouping.
+    order = {alias: i for i, alias in enumerate(aliases)}
+    results.sort(key=lambda r: order.get(r.alias, len(order)))
+    return results
 
 
 # --------------------------------------------------------------- helpers
