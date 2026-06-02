@@ -1318,6 +1318,33 @@ this list is the index.
   fixes (compact-prompt mode for small models, alias-specific
   prompt templates) are real follow-up work but not on
   Phase 7's critical path. See `docs/observed-issues.md`.
+- **Test-suite warning cleanup (2026-06-02).** `pytest` emits
+  ~7K warnings, almost all the FastAPI `on_event is deprecated`
+  DeprecationWarning from our own `@app.on_event("startup"/
+  "shutdown")` hooks in `app.py`. Not a bug today, but
+  `on_event` is a future-removal in FastAPI, so migrate the
+  startup/shutdown bodies to a single `@asynccontextmanager`
+  `lifespan=` handler. The same run also surfaces a handful of
+  `coroutine 'ensure_key' was never awaited` RuntimeWarnings
+  (test-only: app construction bails the ssh-keygen path before
+  `asyncio.run` drives the coroutine) and one Starlette
+  TestClient per-request-cookies deprecation in
+  `test_dashboard_auth`. Worth driving to zero so a *real*
+  never-awaited bug can't hide in the noise. Self-contained;
+  touches app boot, so its own commit + verification.
+  Hardening candidate.
+- **Alias health metrics (2026-06-02).** Phase 7.6 records
+  per-probe `latency_ms`; the natural extension is a small
+  time-series per alias — probe-latency trend ("1.2s last, 8.9s
+  the time before"), tokens/minute throughput from the eval
+  cases (we already measure per-case latency and know the
+  token counts), maybe a sparkline on the per-alias page. Turns
+  the single-point "✓ 1.2s" into "healthy and stable" vs
+  "degrading." Needs a tiny on-disk ring buffer per alias
+  (`$FITT_HOME/probe-history/<alias>.jsonl`, last N runs) and a
+  renderer; no new dependency. Trigger: when a single latency
+  number stops being enough to answer "is this binding getting
+  worse." Pairs naturally with the per-alias page from 7.6.
 
 ### Items observed in OpenClaw / Hermes audits
 

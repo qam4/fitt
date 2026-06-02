@@ -299,7 +299,58 @@ OpenAI-compatible model listing with FITT extensions:
 
 Probes every alias's primary + fallback. Returns 200 when every alias
 has at least one reachable backend, 503 otherwise with the list of
-failing aliases.
+failing aliases. The per-model reachability check (`GET /api/tags`
+for Ollama, `GET /v1/models` for cloud — no inference, ~2.5s budget)
+lives in `gateway/reachability.py` and is shared with the alias probe
+(Phase 7.6): when a probe canary times out, it runs this same ping to
+tell "slow / cold-loading" from "host down".
+
+### `POST /v1/eval/<alias>` (auth required)
+
+Runs the on-demand eval suite against one alias and returns a JSON
+summary (pass/fail counts, per-case detail, rendered markdown).
+`?suite=` selects `default` (FITT's own tool shape), `coding`
+(router-mode coding-agent prompt + read/edit/glob/shell tools), or
+`realistic` (default cases under FITT's live injected system prompt).
+Persists a report under `$FITT_HOME/eval/`. 404 for an unknown alias,
+400 for an unknown suite.
+
+### `POST /v1/probe/<alias>` (auth required)
+
+Runs the boot-time tool-call canary against one alias on demand and
+returns its `ProbeResult` as JSON (status, latency, reachability,
+narrated-reply preview). The per-alias companion to the boot batch:
+when debugging one binding it gets the backend to itself, so it
+returns a clean single result without disturbing siblings or waiting
+for a full sweep. Updates the dashboard's last-probe view. 404 for an
+unknown alias. The probe never raises — a dispatch failure is a
+classified status in the 200 body, not an HTTP error.
+
+#### Dispatch-outcome taxonomy (Phase 7.6)
+
+The chat path, the probe, and the eval all classify a failed model
+dispatch with one shared vocabulary (`gateway/dispatch_outcome.py`),
+so one word means one thing everywhere:
+
+| Status | Meaning |
+|---|---|
+| `upstream_silent` | Timed out. For local Ollama this usually means the model is cold-loading or queuing for VRAM, not that the host is down. |
+| `unreachable` | Confirmed can't-connect — a timeout whose reachability ping also failed. Probe/eval only (the chat path lumps connection failures into `upstream_server_error`). |
+| `upstream_rate_limited` | 429/529 from upstream. |
+| `upstream_client_error` | Other 4xx (auth, bad request). |
+| `upstream_server_error` | 5xx, transport failures, DNS — the catch-all. |
+| `empty_reply` | Dispatch *succeeded* but the model returned nothing and called nothing — a model-behavior anomaly, not a transport problem. |
+
+Two timeout knobs stay separate on purpose: the reachability ping
+uses ~2.5s (a liveness check); the inference canary keeps its longer
+`boot_probe_timeout_s` (model cold-load + generation). They measure
+different things.
+
+When `probe_all_aliases` runs (boot or re-probe-all), aliases that
+resolve to the **same endpoint** are probed **sequentially** — one
+model gets the GPU at a time — while distinct endpoints run
+concurrently. This stops the self-inflicted concurrent-VRAM timeouts
+(see `docs/observed-issues.md`, 2026-05-28).
 
 ## Dashboard
 
@@ -331,7 +382,8 @@ the cookie path is purely for the browser.
 | Route | Purpose |
 |---|---|
 | `/dashboard/` | Overview — "is FITT okay?" snapshot, alias status pips, subsystem cards. Refreshes every 30s. |
-| `/dashboard/aliases` | Per-binding detail — model, backend, context window, last probe, last eval. |
+| `/dashboard/aliases` | Per-binding index — pip (green/amber/red), model, backend, endpoint, context window, a compact probe summary, last eval. A lean table; click an alias for full detail. |
+| `/dashboard/alias/<id>` | Unified per-alias page (Phase 7.6) — config + endpoint + "shares this endpoint with X, Y", full probe detail (status, latency, reachability, narrated-reply preview), the three eval suites, context window, 24h dispatches. Action buttons: per-suite "run eval" and "re-probe this alias". (`/dashboard/eval/<id>` redirects here.) |
 | `/dashboard/turns` | Per-session turn browser. The traceability centerpiece; click any turn to see the full dispatched message list, response, tool calls, and prompt fill. |
 | `/dashboard/turns/<session>/<turn_id>` | Direct link to a captured turn's detail. Useful for "why did this Telegram reply look weird?" — open it from `X-FITT-Turn-Id` on the response header. |
 | `/dashboard/tools` | Registered tools, default approval bucket, last invocation. |

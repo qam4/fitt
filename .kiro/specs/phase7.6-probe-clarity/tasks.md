@@ -255,12 +255,12 @@ alias page.
 
 ## Commit 8 — Docs
 
-- [ ] 8a. `gateway/README.md`: document the dispatch-outcome
+- [x] 8a. `gateway/README.md`: document the dispatch-outcome
        statuses, reachability-on-timeout, sequential probing,
        `/v1/probe/<alias>`, and the unified alias page. Note the
        two distinct timeout knobs (reachability 2.5s vs probe
        inference budget).
-- [ ] 8b. `docs/observed-issues.md`: the 2026-05-28 "1 of 3
+- [x] 8b. `docs/observed-issues.md`: the 2026-05-28 "1 of 3
        transport_error on shared-GPU laptop" incident, root
        cause (concurrent probe + VRAM contention + flat
        taxonomy), and how this phase resolves it.

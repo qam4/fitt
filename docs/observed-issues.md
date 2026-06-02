@@ -33,6 +33,59 @@ doc.
 
 ---
 
+## Probe flattened "slow / cold-loading" into "transport_error" on a shared-GPU laptop
+
+**First observed:** 2026-05-28. **Fixed:** 2026-06-02
+(Phase 7.6). **Tag:** observability / correctness (closed).
+
+Re-probing three aliases (qwen3:14b, hermes3:8b, granite3.3:8b)
+that all point at one laptop's Ollama on a 12GB GPU returned
+"1 of 3 ok, 2 transport_error". The two failures weren't broken
+models — the three probes fired **concurrently** (the old
+`probe_all_aliases` used a flat `asyncio.gather` with a "no
+contention across aliases" docstring that was false for the
+dominant FITT shape), fought over VRAM, and two blew past the
+10s timeout while cold-loading. Worse, the failure label was
+`transport_error`, which reads like "can't reach the host" —
+the exact opposite of the truth (the host was fine, the model
+was loading).
+
+**Cost:** Misleading. The operator can't tell "my laptop is
+asleep" from "the model is slow" from "the binding narrates
+instead of tool-calling" when everything collapses to one word.
+Drove a debugging session chasing a network problem that didn't
+exist.
+
+**Root cause:** two compounding issues. (1) Vocabulary
+fragmentation — the chat path had a mature failure taxonomy
+(`upstream_silent` / `upstream_rate_limited` / ...) while the
+probe and eval flattened everything to `transport_error`. (2)
+Self-inflicted contention — concurrent probes on one GPU
+serialise model loads, so probes behind the first time out.
+
+**Fix (Phase 7.6, spec `phase7.6-probe-clarity`):**
+
+- Shared dispatch-outcome taxonomy (`gateway/dispatch_outcome.py`)
+  — one vocabulary across chat / probe / eval. `transport_error`
+  is gone.
+- Reachability-on-timeout: a timed-out canary runs the same
+  cheap ping `/ready` uses (`gateway/reachability.py`) and
+  reports `upstream_silent` (reachable — slow / cold-loading)
+  vs `unreachable` (host down).
+- Sequential same-endpoint probing: aliases sharing an endpoint
+  probe one at a time; distinct endpoints still overlap.
+- Per-probe latency, an amber/red pip split (environmental vs
+  broken binding), an endpoint column, and a unified per-alias
+  dashboard page (`/dashboard/alias/<id>`) that puts config,
+  the shared-GPU "shares with" line, probe detail, and the
+  eval suites in one place.
+
+**Urgency at the time:** medium — not a functional outage, but
+it actively misled debugging. Closed by living with Phase 7 for
+a day (Principle 9) and shipping the follow-up.
+
+---
+
 ## Phase 7 live-validation pass — markdown rendering on command outputs
 
 **First observed:** 2026-05-28. **Fixed:** 2026-05-28.
