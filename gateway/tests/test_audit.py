@@ -98,7 +98,7 @@ def test_redact_preserves_windows_file_paths() -> None:
     """Symmetric Windows-shape coverage so a regression in
     either direction is caught."""
     win_path = (
-        r"C:\Users\fredmarc\AppData\Local\Temp\pytest-of-fredmarc"
+        r"C:\Users\testuser\AppData\Local\Temp\pytest-of-testuser"
         r"\pytest-0\test_save_emits_one_audit_entry_per_success0"
         r"\audited.md"
     )
