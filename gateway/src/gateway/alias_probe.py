@@ -44,8 +44,19 @@ At gateway startup, for each alias:
    * ``finish_reason="length"`` or other non-stop cutoff →
      ``truncated`` (not a tool-call failure per se, but operator
      should know).
-   * Transport failure / timeout → ``transport_error``. Includes
-     DNS, TLS, 401, 429 — anything that prevents a clean answer.
+   * Empty reply + no ``tool_calls`` + clean finish →
+     ``empty_reply`` (the model said nothing and called nothing;
+     the dispatch succeeded, so this is a model-behavior anomaly,
+     not a transport problem).
+   * Dispatch failure → one of the shared
+     :mod:`gateway.dispatch_outcome` statuses
+     (``upstream_silent`` / ``upstream_rate_limited`` /
+     ``upstream_client_error`` / ``upstream_server_error``), or —
+     on a *timeout*, after a reachability ping — ``upstream_silent``
+     (host reachable, model slow / cold-loading) vs ``unreachable``
+     (host down). Phase 7.6 replaced the old catch-all
+     ``transport_error`` with this taxonomy so the operator can
+     tell a VRAM-contended laptop from a dead host.
 
 4. Return a :class:`ProbeResult` per alias so the caller can log
    one ERROR line per non-``ok`` alias and move on.
@@ -86,7 +97,7 @@ The probe skips an alias when:
 * Its backend needs an api key and the key is missing. The
   api_keys check already logged an ERROR for this case
   (see :func:`gateway.config.check_missing_api_keys`); re-probing
-  would just log a duplicate transport failure.
+  would just log a duplicate dispatch failure.
 * The gateway operator disabled probes via
   ``server.boot_probe_enabled = false``. For tests that want to
   construct an app without network calls, and for operators who
@@ -98,6 +109,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal
 
 from .agent_loop import (
@@ -105,6 +117,8 @@ from .agent_loop import (
     extract_tool_calls,
     response_to_dict,
 )
+from .dispatch_outcome import classify_dispatch_exception
+from .reachability import check_reachable_standalone
 
 if TYPE_CHECKING:
     from .config import Config
@@ -158,10 +172,27 @@ ProbeStatus = Literal[
     "ok",
     "narrated",
     "truncated",
-    "transport_error",
+    "upstream_silent",
+    "unreachable",
+    "upstream_rate_limited",
+    "upstream_client_error",
+    "upstream_server_error",
+    "empty_reply",
     "skipped_no_api_key",
     "disabled",
 ]
+"""Probe outcome status.
+
+Success-shape statuses (``ok`` / ``narrated`` / ``truncated``)
+describe how the model replied. The dispatch-failure statuses
+(``upstream_silent`` / ``unreachable`` / ``upstream_rate_limited``
+/ ``upstream_client_error`` / ``upstream_server_error``) come from
+the shared :mod:`gateway.dispatch_outcome` taxonomy — Phase 7.6
+replaced the old catch-all ``transport_error`` with these so the
+operator can tell "slow / cold-loading" (``upstream_silent``)
+from "host is down" (``unreachable``). ``empty_reply`` is the
+model-said-nothing-and-called-nothing anomaly (formerly folded
+into ``transport_error``)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,11 +203,20 @@ class ProbeResult:
     human-readable one-liner operators can paste into a bug
     report. ``model_used`` identifies the concrete model that
     served the probe (after fallback resolution); absent when
-    the probe didn't get that far (skipped, disabled)."""
+    the probe didn't get that far (skipped, disabled).
+
+    ``latency_ms`` (Phase 7.6) is the wall-clock the dispatch
+    took — for a VRAM-contended local setup this *is* the health
+    signal (``ok`` at 1.2s vs 8.9s is "healthy" vs "watch this").
+    On a timeout it sits at the budget ceiling. ``reachable``
+    (Phase 7.6) records the reachability-ping verdict when the
+    probe ran one (i.e. after a timeout); ``None`` when no ping
+    was needed."""
 
     alias: str
     status: ProbeStatus
     detail: str
+    latency_ms: int = 0
     model_used: str | None = None
     finish_reason: str | None = None
     reply_preview: str = ""
@@ -185,6 +225,7 @@ class ProbeResult:
     self-contained — operators grepping for
     ``alias_probe.narrated`` see the actual failure shape
     without cross-referencing anything else."""
+    reachable: bool | None = None
 
 
 # --------------------------------------------------------------- probe
@@ -195,12 +236,25 @@ async def probe_alias(
     router: AliasRouter,
     *,
     timeout_s: float = 10.0,
+    config: Config | None = None,
 ) -> ProbeResult:
     """Run one canary tool-call request against ``alias``.
 
     Returns a :class:`ProbeResult`. Does not raise on failure —
-    transport exceptions and timeouts become ``transport_error``
+    dispatch exceptions and timeouts become classified failure
     results so the caller can log uniformly across all aliases.
+
+    Phase 7.6: failures are classified via the shared
+    :mod:`gateway.dispatch_outcome` taxonomy instead of a flat
+    ``transport_error``. On a *timeout* specifically, the probe
+    runs a reachability ping against the resolved model's
+    endpoint (reusing :func:`gateway.reachability.check_reachable_standalone`)
+    to tell ``upstream_silent`` (host reachable, model just slow
+    / cold-loading) from ``unreachable`` (host down). ``config``
+    is needed to resolve the alias's model for the reachability
+    ping; when ``None`` (older callers / tests that don't supply
+    it), a timeout falls back to ``upstream_silent`` without the
+    disambiguating ping.
     """
     request_body: dict[str, Any] = {
         "messages": [{"role": "user", "content": _PROBE_USER_MESSAGE}],
@@ -214,25 +268,33 @@ async def probe_alias(
         "max_tokens": 256,
     }
 
+    started = perf_counter()
+
+    def _elapsed_ms() -> int:
+        return int((perf_counter() - started) * 1000)
+
     try:
         result = await asyncio.wait_for(router.dispatch(alias, request_body), timeout=timeout_s)
     except TimeoutError:
-        return ProbeResult(
-            alias=alias,
-            status="transport_error",
-            detail=f"probe timed out after {int(timeout_s)}s",
-        )
+        # The dispatch didn't answer in time. That's ambiguous on
+        # its own: the host could be cold-loading a model (slow
+        # but reachable) or genuinely down. Disambiguate with a
+        # cheap reachability ping when we can resolve the model.
+        latency_ms = _elapsed_ms()
+        return await _classify_timeout(alias, timeout_s, latency_ms, config)
     except Exception as exc:
-        # Any dispatch failure (transport, auth, 5xx) lands here.
-        # We surface the class name + message because the
-        # underlying exceptions are from LiteLLM / httpx and
-        # their string reprs are already operator-friendly.
+        # Any non-timeout dispatch failure (transport, auth, 5xx).
+        # Classify via the shared taxonomy so the status matches
+        # what the chat path would report for the same exception.
+        outcome = classify_dispatch_exception(exc)
         return ProbeResult(
             alias=alias,
-            status="transport_error",
-            detail=f"{type(exc).__name__}: {exc}",
+            status=outcome.status,
+            detail=f"{outcome.error_class}: {outcome.error_detail}",
+            latency_ms=_elapsed_ms(),
         )
 
+    latency_ms = _elapsed_ms()
     model_used_id = result.model_used.id
     response = result.response  # non-streaming — see request_body
     tool_calls = extract_tool_calls(response)
@@ -241,6 +303,7 @@ async def probe_alias(
             alias=alias,
             status="ok",
             detail=f"emitted {len(tool_calls)} tool call(s) as expected",
+            latency_ms=latency_ms,
             model_used=model_used_id,
         )
 
@@ -269,6 +332,7 @@ async def probe_alias(
             alias=alias,
             status="truncated",
             detail="model hit max_tokens before emitting tool_calls",
+            latency_ms=latency_ms,
             model_used=model_used_id,
             finish_reason=finish_reason,
             reply_preview=_preview(reply),
@@ -282,21 +346,83 @@ async def probe_alias(
                 "model replied with text instead of emitting a "
                 f"tool_calls structure (reply {len(reply)} chars)"
             ),
+            latency_ms=latency_ms,
             model_used=model_used_id,
             finish_reason=finish_reason,
             reply_preview=_preview(reply),
         )
 
     # Empty or near-empty reply + no tool_calls. Unusual shape
-    # (the model said nothing AND called no tool). Treat as a
-    # transport-class anomaly rather than narration so the log
-    # line makes sense.
+    # (the model said nothing AND called no tool). Phase 7.6:
+    # this is its own ``empty_reply`` status rather than being
+    # folded into a transport error — the dispatch *succeeded*,
+    # the model just produced nothing useful, which is a
+    # model-behavior anomaly, not a transport problem.
     return ProbeResult(
         alias=alias,
-        status="transport_error",
+        status="empty_reply",
         detail="model returned empty reply with no tool_calls",
+        latency_ms=latency_ms,
         model_used=model_used_id,
         finish_reason=finish_reason,
+    )
+
+
+async def _classify_timeout(
+    alias: str,
+    timeout_s: float,
+    latency_ms: int,
+    config: Config | None,
+) -> ProbeResult:
+    """Turn a probe timeout into ``upstream_silent`` (reachable)
+    or ``unreachable`` (host down) via a reachability ping.
+
+    When ``config`` is unavailable we can't resolve the model to
+    ping, so we report ``upstream_silent`` — the conservative
+    choice (a timeout most often means slow, not down, and we
+    don't want to cry "unreachable" without evidence)."""
+    if config is None:
+        return ProbeResult(
+            alias=alias,
+            status="upstream_silent",
+            detail=f"probe timed out after {int(timeout_s)}s (reachability not checked)",
+            latency_ms=latency_ms,
+        )
+
+    try:
+        primary = config.resolve_alias(alias)[0]
+    except Exception:
+        return ProbeResult(
+            alias=alias,
+            status="upstream_silent",
+            detail=f"probe timed out after {int(timeout_s)}s (alias unresolved)",
+            latency_ms=latency_ms,
+        )
+
+    reach = await check_reachable_standalone(primary)
+    if reach.reachable:
+        return ProbeResult(
+            alias=alias,
+            status="upstream_silent",
+            detail=(
+                f"probe timed out after {int(timeout_s)}s but endpoint is "
+                f"reachable ({reach.latency_ms}ms ping) — model is likely "
+                "cold-loading or queuing for VRAM"
+            ),
+            latency_ms=latency_ms,
+            model_used=primary.id,
+            reachable=True,
+        )
+    return ProbeResult(
+        alias=alias,
+        status="unreachable",
+        detail=(
+            f"probe timed out after {int(timeout_s)}s and endpoint is "
+            f"unreachable: {reach.detail or 'no response'}"
+        ),
+        latency_ms=latency_ms,
+        model_used=primary.id,
+        reachable=False,
     )
 
 
@@ -344,7 +470,9 @@ async def probe_all_aliases(
                     )
                 )
                 continue
-        tasks.append(asyncio.create_task(probe_alias(alias, router, timeout_s=timeout_s)))
+        tasks.append(
+            asyncio.create_task(probe_alias(alias, router, timeout_s=timeout_s, config=config))
+        )
 
     return list(await asyncio.gather(*tasks))
 

@@ -5,8 +5,15 @@ Three concerns:
 
 * Shape-level classification: a real ``tool_calls`` response →
   ``ok``; a text-only narrated response → ``narrated``; a
-  length-cutoff response → ``truncated``; transport/timeout →
-  ``transport_error``.
+  length-cutoff response → ``truncated``; an empty reply with no
+  tool_calls → ``empty_reply``.
+* Failure taxonomy (Phase 7.6): a dispatch exception is
+  classified via the shared :mod:`gateway.dispatch_outcome`
+  vocabulary (``upstream_server_error`` for a bare transport
+  failure, etc.); a *timeout* runs a reachability ping and
+  resolves to ``upstream_silent`` (host reachable, model slow /
+  cold-loading) or ``unreachable`` (host down). Latency is
+  recorded on every path.
 * Batch behaviour: multiple aliases probe concurrently;
   aliases missing an api_keys entry skip cleanly with
   ``skipped_no_api_key`` and don't incur a dispatch.
@@ -166,6 +173,7 @@ async def test_probe_ok_when_real_tool_calls_emitted(tmp_path: Path) -> None:
     assert result.status == "ok"
     assert result.model_used == "nim-qwen"
     assert "1 tool call" in result.detail
+    assert result.latency_ms >= 0
 
 
 # --------------------------------------------------------------- narration
@@ -225,11 +233,11 @@ async def test_probe_ignores_short_polite_ack_as_not_narration(
     router.set("fitt-smart", _make_response(content="ok"))
 
     result = await probe_alias("fitt-smart", router)  # type: ignore[arg-type]
-    # Neither narrated (too short) nor ok (no tool_calls) — we
-    # classify the anomaly as transport_error so the log line
-    # makes sense. An operator debugging this gets enough
-    # signal from the status to dig deeper.
-    assert result.status == "transport_error"
+    # Neither narrated (too short) nor ok (no tool_calls). The
+    # dispatch *succeeded* — the model just produced nothing
+    # useful — so this is the model-behavior ``empty_reply``
+    # anomaly, not a transport failure (Phase 7.6).
+    assert result.status == "empty_reply"
     assert "empty reply" in result.detail
 
 
@@ -252,30 +260,107 @@ async def test_probe_detects_length_cutoff(tmp_path: Path) -> None:
     assert result.finish_reason == "length"
 
 
-# --------------------------------------------------------------- transport
+# --------------------------------------------------------------- dispatch failure
 
 
 async def test_probe_catches_dispatch_exception(tmp_path: Path) -> None:
+    """A bare (non-HTTP) dispatch exception classifies via the
+    shared taxonomy as ``upstream_server_error`` — the catch-all
+    bucket for transport failures with no status code."""
     cfg = _cfg(tmp_path)
     router = _StubRouter(cfg)
     router.set("fitt-smart", RuntimeError("connection refused"))
 
     result = await probe_alias("fitt-smart", router)  # type: ignore[arg-type]
-    assert result.status == "transport_error"
+    assert result.status == "upstream_server_error"
     assert "connection refused" in result.detail
     assert "RuntimeError" in result.detail
+    assert result.latency_ms >= 0
 
 
-async def test_probe_times_out(tmp_path: Path) -> None:
-    """If the dispatch never returns inside the timeout, the
-    probe should return transport_error rather than block
-    gateway startup forever."""
+async def test_probe_times_out_reachable_is_upstream_silent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timeout whose endpoint still answers a reachability
+    ping means the model is slow / cold-loading, not down. The
+    probe must report ``upstream_silent`` (Phase 7.6) — the
+    exact 2026-05-28 VRAM-contention incident."""
     cfg = _cfg(tmp_path)
     router = _StubRouter(cfg)
 
     async def slow() -> DispatchResult:
         await asyncio.sleep(10.0)
-        # Never reached.
+        return DispatchResult(None, None, cfg.models[0], False)
+
+    router.set("fitt-smart", slow)
+
+    from gateway import alias_probe
+    from gateway.reachability import ReachabilityResult
+
+    async def fake_reachable(model: Any, **_: Any) -> ReachabilityResult:
+        return ReachabilityResult(model.id, True, 42)
+
+    monkeypatch.setattr(alias_probe, "check_reachable_standalone", fake_reachable)
+
+    result = await probe_alias(
+        "fitt-smart",  # type: ignore[arg-type]
+        router,
+        timeout_s=0.05,
+        config=cfg,
+    )
+    assert result.status == "upstream_silent"
+    assert "reachable" in result.detail
+    assert result.reachable is True
+    assert result.latency_ms >= 0
+
+
+async def test_probe_times_out_unreachable_is_unreachable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timeout whose endpoint also fails the reachability ping
+    means the host is genuinely down → ``unreachable``."""
+    cfg = _cfg(tmp_path)
+    router = _StubRouter(cfg)
+
+    async def slow() -> DispatchResult:
+        await asyncio.sleep(10.0)
+        return DispatchResult(None, None, cfg.models[0], False)
+
+    router.set("fitt-smart", slow)
+
+    from gateway import alias_probe
+    from gateway.reachability import ReachabilityResult
+
+    async def fake_unreachable(model: Any, **_: Any) -> ReachabilityResult:
+        return ReachabilityResult(model.id, False, 2500, detail="connect timeout")
+
+    monkeypatch.setattr(alias_probe, "check_reachable_standalone", fake_unreachable)
+
+    result = await probe_alias(
+        "fitt-smart",  # type: ignore[arg-type]
+        router,
+        timeout_s=0.05,
+        config=cfg,
+    )
+    assert result.status == "unreachable"
+    assert "unreachable" in result.detail
+    assert result.reachable is False
+
+
+async def test_probe_times_out_without_config_falls_back_silent(
+    tmp_path: Path,
+) -> None:
+    """With no ``config`` to resolve the model, a timeout can't
+    run the disambiguating ping, so it falls back to the
+    conservative ``upstream_silent`` (a timeout most often means
+    slow, not down)."""
+    cfg = _cfg(tmp_path)
+    router = _StubRouter(cfg)
+
+    async def slow() -> DispatchResult:
+        await asyncio.sleep(10.0)
         return DispatchResult(None, None, cfg.models[0], False)
 
     router.set("fitt-smart", slow)
@@ -284,8 +369,9 @@ async def test_probe_times_out(tmp_path: Path) -> None:
         router,
         timeout_s=0.05,
     )
-    assert result.status == "transport_error"
+    assert result.status == "upstream_silent"
     assert "timed out" in result.detail
+    assert "reachability not checked" in result.detail
 
 
 # --------------------------------------------------------------- batch

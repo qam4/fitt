@@ -94,7 +94,7 @@ chat.py consumes it; existing chat tests stay green.
 - [x] 1e. Confirm `test_chat_error_logging.py` passes unchanged.
        (Req 9.1, Property 4)
 - [x] 1f. ruff format/check, mypy, pytest green in `gateway/`.
-- [ ] 1g. Commit: `dispatch: extract shared outcome taxonomy`.
+- [x] 1g. Commit: `dispatch: extract shared outcome taxonomy`.
 
 ## Commit 2 — Reachability extraction (no behavior change)
 
@@ -115,36 +115,39 @@ Goal: extract `/ready`'s per-model ping to a shared function;
 - [x] 2d. Confirm `test_health.py` passes unchanged.
        (Req 9.2, Property 5)
 - [x] 2e. ruff/mypy/pytest green.
-- [ ] 2f. Commit: `reachability: extract /ready ping helper`.
+- [x] 2f. Commit: `reachability: extract /ready ping helper`.
 
 ## Commit 3 — Probe adopts taxonomy + reachability-on-timeout + latency
 
 Goal: the probe stops emitting bare `transport_error`; on
 timeout it disambiguates slow vs unreachable; records latency.
 
-- [ ] 3a. `ProbeResult` (`alias_probe.py`): add `latency_ms: int
+- [x] 3a. `ProbeResult` (`alias_probe.py`): add `latency_ms: int
        = 0` and `reachable: bool | None = None`; expand
        `ProbeStatus` with `upstream_silent`, `unreachable`,
        `upstream_rate_limited`, `upstream_client_error`,
        `upstream_server_error` (keep `ok`/`narrated`/`truncated`/
        `skipped_no_api_key`/`disabled`). (Req 1.5, 5.1, 2.6)
-- [ ] 3b. `probe_alias`: time the dispatch (record `latency_ms`).
+- [x] 3b. `probe_alias`: time the dispatch (record `latency_ms`).
        On `TimeoutError`, call `check_reachable`; set
        `upstream_silent` (reachable) or `unreachable` (not),
        with `reachable` recorded. On other dispatch exception,
        call `classify_dispatch_exception` and map to the status.
        (Req 2.1, 2.2, 2.3, 5.1)
-- [ ] 3c. The "empty reply, no tool_calls" branch: reclassify
+- [x] 3c. The "empty reply, no tool_calls" branch: reclassify
        from today's `transport_error` to a clearer status
        (`upstream_server_error` or a dedicated `empty_reply` —
        decide in implementation; document the choice). Keep it
-       distinct from the timeout path.
-- [ ] 3d. Extend `test_alias_probe.py`: timeout+reachable →
+       distinct from the timeout path. DECISION: dedicated
+       `empty_reply` — the dispatch *succeeded*, the model just
+       produced nothing, so it's a model-behavior anomaly, not a
+       transport problem.
+- [x] 3d. Extend `test_alias_probe.py`: timeout+reachable →
        `upstream_silent`; timeout+unreachable → `unreachable`;
        latency recorded; other-exception paths classify via the
        shared taxonomy. Mock `check_reachable` + the router.
        (Req 2, 5, Property 2)
-- [ ] 3e. ruff/mypy/pytest green.
+- [x] 3e. ruff/mypy/pytest green.
 - [ ] 3f. Commit: `probe: honest failure taxonomy + reachability`.
 
 ## Commit 4 — Sequential same-endpoint probing + per-alias trigger
