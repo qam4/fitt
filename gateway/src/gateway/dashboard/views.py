@@ -752,9 +752,14 @@ def _probe_pip(status: str | None) -> str:
 
 def _probe_summary(probe: Any) -> str:
     """Compact one-glance probe summary for the aliases table
-    (Decision 7): ``✓ 1.2s`` / ``⏳ slow 10s+`` / ``✗ unreachable``
+    (Decision 7): ``✓ 1.2s`` / ``… slow 10s+`` / ``✗ unreachable``
     / ``narrated`` / ``— not probed``. The full detail lives on
-    the per-alias page; this is the index cell."""
+    the per-alias page; this is the index cell.
+
+    Uses ``…`` rather than an hourglass emoji for the slow case:
+    system monospace fonts (what the dashboard table renders in)
+    lack the emoji glyph and show tofu, while ``✓`` / ``✗`` are
+    Dingbats and render fine."""
     if probe is None:
         return "— not probed"
     status = str(probe.status)
@@ -763,7 +768,7 @@ def _probe_summary(probe: Any) -> str:
     if status == "ok":
         return f"✓ {secs:.1f}s"
     if status == "upstream_silent":
-        return f"⏳ slow {secs:.0f}s+"
+        return f"… slow {secs:.0f}s+"
     if status == "unreachable":
         return "✗ unreachable"
     if status == "skipped_no_api_key":
@@ -925,7 +930,7 @@ def _build_aliases_context(request: Request) -> dict[str, Any]:
         # Phase 7.6 (Decision 7): the table is a lean index. The
         # pip uses the amber/red split (environmental vs broken
         # binding); the probe cell is a compact summary
-        # (✓ 1.2s / ⏳ slow 10s+ / ✗ unreachable) that links to
+        # (✓ 1.2s / … slow 10s+ / ✗ unreachable) that links to
         # the per-alias page. The full detail (exception class,
         # narrated-reply preview, reachability facts) lives on
         # that page, not crammed into this cell — the F19
