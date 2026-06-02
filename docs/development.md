@@ -45,7 +45,7 @@ Commit checklist is codified in `.kiro/steering/commit-checklist.md`
 ### On the NAS (hub)
 
 ```
-cd /path/to/home-ai-cluster
+cd /path/to/fitt
 git pull
 docker compose build                 # rebuild gateway + bot
 docker compose up -d                 # recreate containers

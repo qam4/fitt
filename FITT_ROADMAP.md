@@ -2,7 +2,7 @@
 
 > **FITT** — *Fred Industries Two Thousand.* A self-hosted, spec-driven personal AI with persistent memory, agentic tools, and multi-interface reach. Built gradually, demoable at every phase.
 
-This roadmap is both the outer shell **and** the draft specs. Each phase contains enough to act on: requirements, a design sketch, and a task list. When a phase begins for real, its inline section is promoted to proper Kiro spec files (`.kiro/specs/<phase>/{requirements,design,tasks}.md`) in the `home-ai-cluster` repo (or whatever the final repo name ends up being) and iterated from there.
+This roadmap is both the outer shell **and** the draft specs. Each phase contains enough to act on: requirements, a design sketch, and a task list. When a phase begins for real, its inline section is promoted to proper Kiro spec files (`.kiro/specs/<phase>/{requirements,design,tasks}.md`) in the `fitt` repo and iterated from there.
 
 ---
 
@@ -1480,7 +1480,7 @@ Expect calendar time to stretch 2–3x. Real life happens.
 ## Repo Layout (create in Phase 1)
 
 ```
-home-ai-cluster/
+fitt/
 ├── README.md
 ├── FITT_ROADMAP.md              # this file, moved from chess-coaching repo
 ├── FITT_PRD.md                  # the PRD (rename from RETRO_KITT_PRD.md)

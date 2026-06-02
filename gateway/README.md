@@ -540,7 +540,7 @@ missing `openrouter_api_key`, invalid YAML, port 8421 already bound.
 ### How do I update the gateway without losing my config?
 
 ```powershell
-cd home-ai-cluster
+cd fitt
 git pull
 cd gateway
 uv sync

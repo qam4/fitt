@@ -11,7 +11,7 @@ multi-interface reach. It runs on a two-machine GPU cluster
 (iBUYPOWER desktop "Hub" + Acer Predator laptop "Compute") connected
 by Tailscale.
 
-Repository: `qam4/home-ai-cluster` (private).
+Repository: `qam4/fitt` (private).
 
 ## Scope: what FITT is and is not
 

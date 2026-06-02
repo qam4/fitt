@@ -1,4 +1,4 @@
-# home-ai-cluster
+# FITT
 
 > **FITT** - *Fred Industries Two Thousand.* A self-hosted, spec-driven personal AI with persistent memory, agentic tools, and multi-interface reach. Built gradually on a two-machine GPU cluster, demoable at every phase.
 

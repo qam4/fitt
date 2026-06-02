@@ -155,7 +155,7 @@ see Step 5).
 
 ```bash
 cd /share/Public
-git clone https://github.com/qam4/home-ai-cluster.git
+git clone https://github.com/qam4/fitt.git
 ```
 
 On Linux/macOS/Windows, any directory you'd normally keep code
@@ -173,7 +173,7 @@ QNAP's minimal SSH shell on older QTS versions ships without
 `git`. Two ways around it:
 
 - **Clone elsewhere, copy the repo to the NAS.** Simplest. On
-  your laptop, `git clone`, then `scp -r home-ai-cluster admin@<nas>:/share/Public/`
+  your laptop, `git clone`, then `scp -r fitt admin@<nas>:/share/Public/`
   (or drag-and-drop in File Station). You lose `git pull` for
   updates; to update, clone + copy again, or rsync.
 - **Install Entware + git on the NAS.** Entware is a QPKG
@@ -220,7 +220,7 @@ On the **Hub**, over SSH:
 
 ```bash
 mkdir -p "$FITT_HOME"
-cd /path/to/home-ai-cluster      # wherever you cloned in Step 3.2
+cd /path/to/fitt      # wherever you cloned in Step 3.2
 cp configs/config.example.yaml  "$FITT_HOME/config.yaml"
 cp configs/secrets.example.yaml "$FITT_HOME/secrets.yaml"
 cp .env.example                 "$FITT_HOME/../.env"   # next to docker-compose.yml; see below
@@ -231,7 +231,7 @@ Actually, the `.env` goes in the repo root (next to
 command to your clone path:
 
 ```bash
-cp .env.example .env        # in the home-ai-cluster repo root
+cp .env.example .env        # in the fitt repo root
 ```
 
 **QNAP note — SSH as admin on first setup:** Non-admin QNAP
@@ -295,7 +295,7 @@ Compose reads this file for `FITT_HOME`, `PUID`, `PGID`, `TZ`,
 and the Bearer token it needs to inject into Open WebUI.
 
 ```bash
-# home-ai-cluster/.env
+# fitt/.env
 FITT_HOME=/share/Public/fitt
 PUID=1000
 PGID=1000
@@ -1497,7 +1497,7 @@ principle 9.
 ## Updating the hub
 
 ```bash
-cd /path/to/home-ai-cluster
+cd /path/to/fitt
 git pull
 docker compose build         # rebuild changed images
 docker compose up -d         # recreate changed containers
