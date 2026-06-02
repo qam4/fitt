@@ -68,7 +68,7 @@ Commit 7 depends on 6 (table links to the page). Commit 8
 Goal: extract the chat path's classifier to a shared module;
 chat.py consumes it; existing chat tests stay green.
 
-- [ ] 1a. Create `gateway/src/gateway/dispatch_outcome.py` with
+- [x] 1a. Create `gateway/src/gateway/dispatch_outcome.py` with
        `DispatchStatus` Literal (`upstream_silent`,
        `upstream_rate_limited`, `upstream_client_error`,
        `upstream_server_error`, `unreachable`), the
@@ -77,23 +77,23 @@ chat.py consumes it; existing chat tests stay green.
        `classify_dispatch_exception(exc) -> DispatchOutcome`.
        Logic lifted verbatim from `chat.py::_classify_upstream_error`.
        (Req 1.1, 1.2, 1.3)
-- [ ] 1b. Rewire `chat.py` to import and use
+- [x] 1b. Rewire `chat.py` to import and use
        `classify_dispatch_exception`; reduce
        `_classify_upstream_error` to a thin adapter or remove
        it and update call sites. Keep the emitted
        `error_type`/`error_class`/`upstream_status` identical.
        (Req 1.4, 9.1)
-- [ ] 1c. Write `gateway/tests/test_dispatch_outcome.py`: each
+- [x] 1c. Write `gateway/tests/test_dispatch_outcome.py`: each
        exception shape maps to the right status (timeout →
        `upstream_silent`, 429/529 → `rate_limited`, 4xx →
        `client_error`, 5xx/ConnectError → `server_error`),
        error_class + detail recorded. (Req 1, Property 1)
-- [ ] 1d. Property test (hypothesis): random exception types
+- [x] 1d. Property test (hypothesis): random exception types
        all classify to exactly one status, none escape.
        (Property 1)
-- [ ] 1e. Confirm `test_chat_error_logging.py` passes unchanged.
+- [x] 1e. Confirm `test_chat_error_logging.py` passes unchanged.
        (Req 9.1, Property 4)
-- [ ] 1f. ruff format/check, mypy, pytest green in `gateway/`.
+- [x] 1f. ruff format/check, mypy, pytest green in `gateway/`.
 - [ ] 1g. Commit: `dispatch: extract shared outcome taxonomy`.
 
 ## Commit 2 — Reachability extraction (no behavior change)

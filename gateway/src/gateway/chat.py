@@ -46,6 +46,7 @@ from .detach import (
     finish_detached,
     run_with_detach,
 )
+from .dispatch_outcome import classify_dispatch_exception
 from .errors import ModelIdNotAlias, NoBackendAvailable, UnknownAlias
 from .logging_config import get_logger, log_request
 from .memory import LoadedContext, MemoryStore
@@ -281,68 +282,20 @@ def _classify_upstream_error(exc: Exception) -> dict[str, Any]:
     """Return a structured classification of an upstream-dispatch
     exception, suitable for ``log_request``'s extra fields.
 
+    Phase 7.6: the classification logic moved to the shared
+    :mod:`gateway.dispatch_outcome` module so the chat path, the
+    alias probe, and the eval harness all speak one failure
+    vocabulary. This is now a thin adapter that returns the same
+    dict shape the inline classifier used to return
+    (``error_type`` / ``error_class`` / ``error_detail`` /
+    optional ``upstream_status`` / ``retry_after``), so every
+    ``log_request`` call site here is untouched.
+
     Mirrors the routing logic of :func:`_translate_upstream_error`
     so the structured log shape and the user-facing HTTP shape
-    can't drift. Four buckets:
-
-    * ``upstream_silent`` — LiteLLM (or the underlying httpx) hit
-      our configured timeout. The upstream went quiet for longer
-      than we were willing to wait. Phase 4.9.
-    * ``upstream_rate_limited`` — 429/529 from upstream.
-      ``upstream_status`` carries the actual code; ``retry_after``
-      records the parsed Retry-After header (or the synthesized
-      default).
-    * ``upstream_client_error`` — other 4xx (auth, bad request).
-    * ``upstream_server_error`` — 5xx, transport failures
-      (connection reset, read timeout), DNS failures, anything
-      that doesn't expose a ``status_code`` attribute. Catch-all.
-
-    The ``error_class`` field carries the Python exception class
-    name (``RateLimitError``, ``APIConnectionError``,
-    ``httpx.ReadTimeout``, etc.) so an operator grepping the log
-    can tell "is this NVIDIA queue depth or my Tailscale flapping
-    or both?". The ``error_detail`` field carries the
-    exception's str() so the wire-side detail (NVIDIA's
-    "368 in queue" body, say) is preserved without needing to
-    enable response-body capture.
+    can't drift.
     """
-    status = getattr(exc, "status_code", None)
-    message = getattr(exc, "message", None) or str(exc)
-    resp = getattr(exc, "response", None)
-    retry_after: str | None = None
-    if resp is not None:
-        headers = getattr(resp, "headers", {}) or {}
-        retry_after = headers.get("retry-after") or headers.get("Retry-After")
-
-    fields: dict[str, Any] = {
-        "error_class": type(exc).__name__,
-        "error_detail": message[:500] if isinstance(message, str) else str(message)[:500],
-    }
-    # Phase 4.9: LiteLLM raises ``litellm.Timeout`` (with
-    # ``status_code=408`` per their convention) when the
-    # ``timeout=`` kwarg fires. We treat that as upstream_silent
-    # rather than letting it fall through to upstream_client_error
-    # — 408 from the upstream itself would be unusual and is
-    # operationally the same shape (we couldn't get an answer
-    # in time).
-    is_litellm_timeout = type(exc).__name__ == "Timeout" or (
-        status == 408 and "timeout" in message.lower()
-    )
-    if is_litellm_timeout:
-        fields["error_type"] = "upstream_silent"
-        return fields
-    if status in (429, 529):
-        fields["error_type"] = "upstream_rate_limited"
-        fields["upstream_status"] = status
-        fields["retry_after"] = retry_after or ("30" if status == 529 else "5")
-    elif isinstance(status, int) and 400 <= status < 500:
-        fields["error_type"] = "upstream_client_error"
-        fields["upstream_status"] = status
-    else:
-        fields["error_type"] = "upstream_server_error"
-        if isinstance(status, int):
-            fields["upstream_status"] = status
-    return fields
+    return classify_dispatch_exception(exc).to_log_fields()
 
 
 def _upstream_silent_response(
