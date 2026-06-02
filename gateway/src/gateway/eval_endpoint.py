@@ -55,6 +55,74 @@ router = APIRouter()
 _log = logging.getLogger(__name__)
 
 
+# Approx chars-per-token for the report's token-count estimate.
+# Matches the 4-chars-per-token heuristic used elsewhere
+# (memory.max_history_chars comments, config.example.yaml).
+_CHARS_PER_TOKEN = 4
+
+
+def build_realistic_system_prompt(app_state: Any) -> tuple[str, dict[str, Any]]:
+    """Assemble FITT's live injected system prompt from the
+    running gateway's ``app.state``, for the *realistic* eval
+    suite.
+
+    Mirrors the chat handler's assembly order
+    (:func:`gateway.chat._inject_memory`): capability block,
+    then skills block, then identity + lessons. Each part is
+    dropped when empty so the prompt matches what live chat
+    actually sends.
+
+    Returns ``(prompt, meta)`` where ``meta`` records which
+    components were present and the approximate token count —
+    surfaced in the report so the verdict can say "narrated at
+    5.2K tokens" like the granite write-up, and so a score is
+    honest about what prompt size it measured.
+
+    Identity + lessons are operator-specific (Principle 10);
+    including them makes the eval match *this* operator's live
+    prompt but means the absolute score isn't comparable across
+    machines. The meta block names what was included so the
+    comparison caveat is visible."""
+    components: list[str] = []
+    parts: list[str] = []
+
+    registry = getattr(app_state, "tool_registry", None)
+    if registry is not None and registry.list_names():
+        from .capabilities import build_capability_block
+
+        cap = build_capability_block(registry)
+        if cap:
+            parts.append(cap)
+            components.append("capability_block")
+
+    skills = getattr(app_state, "skills", None)
+    if skills and registry is not None:
+        from .skills import render_skills_block
+
+        skills_block = render_skills_block(skills, registry)
+        if skills_block:
+            parts.append(skills_block)
+            components.append("skills_block")
+
+    memory = getattr(app_state, "memory", None)
+    if memory is not None:
+        try:
+            ctx = memory.load_context("main")
+        except Exception:
+            ctx = None
+        if ctx is not None and ctx.system_prefix:
+            parts.append(ctx.system_prefix)
+            components.append("identity_lessons")
+
+    prompt = "\n\n".join(parts)
+    meta = {
+        "components": components,
+        "chars": len(prompt),
+        "approx_tokens": len(prompt) // _CHARS_PER_TOKEN,
+    }
+    return prompt, meta
+
+
 def _summarise_report(report: EvalReport) -> dict[str, Any]:
     """JSON-friendly response shape.
 
@@ -131,10 +199,19 @@ async def run_eval(
     # Pick the suite. Unknown names get a 400 — operator typo
     # is the most common reason this fails, and a clear error
     # is better than silently running the default.
+    realistic_prompt = ""
+    realistic_meta: dict[str, Any] = {}
     if suite == "default":
         cases: list[EvalCase] = default_cases()
     elif suite == "coding":
         cases = default_coding_cases()
+    elif suite == "realistic":
+        # Realistic = the default cases (FITT's own tool names)
+        # run under FITT's live injected system prompt. The
+        # diff between the 'default' suite (bare prompt) and
+        # this one is the granite-incident diagnostic.
+        cases = default_cases()
+        realistic_prompt, realistic_meta = build_realistic_system_prompt(request.app.state)
     else:
         raise HTTPException(
             status_code=400,
@@ -142,12 +219,14 @@ async def run_eval(
                 "error": {
                     "type": "unknown_suite",
                     "message": f"suite {suite!r} not recognized",
-                    "available": ["default", "coding"],
+                    "available": ["default", "coding", "realistic"],
                 }
             },
         )
     try:
-        report = await run_eval_suite(alias, eval_router, cases=cases)
+        report = await run_eval_suite(
+            alias, eval_router, cases=cases, system_prompt=realistic_prompt
+        )
     except UnknownAlias as exc:
         raise HTTPException(
             status_code=404,
@@ -178,8 +257,16 @@ async def run_eval(
     # Persist alongside the existing on-disk eval artifacts so
     # ``/v1/aliases``'s last_eval lookup picks it up on the
     # next call.
+    extra_header_lines: list[str] = []
+    if suite == "realistic":
+        approx = realistic_meta.get("approx_tokens", 0)
+        comps = ", ".join(realistic_meta.get("components", [])) or "(none)"
+        extra_header_lines.append(
+            f"- Realistic prompt: ~{approx} tokens "
+            f"({realistic_meta.get('chars', 0)} chars; components: {comps})"
+        )
     try:
-        write_report(report, fitt_home(), suite=suite)
+        write_report(report, fitt_home(), suite=suite, extra_header_lines=extra_header_lines)
     except OSError as exc:
         _log.warning(
             "eval.write_report_failed",
@@ -188,7 +275,9 @@ async def run_eval(
 
     summary = _summarise_report(report)
     summary["suite"] = suite
+    if suite == "realistic":
+        summary["realistic_prompt"] = realistic_meta
     # Include the rendered markdown so a dashboard or CLI can
     # show the human-readable form without re-rendering.
-    summary["markdown"] = render_report_markdown(report)
+    summary["markdown"] = render_report_markdown(report, extra_header_lines=extra_header_lines)
     return summary

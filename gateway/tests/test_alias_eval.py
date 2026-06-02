@@ -174,6 +174,92 @@ async def test_positive_case_passes_when_expected_tool_called(
     assert r.tool_called == "read_file"
 
 
+async def test_system_prompt_lands_as_leading_system_message(
+    tmp_path: Path,
+) -> None:
+    """The realistic suite passes a ``system_prompt``; it must
+    arrive as a role=system message before the user prompt, so
+    the model sees the prompt-size pressure live chat applies."""
+    cfg = _cfg(tmp_path)
+
+    captured: dict[str, Any] = {}
+
+    class _CapturingRouter:
+        def __init__(self, config: Config) -> None:
+            self._config = config
+
+        async def dispatch(self, alias: str, body: dict[str, Any]) -> DispatchResult:
+            captured["messages"] = body["messages"]
+            primary = self._config.resolve_alias(alias)[0]
+            return DispatchResult(
+                response=_make_response(
+                    tool_calls=[
+                        {
+                            "id": "c",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": "{}"},
+                        }
+                    ]
+                ),
+                stream=None,
+                model_used=primary,
+                fallback_used=False,
+            )
+
+        def resolve(self, alias: str) -> list[ModelConfig]:
+            return self._config.resolve_alias(alias)
+
+    router = _CapturingRouter(cfg)
+    case = EvalCase(
+        name="t1",
+        prompt="read the file",
+        tools=[_read_file_tool()],
+        expected_tool="read_file",
+    )
+    r = await run_eval_case(
+        case,
+        "fitt-smart",
+        router,  # type: ignore[arg-type]
+        system_prompt="[Capabilities] You can call these tools: ...",
+    )
+    assert r.status == "pass"
+    msgs = captured["messages"]
+    assert msgs[0]["role"] == "system"
+    assert "Capabilities" in msgs[0]["content"]
+    assert msgs[1]["role"] == "user"
+    assert msgs[1]["content"] == "read the file"
+
+
+async def test_no_system_prompt_means_user_message_first(
+    tmp_path: Path,
+) -> None:
+    """Default/coding suites pass no system_prompt; the user
+    message stays at index 0 (the StubRouter relies on this)."""
+    cfg = _cfg(tmp_path)
+    router = _StubRouter(cfg)
+    case = EvalCase(
+        name="t1",
+        prompt="read the file",
+        tools=[_read_file_tool()],
+        expected_tool="read_file",
+    )
+    router.set_for_prompt(
+        case.prompt,
+        _make_response(
+            tool_calls=[
+                {
+                    "id": "c",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ]
+        ),
+    )
+    # No system_prompt → StubRouter's messages[0] keying works.
+    r = await run_eval_case(case, "fitt-smart", router)  # type: ignore[arg-type]
+    assert r.status == "pass"
+
+
 async def test_positive_case_fails_when_wrong_tool_called(
     tmp_path: Path,
 ) -> None:

@@ -668,6 +668,7 @@ def _build_eval_context(request: Request, *, alias: str) -> dict[str, Any]:
     for suite_name, suffix, label in (
         ("default", "", "FITT default"),
         ("coding", "-coding", "Coding agent (router mode)"),
+        ("realistic", "-realistic", "Realistic (FITT's live system prompt)"),
     ):
         report_path = eval_dir / f"{alias}{suffix}-latest.md"
         parsed = _parse_eval_report_full(report_path)
@@ -1781,32 +1782,52 @@ async def _action_run_eval(
         write_report,
     )
     from ..alias_eval_coding import default_coding_cases
+    from ..eval_endpoint import build_realistic_system_prompt
     from ..router import AliasRouter
 
+    realistic_prompt = ""
+    realistic_meta: dict[str, Any] = {}
     if suite == "default":
         cases = default_cases()
     elif suite == "coding":
         cases = default_coding_cases()
+    elif suite == "realistic":
+        cases = default_cases()
+        realistic_prompt, realistic_meta = build_realistic_system_prompt(request.app.state)
     else:
         return False, f"Unknown suite {suite!r}"
 
     eval_router = AliasRouter(config)
     try:
-        report = await run_eval_suite(alias, eval_router, cases=cases)
+        report = await run_eval_suite(
+            alias, eval_router, cases=cases, system_prompt=realistic_prompt
+        )
     except Exception as exc:
         return False, f"Eval failed: {type(exc).__name__}: {exc}"
 
+    extra_header_lines: list[str] = []
+    if suite == "realistic":
+        approx = realistic_meta.get("approx_tokens", 0)
+        comps = ", ".join(realistic_meta.get("components", [])) or "(none)"
+        extra_header_lines.append(
+            f"- Realistic prompt: ~{approx} tokens "
+            f"({realistic_meta.get('chars', 0)} chars; components: {comps})"
+        )
     try:
         from ..config import fitt_home as _fh
 
-        write_report(report, _fh(), suite=suite)
+        write_report(report, _fh(), suite=suite, extra_header_lines=extra_header_lines)
     except Exception:
         # Persistence failure shouldn't fail the action;
         # the report's already in memory and the audit
         # trail captures the run.
         pass
+    suffix = ""
+    if suite == "realistic" and realistic_meta:
+        suffix = f" (prompt ~{realistic_meta.get('approx_tokens', 0)} tokens)"
     return True, (
-        f"Eval ({suite}) ran — {report.passed}/{report.total} passed ({report.pass_rate:.0%})"
+        f"Eval ({suite}) ran — {report.passed}/{report.total} "
+        f"passed ({report.pass_rate:.0%}){suffix}"
     )
 
 

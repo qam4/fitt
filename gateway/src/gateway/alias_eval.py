@@ -325,16 +325,29 @@ async def run_eval_case(
     router: AliasRouter,
     *,
     timeout_s: float = 15.0,
+    system_prompt: str = "",
 ) -> CaseResult:
     """Dispatch one :class:`EvalCase` against ``alias`` and
     classify the response.
+
+    ``system_prompt`` (when non-empty) is inserted as a leading
+    system message before the case's user prompt. The default
+    and coding suites pass nothing here; the *realistic* suite
+    passes FITT's actual injected system prompt (capability
+    block + skills + identity + lessons) so the eval reflects
+    the prompt-size pressure live chat puts on the model — the
+    granite-incident diagnostic.
 
     Never raises; transport failures become ``transport_error``
     results. This matches the probe's contract so operators
     running a 20-case suite get a full report even when one
     alias is unreachable."""
+    messages: list[dict[str, Any]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": case.prompt})
     request_body: dict[str, Any] = {
-        "messages": [{"role": "user", "content": case.prompt}],
+        "messages": messages,
         "tools": case.tools,
         "tool_choice": "auto",
         "stream": False,
@@ -465,9 +478,15 @@ async def run_eval_suite(
     *,
     cases: list[EvalCase] | None = None,
     timeout_s: float = 15.0,
+    system_prompt: str = "",
 ) -> EvalReport:
     """Run every case in ``cases`` (or the default suite) against
     ``alias``, sequentially.
+
+    ``system_prompt`` (when non-empty) is threaded into every
+    case as a leading system message — used by the *realistic*
+    suite to reproduce FITT's live injected prompt. Default and
+    coding suites leave it empty.
 
     Sequential rather than concurrent: most aliases share a
     single backend quota (NIM free tier, OpenRouter's rate
@@ -481,7 +500,9 @@ async def run_eval_suite(
     model_id: str | None = None
 
     for case in cases:
-        r = await run_eval_case(case, alias, router, timeout_s=timeout_s)
+        r = await run_eval_case(
+            case, alias, router, timeout_s=timeout_s, system_prompt=system_prompt
+        )
         results.append(r)
         # Best-effort: capture the model id from the first
         # successful dispatch. We don't re-resolve per case
@@ -506,9 +527,17 @@ async def run_eval_suite(
 # --------------------------------------------------------------- report
 
 
-def render_report_markdown(report: EvalReport) -> str:
+def render_report_markdown(
+    report: EvalReport, *, extra_header_lines: list[str] | None = None
+) -> str:
     """Render an :class:`EvalReport` as a human-first markdown
     string suitable for writing to disk or piping to a pager.
+
+    ``extra_header_lines`` (optional) are inserted into the
+    header block after the Result line — used by the realistic
+    suite to record the injected-prompt token count and which
+    components were present, so the report is honest about what
+    prompt size it measured.
 
     Format: header with alias + model + timing + pass rate, then
     one section per case with status, latency, and — for
@@ -525,6 +554,8 @@ def render_report_markdown(report: EvalReport) -> str:
     lines.append(
         f"- Result: **{report.passed}/{report.total} passed** ({report.pass_rate * 100:.0f}%)"
     )
+    for extra in extra_header_lines or []:
+        lines.append(extra)
     lines.append("")
     lines.append("## Cases")
     lines.append("")
@@ -560,7 +591,11 @@ def default_eval_dir(fitt_home: Path) -> Path:
 
 
 def write_report(
-    report: EvalReport, fitt_home: Path, *, suite: str = "default"
+    report: EvalReport,
+    fitt_home: Path,
+    *,
+    suite: str = "default",
+    extra_header_lines: list[str] | None = None,
 ) -> tuple[Path, Path]:
     """Persist ``report`` to both the timestamped audit-trail
     file and the rolling per-alias latest-report file.
@@ -578,12 +613,16 @@ def write_report(
     * Any other suite name slugs into ``<alias>-<suite>-...``
       with a forward-compatible naming.
 
+    ``extra_header_lines`` ride through to
+    :func:`render_report_markdown` (realistic suite uses this
+    for the injected-prompt token count).
+
     Returns the ``(timestamped_path, rolling_path)`` pair so
     the CLI can tell the operator exactly where the output
     landed."""
     eval_dir = default_eval_dir(fitt_home)
     eval_dir.mkdir(parents=True, exist_ok=True)
-    body = render_report_markdown(report)
+    body = render_report_markdown(report, extra_header_lines=extra_header_lines)
     ts = report.finished_at.strftime("%Y-%m-%dT%H-%M-%S")
     suffix = "" if suite == "default" else f"-{suite}"
     timestamped = eval_dir / f"{report.alias}{suffix}-{ts}.md"

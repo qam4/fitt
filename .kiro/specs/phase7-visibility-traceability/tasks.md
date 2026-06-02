@@ -805,11 +805,25 @@ two-week Principle 9 window plus per-item readiness checks.
 
 Other tracked followups (not dashboard-specific):
 
-- [ ] F1. **Realistic-prompt eval mode.**
-       `fitt eval alias <name> --realistic` constructs the
-       system prompt the way live chat does. The diff
-       between bare and realistic is the diagnostic Phase
-       7 makes possible but doesn't ship. Half day.
+- [x] F1. **Realistic-prompt eval mode.**
+       Shipped 2026-05-28 as the `realistic` eval *suite*
+       (not a `--realistic` flag — the suite shape reuses the
+       existing CLI/endpoint/dashboard plumbing built for
+       `coding`). Runs the default cases (FITT's own tool
+       names) under FITT's live injected system prompt
+       (capability block + skills + identity + lessons,
+       assembled from `app.state` by
+       `eval_endpoint.build_realistic_system_prompt`). The
+       report header records the prompt's approx token count
+       and which components were present, so a verdict can say
+       "narrated at ~5.2K tokens" like the granite write-up.
+       Dashboard + `POST /v1/eval/<alias>?suite=realistic`
+       only; CLI deferred (the CLI runs in a throwaway process
+       without a tool registry / memory store, so reproducing
+       the live prompt there is extra wiring nobody's asked
+       for yet). The diff between the `default` suite (bare
+       prompt) and `realistic` is the granite-incident
+       diagnostic.
 - [ ] F2. **Prompt-budget eval mode.**
        `--prompt-budget <tokens>` runs the suite at
        multiple synthetic prompt sizes. Half day after F1.

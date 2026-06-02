@@ -66,9 +66,10 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="alias" value="{{ row.id }}">
             <select name="suite" style="font-size: 11px; padding: 1px 4px;"
-                    title="Suite: default = FITT tool-call discipline; coding = router-mode coding-agent prompt">
+                    title="Suite: default = FITT tool-call discipline; coding = router-mode coding-agent prompt; realistic = FITT's live system prompt">
               <option value="default">default</option>
               <option value="coding">coding</option>
+              <option value="realistic">realistic</option>
             </select>
             <button type="submit" style="font-size: 11px; padding: 2px 8px;"
                     title="Run the eval suite — long-running (~30-60s)">

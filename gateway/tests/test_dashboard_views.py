@@ -832,6 +832,60 @@ def test_aliases_panel_includes_reprobe_button(client: TestClient) -> None:
     assert "Re-probe aliases" in r.text
 
 
+def test_aliases_panel_suite_picker_includes_realistic(client: TestClient) -> None:
+    """The suite dropdown now offers the realistic suite too."""
+    r = client.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    assert '<option value="realistic">' in r.text
+
+
+def test_eval_view_renders_realistic_suite_block(tmp_path: Path) -> None:
+    """The eval detail view shows a third suite block for the
+    realistic suite when its report exists."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    realistic_cases = [
+        {
+            "name": "read_file_basic",
+            "status": "narrated",
+            "latency_ms": 1400,
+            "detail": "model replied with 512 chars instead of emitting tool_calls",
+            "finish_reason": "stop",
+        },
+        {
+            "name": "grep_repo_basic",
+            "status": "pass",
+            "latency_ms": 600,
+            "tool_called": "grep_repo",
+        },
+        {
+            "name": "tool_disambiguation",
+            "status": "pass",
+            "latency_ms": 700,
+            "tool_called": "read_file",
+        },
+        {"name": "no_tool_small_talk", "status": "pass", "latency_ms": 300},
+        {
+            "name": "list_capabilities_meta",
+            "status": "pass",
+            "latency_ms": 410,
+            "tool_called": "list_capabilities",
+        },
+    ]
+    _write_eval_report_with_suite(
+        tmp_path, "fitt-default", suite="realistic", cases=realistic_cases
+    )
+
+    r = tc.get("/dashboard/eval/fitt-default", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "Realistic" in body
+    # The narrated tool-required case drives a risky verdict.
+    assert "Risky" in body
+
+
 def test_reprobe_action_refreshes_results(tmp_path: Path) -> None:
     """F20: the re-probe action re-runs probe_all_aliases and
     updates app.state.alias_probe_results in place — no gateway

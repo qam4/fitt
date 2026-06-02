@@ -213,5 +213,87 @@ def test_eval_rejects_unknown_suite(client: TestClient) -> None:
     assert "coding" in detail["error"]["available"]
 
 
+def test_eval_accepts_realistic_suite_and_records_prompt_size(tmp_path: Path) -> None:
+    """``?suite=realistic`` runs the default cases under FITT's
+    live system prompt and records the prompt's token count in
+    the summary + the persisted report."""
+    from gateway.alias_eval import default_eval_dir
+    from gateway.config import fitt_home
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app)
+
+    captured: dict[str, Any] = {}
+    report = _make_report("fitt-default")
+
+    async def _stub(*args: Any, **kwargs: Any) -> EvalReport:
+        # The realistic suite must pass a non-empty system_prompt.
+        captured["system_prompt"] = kwargs.get("system_prompt", "")
+        return report
+
+    with patch("gateway.eval_endpoint.run_eval_suite", side_effect=_stub):
+        r = tc.post("/v1/eval/fitt-default?suite=realistic", headers=_auth())
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["suite"] == "realistic"
+    # The realistic prompt metadata is in the response.
+    assert "realistic_prompt" in body
+    assert "approx_tokens" in body["realistic_prompt"]
+    assert "components" in body["realistic_prompt"]
+    # A non-empty system prompt reached the runner (the test
+    # app registers inline tools, so the capability block is
+    # always present).
+    assert captured["system_prompt"]
+    assert "capability_block" in body["realistic_prompt"]["components"]
+    # The persisted report carries the realistic-prompt header.
+    eval_dir = default_eval_dir(fitt_home())
+    rolling = eval_dir / "fitt-default-realistic-latest.md"
+    assert rolling.exists()
+    assert "Realistic prompt:" in rolling.read_text(encoding="utf-8")
+
+
+def test_realistic_suite_in_unknown_suite_available_list(client: TestClient) -> None:
+    """The 400 envelope for a bad suite now lists realistic."""
+    r = client.post("/v1/eval/fitt-default?suite=bogus", headers=_auth())
+    assert r.status_code == 400
+    assert "realistic" in r.json()["detail"]["error"]["available"]
+
+
+# --------------------------------------------------------------- realistic prompt builder
+
+
+def test_build_realistic_system_prompt_includes_capability_block(tmp_path: Path) -> None:
+    """The builder reads app.state and assembles the capability
+    block (always present in the test app) plus whatever memory
+    is configured."""
+    from gateway.eval_endpoint import build_realistic_system_prompt
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+
+    prompt, meta = build_realistic_system_prompt(app.state)
+    assert prompt  # non-empty
+    assert "capability_block" in meta["components"]
+    assert meta["approx_tokens"] > 0
+    assert meta["chars"] == len(prompt)
+    # The capability block names at least one real tool.
+    assert "read_file" in prompt or "Capabilities" in prompt
+
+
+def test_build_realistic_system_prompt_token_estimate(tmp_path: Path) -> None:
+    """approx_tokens is chars/4 — the documented heuristic."""
+    from gateway.eval_endpoint import build_realistic_system_prompt
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+
+    prompt, meta = build_realistic_system_prompt(app.state)
+    assert meta["approx_tokens"] == len(prompt) // 4
+
+
 # --------------------------------------------------------------- helpers
 # (None needed; tests use inline async stubs as side_effect.)
