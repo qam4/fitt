@@ -175,7 +175,8 @@ async def run_eval(
 
     Returns ``404`` for an unknown alias, ``400`` for an unknown
     suite. Any other failure is captured in per-case
-    ``transport_error`` results — the suite never throws."""
+    dispatch-failure results (the shared Phase 7.6 taxonomy) —
+    the suite never throws."""
     config = request.app.state.config
 
     if alias not in config.alias_names():

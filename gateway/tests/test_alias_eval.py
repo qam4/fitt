@@ -5,7 +5,9 @@ Four concerns:
 * Per-case classification matches the shape-level rules. Happy
   path (right tool called), wrong_tool, narrated (positive
   case with text instead of tool_calls), no_tool_expected_but_called
-  (negative case with a tool), truncated, transport_error.
+  (negative case with a tool), truncated, empty_reply, and the
+  shared dispatch-failure taxonomy (upstream_silent / unreachable
+  / upstream_server_error).
 * Suite aggregation: pass / fail counts, pass_rate math,
   model_id capture.
 * Report rendering: human-readable markdown with the fields
@@ -380,7 +382,10 @@ async def test_negative_case_fails_when_tool_unexpectedly_called(
     assert r.tool_called == "read_file"
 
 
-async def test_dispatch_exception_becomes_transport_error(tmp_path: Path) -> None:
+async def test_dispatch_exception_becomes_server_error(tmp_path: Path) -> None:
+    """A bare (non-HTTP) dispatch exception classifies via the
+    shared taxonomy as ``upstream_server_error`` — the catch-all
+    for transport failures with no status code (Phase 7.6)."""
     cfg = _cfg(tmp_path)
     router = _StubRouter(cfg)
     case = EvalCase(
@@ -392,11 +397,17 @@ async def test_dispatch_exception_becomes_transport_error(tmp_path: Path) -> Non
     router.set_for_prompt(case.prompt, RuntimeError("connection refused"))
 
     r = await run_eval_case(case, "fitt-smart", router)  # type: ignore[arg-type]
-    assert r.status == "transport_error"
+    assert r.status == "upstream_server_error"
     assert "connection refused" in r.detail
 
 
-async def test_timeout_becomes_transport_error(tmp_path: Path) -> None:
+async def test_timeout_reachable_becomes_upstream_silent(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """A timeout whose endpoint still answers a reachability
+    ping is ``upstream_silent`` (slow / cold-loading), not a
+    transport failure (Phase 7.6 Decision 2)."""
     cfg = _cfg(tmp_path)
     router = _StubRouter(cfg)
     case = EvalCase(
@@ -411,14 +422,64 @@ async def test_timeout_becomes_transport_error(tmp_path: Path) -> None:
         return DispatchResult(None, None, cfg.models[0], False)
 
     router.set_for_prompt(case.prompt, slow)
+
+    from gateway import alias_eval
+    from gateway.reachability import ReachabilityResult
+
+    async def fake_reachable(model: Any, **_: Any) -> ReachabilityResult:
+        return ReachabilityResult(model.id, True, 42)
+
+    monkeypatch.setattr(alias_eval, "check_reachable_standalone", fake_reachable)
+
     r = await run_eval_case(
         case,
         "fitt-smart",
         router,
         timeout_s=0.05,  # type: ignore[arg-type]
     )
-    assert r.status == "transport_error"
-    assert "timed out" in r.detail
+    assert r.status == "upstream_silent"
+    assert r.reachable is True
+    assert "reachable" in r.detail
+
+
+async def test_timeout_unreachable_becomes_unreachable(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    """A timeout whose endpoint also fails the reachability ping
+    is ``unreachable`` (host down)."""
+    cfg = _cfg(tmp_path)
+    router = _StubRouter(cfg)
+    case = EvalCase(
+        name="t9",
+        prompt="read",
+        tools=[_read_file_tool()],
+        expected_tool="read_file",
+    )
+
+    async def slow() -> DispatchResult:
+        await asyncio.sleep(10.0)
+        return DispatchResult(None, None, cfg.models[0], False)
+
+    router.set_for_prompt(case.prompt, slow)
+
+    from gateway import alias_eval
+    from gateway.reachability import ReachabilityResult
+
+    async def fake_unreachable(model: Any, **_: Any) -> ReachabilityResult:
+        return ReachabilityResult(model.id, False, 2500, detail="connect timeout")
+
+    monkeypatch.setattr(alias_eval, "check_reachable_standalone", fake_unreachable)
+
+    r = await run_eval_case(
+        case,
+        "fitt-smart",
+        router,
+        timeout_s=0.05,  # type: ignore[arg-type]
+    )
+    assert r.status == "unreachable"
+    assert r.reachable is False
+    assert "unreachable" in r.detail
 
 
 # --------------------------------------------------------------- suite

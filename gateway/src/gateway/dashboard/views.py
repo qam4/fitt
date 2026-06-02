@@ -504,6 +504,24 @@ _VERDICT_RISKY = "risky"
 _VERDICT_NOT_RECOMMENDED = "not_recommended"
 _VERDICT_INCOMPLETE = "incomplete"
 
+# Eval case statuses that mean "the dispatch didn't complete
+# cleanly" — the model never got a fair chance, so no verdict
+# can be drawn. Phase 7.6 replaced the single ``transport_error``
+# with the shared dispatch-outcome taxonomy plus ``empty_reply``.
+# Mirrors ``alias_eval.DISPATCH_FAILURE_STATUSES`` (kept local to
+# avoid the views layer importing the eval runner just for a
+# constant).
+_EVAL_DISPATCH_FAILURE_STATUSES: frozenset[str] = frozenset(
+    {
+        "upstream_silent",
+        "unreachable",
+        "upstream_rate_limited",
+        "upstream_client_error",
+        "upstream_server_error",
+        "empty_reply",
+    }
+)
+
 
 def _eval_verdict(parsed: dict[str, Any] | None) -> dict[str, str]:
     """Map a parsed eval report to a verdict bucket + reason.
@@ -532,9 +550,12 @@ def _eval_verdict(parsed: dict[str, Any] | None) -> dict[str, str]:
       binding will silently fail real Telegram tool turns.
     * ``not_recommended`` — multiple failures, or pass rate
       below 60%.
-    * ``incomplete`` — at least one ``transport_error``;
-      can't make a verdict until the model is reachable
-      and the suite re-runs cleanly.
+    * ``incomplete`` — at least one dispatch-failure status
+      (``upstream_silent`` / ``unreachable`` /
+      ``upstream_rate_limited`` / ``upstream_client_error`` /
+      ``upstream_server_error`` / ``empty_reply``); can't make a
+      verdict until the model is reachable, warm, and the suite
+      re-runs cleanly.
     """
     if parsed is None or not parsed.get("cases"):
         return {
@@ -546,20 +567,21 @@ def _eval_verdict(parsed: dict[str, Any] | None) -> dict[str, str]:
     cases: list[dict[str, Any]] = parsed["cases"]
     statuses = [c.get("status", "") for c in cases]
     failed = [s for s in statuses if s != "pass"]
-    transport_errors = [s for s in statuses if s == "transport_error"]
+    dispatch_failures = [s for s in statuses if s in _EVAL_DISPATCH_FAILURE_STATUSES]
     narrated = [s for s in statuses if s == "narrated"]
     truncated = [s for s in statuses if s == "truncated"]
     over_eager = [s for s in statuses if s == "no_tool_expected_but_called"]
     wrong_tool = [s for s in statuses if s == "wrong_tool"]
 
-    if transport_errors:
+    if dispatch_failures:
         return {
             "label": "Incomplete",
             "tone": _VERDICT_INCOMPLETE,
             "reason": (
-                f"{len(transport_errors)} case(s) failed to dispatch. "
-                "The model wasn't reachable when eval ran — re-test after "
-                "the model is warm."
+                f"{len(dispatch_failures)} case(s) failed to dispatch "
+                "cleanly (slow/cold-loading, unreachable, rate-limited, or "
+                "empty reply). The model wasn't given a fair chance — "
+                "re-test after the model is warm and reachable."
             ),
         }
 

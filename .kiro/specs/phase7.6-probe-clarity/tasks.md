@@ -182,16 +182,20 @@ per-alias probe.
 Goal: eval's failure side stops saying `transport_error`; the
 verdict maps the new statuses sensibly.
 
-- [ ] 5a. `alias_eval.py`: `run_eval_case` failure side —
+- [x] 5a. `alias_eval.py`: `run_eval_case` failure side —
        timeout → reachability-disambiguated `upstream_silent` /
        `unreachable`; other dispatch exceptions →
        `classify_dispatch_exception`. Keep success-shape
-       statuses. (Req 1.5)
-- [ ] 5b. `_eval_verdict` (dashboard views): map `unreachable`
+       statuses. (Req 1.5) Also: empty-reply branch → dedicated
+       `empty_reply` (matches the probe); added
+       `DISPATCH_FAILURE_STATUSES` + `reachable` field.
+- [x] 5b. `_eval_verdict` (dashboard views): map `unreachable`
        to an "incomplete — couldn't reach" verdict (not
-       "risky"); `upstream_silent` to incomplete/transient.
-- [ ] 5c. Extend `test_alias_eval.py` + the verdict tests.
-- [ ] 5d. ruff/mypy/pytest green.
+       "risky"); `upstream_silent` to incomplete/transient. Done
+       via `_EVAL_DISPATCH_FAILURE_STATUSES` (whole dispatch-
+       failure set → Incomplete).
+- [x] 5c. Extend `test_alias_eval.py` + the verdict tests.
+- [x] 5d. ruff/mypy/pytest green.
 - [ ] 5e. Commit: `eval: adopt shared failure taxonomy`.
 
 ## Commit 6 — Unified per-alias dashboard page

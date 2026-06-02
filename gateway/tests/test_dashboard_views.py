@@ -482,17 +482,18 @@ def test_eval_view_risky_on_narrated_tool_required_case(tmp_path: Path) -> None:
     assert "read_file" in r.text
 
 
-def test_eval_view_incomplete_on_transport_error(tmp_path: Path) -> None:
-    """One transport_error → can't make a verdict yet."""
+def test_eval_view_incomplete_on_dispatch_failure(tmp_path: Path) -> None:
+    """One dispatch-failure case (Phase 7.6 taxonomy) → can't
+    make a verdict yet."""
     cases = [
         _PASS_CASE,
         _PASS_CASE_2,
         _PASS_CASE_3,
         {
             "name": "no_tool_small_talk",
-            "status": "transport_error",
+            "status": "unreachable",
             "latency_ms": 15000,
-            "detail": "TimeoutError: timed out after 15s",
+            "detail": "timed out after 15s and endpoint is unreachable",
         },
         _PASS_CASE_5,
     ]

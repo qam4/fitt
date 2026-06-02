@@ -92,6 +92,8 @@ from .agent_loop import (
     extract_tool_calls,
     response_to_dict,
 )
+from .dispatch_outcome import classify_dispatch_exception
+from .reachability import check_reachable_standalone
 
 if TYPE_CHECKING:
     from .router import AliasRouter
@@ -139,8 +141,32 @@ CaseStatus = Literal[
     "narrated",
     "no_tool_expected_but_called",
     "truncated",
-    "transport_error",
+    "empty_reply",
+    "upstream_silent",
+    "unreachable",
+    "upstream_rate_limited",
+    "upstream_client_error",
+    "upstream_server_error",
 ]
+
+
+# Statuses that mean "the dispatch didn't complete cleanly" —
+# the model never got a fair chance to answer, so a verdict
+# can't be drawn from them. Phase 7.6 replaced the single
+# ``transport_error`` with the shared dispatch-outcome taxonomy
+# (plus ``empty_reply`` for the dispatch-succeeded-but-said-
+# nothing anomaly). The dashboard verdict treats this whole set
+# as "incomplete".
+DISPATCH_FAILURE_STATUSES: frozenset[str] = frozenset(
+    {
+        "upstream_silent",
+        "unreachable",
+        "upstream_rate_limited",
+        "upstream_client_error",
+        "upstream_server_error",
+        "empty_reply",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +186,16 @@ class CaseResult:
       the model reached for a tool anyway. Useful signal when
       an alias is over-eager.
     * ``truncated``: response hit ``finish_reason=length``.
-    * ``transport_error``: dispatch raised or timed out.
+    * ``empty_reply``: dispatch succeeded but the model returned
+      an empty reply with no tool_calls — a model-behavior
+      anomaly, distinct from a transport failure.
+    * dispatch-failure statuses (``upstream_silent`` /
+      ``unreachable`` / ``upstream_rate_limited`` /
+      ``upstream_client_error`` / ``upstream_server_error``):
+      the dispatch raised or timed out. Phase 7.6 classifies
+      these via the shared :mod:`gateway.dispatch_outcome`
+      taxonomy (and, on a timeout, a reachability ping) instead
+      of the old flat ``transport_error``.
     """
 
     case_name: str
@@ -170,6 +205,7 @@ class CaseResult:
     tool_called: str | None = None
     finish_reason: str | None = None
     reply_preview: str = ""
+    reachable: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,10 +374,11 @@ async def run_eval_case(
     the prompt-size pressure live chat puts on the model — the
     granite-incident diagnostic.
 
-    Never raises; transport failures become ``transport_error``
-    results. This matches the probe's contract so operators
-    running a 20-case suite get a full report even when one
-    alias is unreachable."""
+    Never raises; dispatch failures become classified results
+    (the shared Phase 7.6 taxonomy: ``upstream_silent`` /
+    ``unreachable`` / ``upstream_server_error`` / ...). This
+    matches the probe's contract so operators running a 20-case
+    suite get a full report even when one alias is unreachable."""
     messages: list[dict[str, Any]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -357,17 +394,21 @@ async def run_eval_case(
     try:
         dispatch = await asyncio.wait_for(router.dispatch(alias, request_body), timeout=timeout_s)
     except TimeoutError:
-        return CaseResult(
-            case_name=case.name,
-            status="transport_error",
-            detail=f"timed out after {int(timeout_s)}s",
-            latency_ms=int((perf_counter() - started) * 1000),
-        )
+        # Ambiguous on its own: the host could be cold-loading
+        # (reachable, slow) or down. Disambiguate with a cheap
+        # reachability ping — same logic the probe uses (Phase
+        # 7.6 Decision 2).
+        latency_ms = int((perf_counter() - started) * 1000)
+        return await _classify_case_timeout(case, alias, router, timeout_s, latency_ms)
     except Exception as exc:
+        # Non-timeout dispatch failure (transport, auth, 5xx).
+        # Classify via the shared taxonomy so the eval status
+        # matches what the chat path reports for the same error.
+        outcome = classify_dispatch_exception(exc)
         return CaseResult(
             case_name=case.name,
-            status="transport_error",
-            detail=f"{type(exc).__name__}: {exc}",
+            status=outcome.status,
+            detail=f"{outcome.error_class}: {outcome.error_detail}",
             latency_ms=int((perf_counter() - started) * 1000),
         )
 
@@ -462,13 +503,64 @@ async def run_eval_case(
             finish_reason=finish_reason,
             reply_preview=_preview(reply),
         )
-    # Empty-ish reply + no tool call: transport-class anomaly.
+    # Empty-ish reply + no tool call. The dispatch *succeeded* —
+    # the model just produced nothing useful — so this is the
+    # model-behavior ``empty_reply`` anomaly, distinct from a
+    # transport failure (Phase 7.6, matches the probe).
     return CaseResult(
         case_name=case.name,
-        status="transport_error",
+        status="empty_reply",
         detail="empty reply and no tool_calls",
         latency_ms=latency_ms,
         finish_reason=finish_reason,
+    )
+
+
+async def _classify_case_timeout(
+    case: EvalCase,
+    alias: str,
+    router: AliasRouter,
+    timeout_s: float,
+    latency_ms: int,
+) -> CaseResult:
+    """Turn an eval-case timeout into ``upstream_silent``
+    (endpoint reachable, model slow / cold-loading) or
+    ``unreachable`` (host down) via a reachability ping against
+    the alias's resolved primary model. Falls back to
+    ``upstream_silent`` if the alias can't be resolved — a
+    timeout most often means slow, not down."""
+    try:
+        primary = router.resolve(alias)[0]
+    except Exception:
+        return CaseResult(
+            case_name=case.name,
+            status="upstream_silent",
+            detail=f"timed out after {int(timeout_s)}s (alias unresolved)",
+            latency_ms=latency_ms,
+        )
+
+    reach = await check_reachable_standalone(primary)
+    if reach.reachable:
+        return CaseResult(
+            case_name=case.name,
+            status="upstream_silent",
+            detail=(
+                f"timed out after {int(timeout_s)}s but endpoint is "
+                f"reachable ({reach.latency_ms}ms ping) — model is likely "
+                "cold-loading or queuing for VRAM"
+            ),
+            latency_ms=latency_ms,
+            reachable=True,
+        )
+    return CaseResult(
+        case_name=case.name,
+        status="unreachable",
+        detail=(
+            f"timed out after {int(timeout_s)}s and endpoint is "
+            f"unreachable: {reach.detail or 'no response'}"
+        ),
+        latency_ms=latency_ms,
+        reachable=False,
     )
 
 
@@ -505,9 +597,10 @@ async def run_eval_suite(
         )
         results.append(r)
         # Best-effort: capture the model id from the first
-        # successful dispatch. We don't re-resolve per case
-        # because AliasRouter already handles fallback per call.
-        if model_id is None and r.status != "transport_error":
+        # dispatch that wasn't a dispatch-level failure. We don't
+        # re-resolve per case because AliasRouter already handles
+        # fallback per call.
+        if model_id is None and r.status not in DISPATCH_FAILURE_STATUSES:
             try:
                 primary = router.resolve(alias)[0]
                 model_id = primary.id
