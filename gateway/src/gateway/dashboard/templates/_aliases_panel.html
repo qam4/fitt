@@ -22,8 +22,9 @@
   </form>
   <span class="dim" style="font-size: 11px;">
     Context refresh re-runs <code>fitt context refresh</code>;
-    re-probe re-runs the boot-time tool-call probe (recovers a
-    stale <code>transport_error</code> without a gateway restart).
+    re-probe re-runs the boot-time tool-call probe one endpoint
+    at a time (recovers a stale failure without a gateway
+    restart). Click an alias for full probe + eval detail.
   </span>
 </div>
 
@@ -36,9 +37,9 @@
         <th>Alias</th>
         <th>Model</th>
         <th>Backend</th>
+        <th>Endpoint</th>
         <th class="right">Context window</th>
-        <th>Source</th>
-        <th>Last probe</th>
+        <th>Probe</th>
         <th class="right">Last eval</th>
         <th class="right">Dispatched 24h</th>
         <th></th>
@@ -48,16 +49,13 @@
     {% for row in alias_rows %}
       <tr>
         <td><span class="pip pip-{{ row.pip }}"></span></td>
-        <td class="mono">{{ row.id }}</td>
+        <td class="mono"><a href="/dashboard/alias/{{ row.id }}">{{ row.id }}</a></td>
         <td class="mono">{{ row.model }}{% if row.fallback %}<br><span class="dim" style="font-size: 11px;">fallback: {{ row.fallback }}</span>{% endif %}</td>
         <td class="mono dim">{{ row.backend }}</td>
-        <td class="right mono">{{ row.context_window_human }}</td>
-        <td class="dim mono">{{ row.context_source }}</td>
-        <td class="dim">
-          {{ row.last_probe_text }}
-          {% if row.last_probe_detail %}
-          <br><span class="dim" style="font-size: 10px;" title="{{ row.last_probe_detail }}">{{ row.last_probe_detail|truncate(80) }}</span>
-          {% endif %}
+        <td class="mono dim" style="font-size: 11px;">{{ row.endpoint }}</td>
+        <td class="right mono">{{ row.context_window_human }}<br><span class="dim" style="font-size: 10px;">{{ row.context_source }}</span></td>
+        <td class="mono" style="font-size: 12px;">
+          <a href="/dashboard/alias/{{ row.id }}" class="bare">{{ row.probe_summary }}</a>
         </td>
         <td class="right">{{ row.last_eval_text|safe }}</td>
         <td class="right mono">{{ row.dispatched_24h }}</td>

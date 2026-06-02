@@ -235,19 +235,22 @@ detail + endpoint + "shares with".
 Goal: the aliases table becomes a clean index pointing at the
 alias page.
 
-- [ ] 7a. `_build_aliases_context`: add `endpoint`; build the
+- [x] 7a. `_build_aliases_context`: add `endpoint`; build the
        compact probe summary (`✓ 1.2s` / `⏳ slow 10s+` /
        `✗ unreachable`); compute the amber/red/green/grey pip
        from the expanded status set. (Req 7.1, 8.1-8.4, 5.2)
-- [ ] 7b. `_aliases_panel.html`: add endpoint column; replace
+       (Helpers `_probe_pip` / `_probe_summary` landed in
+       Commit 6; this wires them into the table context.)
+- [x] 7b. `_aliases_panel.html`: add endpoint column; replace
        the F19 inline probe-detail tooltip with the compact
        summary linking to `/dashboard/alias/<id>`; eval badge
        links to the alias page. Remove the now-redundant inline
-       detail. (Req 7.1, 7.2, 7.3)
-- [ ] 7c. Tests: endpoint column present; compact probe summary
+       detail. (Req 7.1, 7.2, 7.3) Alias id is now a link too;
+       context source moved under the token count.
+- [x] 7c. Tests: endpoint column present; compact probe summary
        + link; pip color per status; no full probe detail inline.
        (Req 7, 8)
-- [ ] 7d. ruff/mypy/pytest green.
+- [x] 7d. ruff/mypy/pytest green.
 - [ ] 7e. Commit: `dashboard: lean aliases table + endpoint column`.
 
 ## Commit 8 — Docs

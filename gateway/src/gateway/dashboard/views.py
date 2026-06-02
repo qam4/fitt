@@ -294,10 +294,12 @@ def _format_eval_cell(alias: str, report: dict[str, Any] | None) -> str:
     Caller marks the value safe in the template.
 
     Pre-F18 this just rendered the badge; F18 wraps it in a
-    link to ``/dashboard/eval/<alias>`` so the operator can
-    drill into per-case detail without dropping to the CLI.
-    The "—" placeholder for missing reports stays unlinked
-    because there's nothing to drill into."""
+    link to the per-alias detail view so the operator can drill
+    into per-case detail without dropping to the CLI. Phase 7.6:
+    that detail now lives on the unified ``/dashboard/alias/<id>``
+    page (the eval section), so the badge links there. The "—"
+    placeholder for missing reports stays unlinked because
+    there's nothing to drill into."""
     if report is None:
         return '<span class="dim">—</span>'
     passed = report["passed"]
@@ -310,7 +312,7 @@ def _format_eval_cell(alias: str, report: dict[str, Any] | None) -> str:
     else:
         cls = "badge-error"
     badge = f'<span class="{cls}">{passed}/{total} ({pct}%)</span>'
-    return f'<a href="/dashboard/eval/{alias}" class="bare">{badge}</a>'
+    return f'<a href="/dashboard/alias/{alias}#eval" class="bare">{badge}</a>'
 
 
 def _count_dispatches_last_24h(audit: Any) -> dict[str, int]:
@@ -920,28 +922,16 @@ def _build_aliases_context(request: Request) -> dict[str, Any]:
                 cw_source = cw.source
 
         probe = probe_results.get(alias)
-        last_probe_detail = ""
-        if probe is not None and probe.status == "ok":
-            pip = "ok"
-            last_probe_text = "ok"
-        elif probe is not None and probe.status == "skipped_no_api_key":
-            pip = "warn"
-            last_probe_text = "skipped — no api_key"
-            last_probe_detail = getattr(probe, "detail", "") or ""
-        elif probe is not None:
-            pip = "error"
-            last_probe_text = probe.status
-            # F19: surface the probe's detail (exception class +
-            # message for transport_error, the narrated reply
-            # preview for narrated, etc.) so the operator sees
-            # *why* without dropping to docker compose logs.
-            last_probe_detail = getattr(probe, "detail", "") or ""
-            preview = getattr(probe, "reply_preview", "") or ""
-            if preview and not last_probe_detail:
-                last_probe_detail = preview
-        else:
-            pip = "unknown"
-            last_probe_text = "not probed"
+        # Phase 7.6 (Decision 7): the table is a lean index. The
+        # pip uses the amber/red split (environmental vs broken
+        # binding); the probe cell is a compact summary
+        # (✓ 1.2s / ⏳ slow 10s+ / ✗ unreachable) that links to
+        # the per-alias page. The full detail (exception class,
+        # narrated-reply preview, reachability facts) lives on
+        # that page, not crammed into this cell — the F19
+        # tooltip-stuffing is gone.
+        pip = _probe_pip(probe.status if probe is not None else None)
+        probe_summary = _probe_summary(probe)
 
         eval_report = _parse_eval_report(eval_dir / f"{alias}-latest.md")
 
@@ -951,11 +941,11 @@ def _build_aliases_context(request: Request) -> dict[str, Any]:
                 "model": primary.model,
                 "fallback": fallback.model if fallback else None,
                 "backend": primary.backend,
+                "endpoint": primary.endpoint or "—",
                 "context_window_human": (_fmt_tokens(cw_tokens) if cw_tokens is not None else "?"),
                 "context_source": cw_source,
                 "pip": pip,
-                "last_probe_text": last_probe_text,
-                "last_probe_detail": last_probe_detail,
+                "probe_summary": probe_summary,
                 "last_eval_text": _format_eval_cell(alias, eval_report),
                 "dispatched_24h": dispatch_counts.get(alias, 0),
             }

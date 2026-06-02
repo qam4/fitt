@@ -386,8 +386,9 @@ _PASS_CASE_5 = {
 
 
 def test_aliases_view_links_eval_badge_to_detail(tmp_path: Path) -> None:
-    """The pass-rate badge on the aliases tab is now wrapped
-    in a link to the per-alias eval detail view (F18)."""
+    """The pass-rate badge on the aliases tab is wrapped in a
+    link to the per-alias page (Phase 7.6: the eval detail lives
+    in that page's eval section)."""
     tc = _build_app_with_eval(
         tmp_path,
         "fitt-default",
@@ -395,7 +396,7 @@ def test_aliases_view_links_eval_badge_to_detail(tmp_path: Path) -> None:
     )
     r = tc.get("/dashboard/aliases", headers=_auth())
     assert r.status_code == 200
-    assert "/dashboard/eval/fitt-default" in r.text
+    assert "/dashboard/alias/fitt-default#eval" in r.text
 
 
 def test_eval_view_renders_for_known_alias(tmp_path: Path) -> None:
@@ -786,11 +787,56 @@ def test_aliases_panel_includes_suite_picker(tmp_path: Path) -> None:
 # ------------------------------------------------ F19/F20: probe detail + re-probe
 
 
-def test_aliases_view_surfaces_probe_failure_detail(client: TestClient) -> None:
-    """F19: a failed probe shows its detail (the exception class
-    + message) inline so the operator sees *why* without docker
-    compose logs. Phase 7.6: the status is the taxonomy's
-    ``unreachable`` rather than the old flat ``transport_error``."""
+def test_aliases_table_has_endpoint_column(client: TestClient) -> None:
+    """Phase 7.6 (Decision 7): the table surfaces the endpoint —
+    the previously-invisible primitive."""
+    r = client.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "Endpoint" in body
+    assert "http://laptop.tailnet:11434" in body
+
+
+def test_aliases_pip_amber_for_upstream_silent(client: TestClient) -> None:
+    """Decision 8: a cold-loading (upstream_silent) binding gets
+    an amber pip (environmental), not red (broken)."""
+    client.app.state.alias_probe_results = {
+        "fitt-default": ProbeResult(
+            alias="fitt-default",
+            status="upstream_silent",
+            detail="slow",
+            latency_ms=10000,
+            reachable=True,
+        )
+    }
+    r = client.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    # The fitt-default row carries pip-warn (amber), and the
+    # compact summary reads "slow".
+    assert "pip-warn" in r.text
+    assert "slow" in r.text
+
+
+def test_aliases_pip_red_for_unreachable(client: TestClient) -> None:
+    """Decision 8: an unreachable binding gets a red pip."""
+    client.app.state.alias_probe_results = {
+        "fitt-default": ProbeResult(
+            alias="fitt-default",
+            status="unreachable",
+            detail="down",
+            latency_ms=10000,
+            reachable=False,
+        )
+    }
+    r = client.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    assert "pip-error" in r.text
+
+
+def test_aliases_view_shows_compact_probe_summary(client: TestClient) -> None:
+    """Phase 7.6 (Decision 7): the aliases table shows a compact
+    probe summary (✗ unreachable), not the full inline detail —
+    the F19 tooltip-stuffing moved to the per-alias page."""
     client.app.state.alias_probe_results = {
         "fitt-default": ProbeResult(
             alias="fitt-default",
@@ -802,14 +848,42 @@ def test_aliases_view_surfaces_probe_failure_detail(client: TestClient) -> None:
     r = client.get("/dashboard/aliases", headers=_auth())
     assert r.status_code == 200
     body = r.text
+    # Compact summary present; full exception detail is NOT in
+    # the table (it lives on /dashboard/alias/<id> now).
+    assert "unreachable" in body
+    assert "All connection attempts failed" not in body
+
+
+def test_alias_page_shows_full_probe_failure_detail(tmp_path: Path) -> None:
+    """The full probe detail (exception class + message) the F19
+    table cell used to carry now lives on the per-alias page."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    app.state.alias_probe_results = {
+        "fitt-default": ProbeResult(
+            alias="fitt-default",
+            status="unreachable",
+            detail="ConnectionError: All connection attempts failed",
+            model_used="qwen3:14b",
+            reachable=False,
+        )
+    }
+    tc = TestClient(app, follow_redirects=False)
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
     assert "unreachable" in body
     assert "All connection attempts failed" in body
 
 
-def test_aliases_view_surfaces_narrated_probe_detail(client: TestClient) -> None:
-    """F19: a narrated probe surfaces its detail so the
-    operator sees the narration shape."""
-    client.app.state.alias_probe_results = {
+def test_alias_page_shows_narrated_probe_detail(tmp_path: Path) -> None:
+    """A narrated probe surfaces its detail + reply preview on
+    the per-alias page so the operator sees the narration shape."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    app.state.alias_probe_results = {
         "fitt-default": ProbeResult(
             alias="fitt-default",
             status="narrated",
@@ -818,7 +892,8 @@ def test_aliases_view_surfaces_narrated_probe_detail(client: TestClient) -> None
             reply_preview='```json {"name": "read_file"} ```',
         )
     }
-    r = client.get("/dashboard/aliases", headers=_auth())
+    tc = TestClient(app, follow_redirects=False)
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
     assert r.status_code == 200
     body = r.text
     assert "narrated" in body
