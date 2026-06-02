@@ -16,8 +16,14 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit">Refresh context windows</button>
   </form>
+  <form method="post" action="/dashboard/actions/reprobe-aliases" style="display: inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Re-probe aliases</button>
+  </form>
   <span class="dim" style="font-size: 11px;">
-    Re-runs <code>fitt context refresh</code> across every binding.
+    Context refresh re-runs <code>fitt context refresh</code>;
+    re-probe re-runs the boot-time tool-call probe (recovers a
+    stale <code>transport_error</code> without a gateway restart).
   </span>
 </div>
 
@@ -47,7 +53,12 @@
         <td class="mono dim">{{ row.backend }}</td>
         <td class="right mono">{{ row.context_window_human }}</td>
         <td class="dim mono">{{ row.context_source }}</td>
-        <td class="dim">{{ row.last_probe_text }}</td>
+        <td class="dim">
+          {{ row.last_probe_text }}
+          {% if row.last_probe_detail %}
+          <br><span class="dim" style="font-size: 10px;" title="{{ row.last_probe_detail }}">{{ row.last_probe_detail|truncate(80) }}</span>
+          {% endif %}
+        </td>
         <td class="right">{{ row.last_eval_text|safe }}</td>
         <td class="right mono">{{ row.dispatched_24h }}</td>
         <td class="right">

@@ -774,6 +774,35 @@ two-week Principle 9 window plus per-item readiness checks.
        if HTMX poll-every-5s is too coarse for an active
        debugging session.
 
+- [x] F18. **Dashboard eval report view + verdict.** The
+       aliases tab's "last eval" badge was a dead-end score;
+       clicking it now opens `/dashboard/eval/<alias>` with a
+       verdict banner (recommended / workable / risky / not
+       recommended / incomplete, computed from the failure
+       *pattern* not just the pass rate) and per-case detail
+       (status, latency, reply preview). The
+       `eval: coding-agent suite` commit added a second suite
+       block to the same view. *Shipped 2026-05-28 in commits
+       feb0980 (F18) + b71bc3f (coding suite).*
+
+- [x] F19. **Probe transport_error detail in the aliases
+       column.** The "Last probe" cell showed only the bare
+       status word (`transport_error`); the `detail` field
+       (exception class + message, or the narrated reply
+       preview) now renders inline + as a tooltip so the
+       operator sees *why* without `docker compose logs`.
+       *Shipped 2026-05-28.*
+
+- [x] F20. **Re-probe button.** The boot probe runs once at
+       gateway start and caches; a binding that was
+       unreachable at boot (Ollama cold-loading, satellite
+       asleep) showed `transport_error` until the next
+       restart. A "Re-probe aliases" button on the aliases
+       tab re-runs `probe_all_aliases` against the live
+       router and refreshes `app.state.alias_probe_results`
+       in place — no restart. Rides F10's CSRF + F16's typed-
+       action substrate. *Shipped 2026-05-28.*
+
 Other tracked followups (not dashboard-specific):
 
 - [ ] F1. **Realistic-prompt eval mode.**

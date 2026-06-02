@@ -782,6 +782,104 @@ def test_aliases_panel_includes_suite_picker(tmp_path: Path) -> None:
     assert '<option value="coding"' in body
 
 
+# ------------------------------------------------ F19/F20: probe detail + re-probe
+
+
+def test_aliases_view_surfaces_probe_transport_error_detail(client: TestClient) -> None:
+    """F19: a transport_error probe shows its detail (the
+    exception class + message) inline so the operator sees
+    *why* without docker compose logs."""
+    client.app.state.alias_probe_results = {
+        "fitt-default": ProbeResult(
+            alias="fitt-default",
+            status="transport_error",
+            detail="ConnectionError: All connection attempts failed",
+            model_used="qwen3:14b",
+        )
+    }
+    r = client.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "transport_error" in body
+    assert "All connection attempts failed" in body
+
+
+def test_aliases_view_surfaces_narrated_probe_detail(client: TestClient) -> None:
+    """F19: a narrated probe surfaces its detail so the
+    operator sees the narration shape."""
+    client.app.state.alias_probe_results = {
+        "fitt-default": ProbeResult(
+            alias="fitt-default",
+            status="narrated",
+            detail="model replied with text instead of emitting a tool call",
+            model_used="granite3.3:8b",
+            reply_preview='```json {"name": "read_file"} ```',
+        )
+    }
+    r = client.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    assert "narrated" in body
+    assert "text instead of emitting" in body
+
+
+def test_aliases_panel_includes_reprobe_button(client: TestClient) -> None:
+    """F20: the aliases tab has a 'Re-probe aliases' button
+    posting to the typed-action route."""
+    r = client.get("/dashboard/aliases", headers=_auth())
+    assert r.status_code == 200
+    assert "/dashboard/actions/reprobe-aliases" in r.text
+    assert "Re-probe aliases" in r.text
+
+
+def test_reprobe_action_refreshes_results(tmp_path: Path) -> None:
+    """F20: the re-probe action re-runs probe_all_aliases and
+    updates app.state.alias_probe_results in place — no gateway
+    restart needed."""
+    from unittest.mock import patch
+
+    from gateway.alias_probe import ProbeResult as PR
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    # Seed a stale transport_error so we can prove it clears.
+    app.state.alias_probe_results = {
+        "fitt-default": PR(
+            alias="fitt-default",
+            status="transport_error",
+            detail="stale",
+        )
+    }
+
+    fresh = [
+        PR(alias="fitt-default", status="ok", detail="ok now", model_used="m"),
+    ]
+
+    async def _stub(*_a: Any, **_k: Any) -> list[PR]:
+        return fresh
+
+    r = tc.get("/dashboard/aliases")
+    csrf = _csrf_from(r.text)
+
+    with patch("gateway.alias_probe.probe_all_aliases", side_effect=_stub):
+        r = tc.post(
+            "/dashboard/actions/reprobe-aliases",
+            data={"csrf_token": csrf},
+        )
+    assert r.status_code == 303
+    assert "/dashboard/aliases" in r.headers["location"]
+    assert app.state.alias_probe_results["fitt-default"].status == "ok"
+
+
+def test_reprobe_action_redirects_without_auth(client: TestClient) -> None:
+    r = client.post("/dashboard/actions/reprobe-aliases", data={"csrf_token": "x"})
+    assert r.status_code in (302, 303)
+
+
 # --------------------------------------------------------------- turns view
 
 

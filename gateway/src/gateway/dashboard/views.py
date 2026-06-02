@@ -725,15 +725,25 @@ def _build_aliases_context(request: Request) -> dict[str, Any]:
                 cw_source = cw.source
 
         probe = probe_results.get(alias)
+        last_probe_detail = ""
         if probe is not None and probe.status == "ok":
             pip = "ok"
             last_probe_text = "ok"
         elif probe is not None and probe.status == "skipped_no_api_key":
             pip = "warn"
             last_probe_text = "skipped — no api_key"
+            last_probe_detail = getattr(probe, "detail", "") or ""
         elif probe is not None:
             pip = "error"
             last_probe_text = probe.status
+            # F19: surface the probe's detail (exception class +
+            # message for transport_error, the narrated reply
+            # preview for narrated, etc.) so the operator sees
+            # *why* without dropping to docker compose logs.
+            last_probe_detail = getattr(probe, "detail", "") or ""
+            preview = getattr(probe, "reply_preview", "") or ""
+            if preview and not last_probe_detail:
+                last_probe_detail = preview
         else:
             pip = "unknown"
             last_probe_text = "not probed"
@@ -750,6 +760,7 @@ def _build_aliases_context(request: Request) -> dict[str, Any]:
                 "context_source": cw_source,
                 "pip": pip,
                 "last_probe_text": last_probe_text,
+                "last_probe_detail": last_probe_detail,
                 "last_eval_text": _format_eval_cell(alias, eval_report),
                 "dispatched_24h": dispatch_counts.get(alias, 0),
             }
@@ -1663,6 +1674,43 @@ async def _action_refresh_aliases(request: Request) -> tuple[bool, str]:
     timeout_s = float(getattr(config.server, "context_probe_timeout_s", 5.0))
     await cache.populate(config, timeout_s=timeout_s)
     return True, "Refreshed context windows for every alias"
+
+
+async def _action_reprobe_aliases(request: Request) -> tuple[bool, str]:
+    """Re-run the boot-time tool-call probe for every alias and
+    refresh ``app.state.alias_probe_results`` in place.
+
+    F20: the boot probe runs once at gateway start and caches.
+    A binding that was unreachable at boot (Ollama still
+    cold-loading weights, a satellite asleep) shows
+    ``transport_error`` until the next restart. This action
+    re-runs the probe against the live router so the operator
+    can recover a stale ``transport_error`` without bouncing
+    the gateway.
+
+    Uses the same ``probe_all_aliases`` the boot path calls,
+    same timeout config. Updates the in-process results dict
+    and the ``alias_probe_ran_at`` timestamp so the aliases
+    view reflects the new state on its next render."""
+    import time as _time
+
+    from ..alias_probe import probe_all_aliases
+    from ..router import AliasRouter
+
+    config = request.app.state.config
+    timeout_s = float(getattr(config.server, "boot_probe_timeout_s", 10.0))
+    router = AliasRouter(config)
+    try:
+        results = await probe_all_aliases(config, router, timeout_s=timeout_s)
+    except Exception as exc:
+        return False, f"Re-probe failed: {type(exc).__name__}: {exc}"
+
+    request.app.state.alias_probe_results = {r.alias: r for r in results}
+    request.app.state.alias_probe_ran_at = _time.time()
+
+    ok_count = sum(1 for r in results if r.status == "ok")
+    total = len(results)
+    return True, f"Re-probed {total} alias(es) — {ok_count} ok"
 
 
 async def _action_mcp_restart(request: Request, *, name: str) -> tuple[bool, str]:
@@ -3425,6 +3473,20 @@ def build_views_router() -> APIRouter:
             action_args={},
             redirect_target="/dashboard/aliases",
             run=lambda: _action_refresh_aliases(request),
+        )
+
+    @router.post("/actions/reprobe-aliases", response_class=HTMLResponse)
+    async def reprobe_aliases_action(
+        request: Request,
+        csrf_token: str = Form(""),
+    ) -> Response:
+        return await _run_typed_action(
+            request,
+            csrf_token=csrf_token,
+            action_name="reprobe_aliases",
+            action_args={},
+            redirect_target="/dashboard/aliases",
+            run=lambda: _action_reprobe_aliases(request),
         )
 
     @router.post("/actions/mcp-restart", response_class=HTMLResponse)
