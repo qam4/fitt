@@ -101,20 +101,20 @@ chat.py consumes it; existing chat tests stay green.
 Goal: extract `/ready`'s per-model ping to a shared function;
 `health.py` consumes it; `/ready` behavior identical.
 
-- [ ] 2a. Create `gateway/src/gateway/reachability.py` with
+- [x] 2a. Create `gateway/src/gateway/reachability.py` with
        `ReachabilityResult` (reachable, latency_ms, detail) and
        `async check_reachable(model, *, timeout_s=2.5) ->
        ReachabilityResult`. Logic lifted from
        `health.py::_probe_model`. (Req 2.4)
-- [ ] 2b. Rewire `health.py` to import `check_reachable`; keep
+- [x] 2b. Rewire `health.py` to import `check_reachable`; keep
        `/ready` response shape + status code identical.
        (Req 2.4, 9.2)
-- [ ] 2c. Write `gateway/tests/test_reachability.py`: reachable
+- [x] 2c. Write `gateway/tests/test_reachability.py`: reachable
        / unreachable / timeout per backend (ollama, openrouter,
        anthropic), latency recorded. (Req 2.5)
-- [ ] 2d. Confirm `test_health.py` passes unchanged.
+- [x] 2d. Confirm `test_health.py` passes unchanged.
        (Req 9.2, Property 5)
-- [ ] 2e. ruff/mypy/pytest green.
+- [x] 2e. ruff/mypy/pytest green.
 - [ ] 2f. Commit: `reachability: extract /ready ping helper`.
 
 ## Commit 3 — Probe adopts taxonomy + reachability-on-timeout + latency

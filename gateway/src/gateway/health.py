@@ -8,69 +8,48 @@
 
 Both endpoints are auth-exempt so they can be used by monitoring /
 curl-from-anywhere without credentials.
+
+Phase 7.6: the per-model reachability ping moved to
+:mod:`gateway.reachability` so the alias probe can run the same
+check when a canary times out. ``/ready``'s response shape and
+status code are unchanged — it still builds the same
+``{model, reachable, detail}`` per-chain structure.
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .config import Config, ModelConfig
+from .config import Config
+from .reachability import (
+    DEFAULT_REACHABILITY_TIMEOUT_S,
+    ReachabilityResult,
+    check_reachable,
+)
 
 router = APIRouter()
 
 # Readiness probes use a short timeout so a dead backend doesn't hang
 # the endpoint. The probe doesn't run inference; it just checks the
 # backend's health URL (Ollama) or a trivial auth endpoint (cloud).
-_PROBE_TIMEOUT_S = 2.5
-
-
-@dataclass
-class _ProbeResult:
-    model_id: str
-    reachable: bool
-    detail: str | None = None
-
-
-async def _probe_model(client: httpx.AsyncClient, model: ModelConfig) -> _ProbeResult:
-    """Check whether ``model``'s backend is reachable."""
-    try:
-        if model.backend == "ollama":
-            # Ollama's /api/tags returns the list of local models; cheap
-            # and gives us a real answer.
-            assert model.endpoint
-            r = await client.get(f"{model.endpoint.rstrip('/')}/api/tags")
-            return _ProbeResult(model.id, r.status_code < 500)
-        if model.backend == "openrouter":
-            # GET https://openrouter.ai/api/v1/models is unauthenticated
-            # and cheap. If it responds we know we have network.
-            r = await client.get("https://openrouter.ai/api/v1/models")
-            return _ProbeResult(model.id, r.status_code < 500)
-        if model.backend == "anthropic":
-            # No free ping endpoint; check that the host resolves and
-            # responds. 401 here is still "reachable".
-            r = await client.get("https://api.anthropic.com/v1/models")
-            return _ProbeResult(model.id, r.status_code < 500)
-    except (httpx.RequestError, AssertionError) as e:
-        return _ProbeResult(model.id, False, detail=str(e))
-    return _ProbeResult(model.id, False, detail="unknown backend")
+_PROBE_TIMEOUT_S = DEFAULT_REACHABILITY_TIMEOUT_S
 
 
 async def _probe_alias(
     client: httpx.AsyncClient, config: Config, alias: str
-) -> tuple[str, bool, list[_ProbeResult]]:
+) -> tuple[str, bool, list[ReachabilityResult]]:
     """Probe every model in ``alias``'s resolution chain.
 
     Returns (alias, any_reachable, probe_results). "Ready" means at
     least one model in the chain is reachable.
     """
     chain = config.resolve_alias(alias)
-    results = await asyncio.gather(*(_probe_model(client, m) for m in chain))
+    results = await asyncio.gather(*(check_reachable(client, m) for m in chain))
     return alias, any(r.reachable for r in results), list(results)
 
 
