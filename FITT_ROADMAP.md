@@ -65,7 +65,7 @@ Phase 0 (manual) ─┐
                   │                             └─► Phase 12+ (opportunistic: subagents, heartbeat, parallel, ...)
 ```
 
-Phase 7 is the active one — visibility-and-traceability earned its slot from the
+Phase 7 shipped 2026-05-28 — visibility-and-traceability earned its slot from the
 2026-05 granite-narration / context-discovery debugging session, where we found
 ourselves ssh'ing into containers to grep logs. Phases 8 and 9 follow as
 sub-arcs of "memory done right," each landing when daily friction justifies it.

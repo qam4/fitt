@@ -177,8 +177,10 @@ Firewall on the Hub).
 4.11. Web search tool - DONE
 5. Lessons + decaying history - CODE DONE, live validation pending
 6. Spec-runner (RESHAPED — see roadmap; FITT not a coding agent)
-7. Visibility & traceability (active — context discovery, /model
-   commands, Telegram markdown renderer, dashboard v0)
+7. Visibility & traceability - DONE 2026-05-28 (context
+   discovery, /model + /lastturn + /status + /eval Telegram
+   commands, Telegram markdown renderer, dashboard v0 with
+   eval detail + edit substrate + typed actions)
 8. Compaction (sessions full enough that this earns its keep)
 9. Memory v1 (RAG, vector recall, cross-project)
 10. Voice (Faster-Whisper STT + Piper/Kokoro TTS) - optional

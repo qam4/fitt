@@ -33,6 +33,55 @@ doc.
 
 ---
 
+## Phase 7 live-validation pass — markdown rendering on command outputs
+
+**First observed:** 2026-05-28. **Fixed:** 2026-05-28.
+**Tag:** UX (closed), Slice 7.4 follow-up. Caught during the
+phase-closeout live-validation pass before flipping the DONE
+flag.
+
+The `/model` Telegram command rendered `*Aliases:*` as
+literal asterisks on the phone, and the growing turn bubble
+showed `Ran \`web_search\`` with literal backticks. Slice
+7.4 (Phase 7 markdown renderer) had landed for the streaming
+path and turn-bubble flushes (tasks 19a/b), but the deferred
+19c (approval prompts) and 19d (command response
+constructors) hadn't been touched — and the bubble's
+task-line assembly was calling `html.escape` instead of
+`markdown_to_telegram_html`, preserving backticks instead of
+converting them to `<code>` tags.
+
+**Cost:** Cosmetic, not functional. Replies still made
+sense; they just looked unfinished. Caught during the
+2026-05-28 validation pass that was supposed to confirm
+Slice 7.4's "phone renders correctly" property.
+
+**Fix landed in commit 460f1d4.** Three changes: (1)
+`turn_renderer._render_stream_bubble` routes task lines
+through `markdown_to_telegram_html`; (2) `handle_session_command`
+and `handle_model_command` route their composed markdown
+through the renderer with `parse_mode="HTML"`; (3)
+`_KNOWN_TOOL_VERBS` registers `web_search`,
+`list_capabilities`, `grep_repo`, `glob_search`,
+`list_directory`, `http_get` — clean verb pairs instead of
+the generic fallback. Five regression tests in the telegram-
+bot suite pin each fix.
+
+19c (approval prompts) stays deferred until LLM content
+surfaces in approval bubbles. The pre-existing `_format_eval_summary`
+/ `_format_status` / `_format_lastturn` already compose HTML
+directly, so they were unaffected by the gap.
+
+**Lesson:** "Live-validation pass" caught a real issue the
+in-process unit tests couldn't have. The shape of the
+issue was a Slice 7.4 deferral that became wrong once
+Slice 7.3's commands shipped — exactly the boundary the
+deferral was waiting on. Worth respecting "deferred until
+X" lists during phase-closeout passes; the deferral
+condition often resolved during the phase itself.
+
+---
+
 ## Skills property test flaky on hypothesis "no" alphabet
 
 **First observed:** 2026-05-22 during Phase 7/7.2 development.

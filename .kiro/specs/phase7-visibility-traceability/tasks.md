@@ -107,10 +107,19 @@ Foundation. Smallest unit; ships first.
 - [x] 5b. `uv run pytest -q` green in `gateway/`.
 - [x] 5c. `uv run mypy src` clean.
 - [x] 5d. `uv run ruff format/check` clean.
-- [ ] 5e. Live validation: bring up the gateway against
+- [x] 5e. Live validation: bring up the gateway against
        a real Ollama satellite with `OLLAMA_CONTEXT_LENGTH`
        set; confirm `fitt context list` shows the right
        number; confirm `/v1/aliases` returns the same.
+       *Verified 2026-05-28 against Ollama on the laptop.
+       The dashboard shows the context size that was actually
+       loaded — which is not always the env-var value, because
+       a model's Modelfile `num_ctx` parameter (when set)
+       overrides `OLLAMA_CONTEXT_LENGTH` at load time. The
+       `Source` column tells the operator which path fired
+       (`modelfile` / `model_info` / `default`). See the
+       "Known concerns" section in design.md for the
+       operator-education note.*
 
 ## Slice 7.2 — Per-turn traceability capture
 
@@ -211,10 +220,16 @@ Builds on 7.1 (uses `context_window` in captured records).
        follow-up if real-world use surfaces edge cases the
        unit tests miss.*
 - [x] 11c. Standard test/lint/typecheck cycle green.
-- [ ] 11d. Live validation: trigger a real Telegram tool-use
+- [x] 11d. Live validation: trigger a real Telegram tool-use
        turn; `fitt turn show <turn_id>` reproduces every
        relevant field; the same data is reachable via
        `GET /v1/sessions/main/captures/<turn_id>`.
+       *Verified 2026-05-28: real Telegram tool turn captured;
+       the dashboard's `/dashboard/turns/main/<turn_id>` view
+       reproduces every field (alias, model, prompt tokens,
+       completion tokens, context window, prompt-fill %,
+       finish_reason, narration warning, fallback flag, tool
+       calls). Operator description: "turns very good output."*
 
 ## Slice 7.3 — Telegram operator commands
 
@@ -288,9 +303,15 @@ Builds on 7.1 (`/model` reads context window) and 7.2
        test exists but the new commands aren't pinned in
        string assertions; ride a follow-up).
 - [x] 17b. Standard test/lint/typecheck cycle green.
-- [ ] 17c. Live validation: each command works end-to-end
+- [x] 17c. Live validation: each command works end-to-end
        against a live FITT, returns the right shape, and
        the rendered output reads cleanly on a phone.
+       *Verified 2026-05-28: `/model`, `/lastturn`, `/status`,
+       `/eval` all return the expected shape end-to-end.
+       Initial check found `/model` rendered `*Aliases:*`
+       literally on the phone (Slice 7.4 deferred 19c/19d
+       had also missed the command-response constructors);
+       fixed in commit 460f1d4 — see Slice 7.4's task 19d.*
 
 ## Slice 7.4 — Telegram markdown renderer
 
@@ -319,11 +340,23 @@ Independent. Could ship first if half a day appears.
        *Deferred — current approval prompt is bot-authored
        text only ("🔐 edit_file → confirm?"); no LLM
        content surface yet.*
-- [ ] 19d. Command response constructors that include model
+- [x] 19d. Command response constructors that include model
        output (today: `/lastturn` (Slice 7.3), and any future
        command).
-       *Deferred to Slice 7.3 since the `/lastturn` command
-       is what introduces model output to command responses.*
+       *Shipped 2026-05-28 in commit 460f1d4. Triggered by
+       live use surfacing literal `*Aliases:*` on the phone:
+       `handle_session_command` and `handle_model_command`
+       now route their composed markdown through
+       `markdown_to_telegram_html` and send with
+       `parse_mode="HTML"`. `turn_renderer._render_stream_bubble`
+       routes task lines through the same renderer (was
+       `html.escape` only), fixing literal backticks in
+       "Ran `web_search`" status lines. `_KNOWN_TOOL_VERBS`
+       gained six entries so common tools get clean verb
+       pairs instead of the fallback shape. Slice 7.3's
+       `_format_eval_summary` / `_format_status` /
+       `_format_lastturn` already compose HTML directly, so
+       no change needed there.*
 
 ### 20. Tests
 
@@ -342,11 +375,16 @@ Independent. Could ship first if half a day appears.
 
 - [x] 21a. Tasks 18a-20d complete (19c, 19d deferred).
 - [x] 21b. Standard test/lint/typecheck cycle green.
-- [ ] 21c. Live validation: send a chat message that
+- [x] 21c. Live validation: send a chat message that
        triggers a model reply with `**bold**`,
        `*italic*`, ` ``` fenced code ``` `, an inline
        `code`, and an `[link](url)`; confirm phone renders
        correctly.
+       *Verified 2026-05-28. Initial check found a
+       genuine gap in command-response markdown rendering
+       (`*Aliases:*`, `Ran \`web_search\``); fixed in commit
+       460f1d4 (see task 19d). Streaming model replies
+       and turn-bubble flushes were already correct.*
 
 ## Slice 7.5 — Dashboard v0
 
@@ -478,47 +516,85 @@ time.
        install. *(Empty-state branches covered by tests for
        overview, turns, cron, audit, gaps.)*
 - [x] 29c. Standard test/lint/typecheck cycle green.
-- [ ] 29d. Live validation: open the dashboard from a
+- [x] 29d. Live validation: open the dashboard from a
        Tailscale browser; navigate every view; trigger a
        Telegram turn and watch it appear in the live
-       turns list. *(Foundation already validated live
-       2026-05-24; per-view live validation rides the
-       two-week Principle 9 window.)*
+       turns list.
+       *Verified 2026-05-28: dashboard navigated end-to-end
+       from Tailscale browser; Telegram tool turns appear
+       in the turns list; the eval detail view (F18, shipped
+       in the same window) surfaces per-case detail and
+       verdicts. F17's poll-every-5s covers the live-update
+       use case without crashes on empty data; SSE migration
+       (F17b) rides a follow-up.*
 
 ## 30. Roadmap pointer update
 
-- [ ] 30a. Flip the Phase 7 inline draft's status from
+- [x] 30a. Flip the Phase 7 inline draft's status from
        "active" to "DONE" once all five slices ship and
        live validation lands.
-- [ ] 30b. Update the steering file's phase summary if
+       *Flipped 2026-05-28. All five slices shipped, live
+       validation passed (see Section 31), Principle 9
+       two-week trial in progress.*
+- [x] 30b. Update the steering file's phase summary if
        Phase 7 ships meaningfully early or late.
+       *Steering's "Phase plan" already lists Phase 7 as
+       the active phase with the right shape; flipped to
+       "DONE" 2026-05-28 alongside roadmap pointer.*
 
 ## 31. Live validation (manual)
 
 (Manual; performed by the author across Telegram, IDE, and
 desk-browser sessions.)
 
-- [ ] 31a. From Telegram, `/model` shows context windows for
+*Validation pass completed 2026-05-28 across Telegram, the
+dashboard from a Tailscale browser, and the IDE session this
+spec was finalised in. Each item below ticked with the
+operator-confirmed status; rough edges that surfaced during
+the pass got fixed in the same window before flipping the
+DONE flag (see commit 460f1d4 for the markdown-rendering
+follow-up that was the last live-use gap).*
+
+- [x] 31a. From Telegram, `/model` shows context windows for
        every alias. Bound granite again temporarily;
        confirm the context window matches what
        `OLLAMA_CONTEXT_LENGTH` is set to on the satellite.
-- [ ] 31b. Trigger a tool-use turn from Telegram with a
+       *Pinned. Note: dashboard shows the actually-loaded
+       context size, which may differ from
+       `OLLAMA_CONTEXT_LENGTH` when a model's Modelfile
+       declares its own `num_ctx`. The `Source` column
+       discloses which path fired.*
+- [x] 31b. Trigger a tool-use turn from Telegram with a
        known-flaky binding (revert to granite for the
        test). Get a result. Run `/lastturn`. The output
        reproduces the ~5400 prompt-token figure that took
        the 2026-05-22 debugging session two hours to find.
-- [ ] 31c. The 2026-05-22 incident is one click in the
+       *Pinned. `/lastturn` reproduces every relevant
+       field from the debugging session.*
+- [x] 31c. The 2026-05-22 incident is one click in the
        dashboard's `/dashboard/turns/main/<turn_id>` view.
        Less than 30 seconds from "Telegram reply looked
        weird" to "I see exactly what happened."
-- [ ] 31d. Run `/eval fitt-default` from Telegram. The
+       *Pinned. Operator description: "turns very good
+       output." This is the moment Phase 7 was built for.*
+- [x] 31d. Run `/eval fitt-default` from Telegram. The
        eval runs, the result posts, and the report file
        is browsable from the dashboard's aliases view.
-- [ ] 31e. Markdown rendering: a model reply containing
+       *Pinned. Plus the F18 eval detail view (shipped in
+       the same window) renders per-case detail and a
+       verdict, closing the "I see 4/5 but don't know
+       which case failed" gap that surfaced during model-
+       fit testing.*
+- [x] 31e. Markdown rendering: a model reply containing
        `**bold**`, fenced code, inline `code`, and links
        renders correctly on the phone.
-- [ ] 31f. The dashboard's overview page is the answer to
+       *Verified after commit 460f1d4. Streaming and
+       turn-bubble paths were always correct; the gap was
+       in the command-response constructors and tool-line
+       backticks, both fixed.*
+- [x] 31f. The dashboard's overview page is the answer to
        "is FITT okay?" without any other tool open.
+       *Pinned during the 2026-05-28 validation pass.*
 
 ## Definition of done — phase
 

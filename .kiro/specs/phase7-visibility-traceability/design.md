@@ -833,6 +833,42 @@ Global properties (across slices): see P1-P6 above.
   dashboard view inspiration and the "don't reimplement
   the chat" architectural rule.
 
+## Known concerns
+
+Captured during the 2026-05-28 live-validation pass and
+ride into the Principle 9 two-week trial as "operator
+education, not bugs."
+
+### `OLLAMA_CONTEXT_LENGTH` doesn't always equal the dashboard's context number
+
+The Ollama probe reads `num_ctx` from a model's Modelfile
+parameters first, then falls back to the architecture's
+`context_length` field, then to 2048. The
+`OLLAMA_CONTEXT_LENGTH` env variable on the Ollama server
+is a *ceiling* on what context Ollama will request when
+loading a model — it doesn't override a Modelfile's
+`num_ctx` when that's smaller.
+
+Result: a satellite with `OLLAMA_CONTEXT_LENGTH=32768` and
+a model whose Modelfile sets `num_ctx 4096` (a lot of
+community Modelfiles do this for VRAM reasons) will load
+with 4096, and the dashboard correctly shows 4096. That's
+not a bug — it's the truth about what got loaded. The
+`Source` column on the Aliases tab discloses which path
+fired (`modelfile` / `model_info` / `default`).
+
+If the dashboard shows a smaller context than the env var
+suggests, the operator has three options: edit the
+Modelfile (`ollama show <model> --modelfile` to read,
+`ollama create -f Modelfile <name>` to rewrite), pull a
+model whose Modelfile defaults higher, or accept the
+smaller context. None of these involve gateway code.
+
+A docs note in `gateway/README.md`'s aliases section is
+the natural home for the "what does each value mean" cheat
+sheet; ride it as a follow-up if the operator-education
+gap recurs.
+
 ## Open questions
 
 These are real open questions, not trick-by-omission. Land
