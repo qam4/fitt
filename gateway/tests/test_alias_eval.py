@@ -31,6 +31,7 @@ from gateway.alias_eval import (
     EvalReport,
     default_cases,
     default_eval_dir,
+    realistic_cases,
     render_report_markdown,
     run_eval_case,
     run_eval_suite,
@@ -712,6 +713,28 @@ def test_default_cases_covers_the_core_shapes() -> None:
     assert "read_file_basic" in names
     assert "no_tool_small_talk" in names
     assert "tool_disambiguation" in names
+
+
+def test_realistic_cases_is_default_plus_live_fact() -> None:
+    """The realistic suite is the default suite plus the
+    live-fact web_search case. The bare default suite must NOT
+    carry it (the case is prompt-sensitive and only belongs in
+    the suite that runs under FITT's live prompt)."""
+    default_names = {c.name for c in default_cases()}
+    realistic = realistic_cases()
+    realistic_names = {c.name for c in realistic}
+
+    # Superset: every default case is present.
+    assert default_names <= realistic_names
+    # The live-fact case is the one addition.
+    assert "live_fact_web_search" in realistic_names
+    assert "live_fact_web_search" not in default_names
+    assert realistic_names - default_names == {"live_fact_web_search"}
+
+    # The live-fact case expects web_search and offers it.
+    live = next(c for c in realistic if c.name == "live_fact_web_search")
+    assert live.expected_tool == "web_search"
+    assert any(t["function"]["name"] == "web_search" for t in live.tools)
 
 
 def test_default_coding_cases_covers_the_router_mode_shapes() -> None:

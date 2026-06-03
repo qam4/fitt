@@ -352,6 +352,59 @@ def default_cases() -> list[EvalCase]:
     ]
 
 
+def realistic_cases() -> list[EvalCase]:
+    """The realistic suite: the default cases plus a live-fact
+    case that the bare suite deliberately omits.
+
+    The realistic suite runs under FITT's actual injected system
+    prompt (capability block + identity + lessons), so it's the
+    right place to measure prompt-sensitive behavior. The extra
+    case targets the *capability false-negative* — a model
+    refusing a time-varying question ("today's match results")
+    with "I can't access real-time data" instead of reaching for
+    ``web_search``, even though the tool is right there. Observed
+    2026-05-10 (weather) and 2026-06-03 (Roland Garros); see
+    docs/observed-issues.md.
+
+    Kept out of :func:`default_cases` on purpose (Phase 7.6
+    follow-up decision): the bare suite is a pure tool-shape
+    capability test with no FITT prompt, where a model has weak
+    reason to tool-call a live-fact question. Putting the case
+    only here isolates the variable we actually want to measure —
+    does FITT's prompt make the binding reach for the tool."""
+    web_search_tool = {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the web for current information. Returns result titles, URLs, and snippets."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 5},
+                },
+                "required": ["query"],
+            },
+        },
+    }
+    extra = EvalCase(
+        name="live_fact_web_search",
+        prompt=("What are today's match results at Roland Garros? Give me the scores."),
+        tools=[web_search_tool],
+        expected_tool="web_search",
+        description=(
+            "Live, time-varying fact the model cannot know from "
+            "training data. A good binding reaches for web_search "
+            "rather than refusing with 'I can't access real-time "
+            "data'. The 2026-06-03 Roland Garros capability-"
+            "false-negative, made measurable."
+        ),
+    )
+    return [*default_cases(), extra]
+
+
 # --------------------------------------------------------------- runner
 
 

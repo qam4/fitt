@@ -2003,6 +2003,7 @@ async def _action_run_eval(
         return False, f"Unknown alias {alias!r}"
     from ..alias_eval import (
         default_cases,
+        realistic_cases,
         run_eval_suite,
         write_report,
     )
@@ -2017,7 +2018,7 @@ async def _action_run_eval(
     elif suite == "coding":
         cases = default_coding_cases()
     elif suite == "realistic":
-        cases = default_cases()
+        cases = realistic_cases()
         realistic_prompt, realistic_meta = build_realistic_system_prompt(request.app.state)
     else:
         return False, f"Unknown suite {suite!r}"

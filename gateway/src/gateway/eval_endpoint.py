@@ -42,6 +42,7 @@ from .alias_eval import (
     EvalCase,
     EvalReport,
     default_cases,
+    realistic_cases,
     render_report_markdown,
     run_eval_suite,
     write_report,
@@ -208,10 +209,11 @@ async def run_eval(
         cases = default_coding_cases()
     elif suite == "realistic":
         # Realistic = the default cases (FITT's own tool names)
-        # run under FITT's live injected system prompt. The
-        # diff between the 'default' suite (bare prompt) and
-        # this one is the granite-incident diagnostic.
-        cases = default_cases()
+        # PLUS the live-fact case, run under FITT's live injected
+        # system prompt. The diff between the 'default' suite
+        # (bare prompt) and this one is the granite-incident and
+        # capability-false-negative diagnostic.
+        cases = realistic_cases()
         realistic_prompt, realistic_meta = build_realistic_system_prompt(request.app.state)
     else:
         raise HTTPException(
