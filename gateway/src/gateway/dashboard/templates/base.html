@@ -18,10 +18,6 @@
 <title>{% block title %}FITT dashboard{% endblock %}</title>
 <link rel="stylesheet" href="/dashboard/static/style.css">
 <script src="/dashboard/static/htmx.min.js" defer></script>
-<!-- Localizes the server's UTC timestamps to the viewer's zone.
-     Loads after htmx (both defer = in-order); purely additive —
-     no JS still shows correct UTC. -->
-<script src="/dashboard/static/tz.js" defer></script>
 </head>
 <body>
 <div class="app">

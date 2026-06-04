@@ -91,10 +91,34 @@ def _fmt_age(ts: float | None) -> str:
     return f"{_fmt_duration(delta)} ago"
 
 
-def _fmt_iso(ts: float | None) -> str:
+def _fmt_iso(ts: float | None, *, mode: str = "full") -> str:
+    """Render a UNIX timestamp as a display label in the hub's
+    local timezone.
+
+    ``astimezone()`` with no argument converts to whatever zone
+    the process is in — the container's ``TZ`` env (set in
+    docker-compose), or the host zone for a native run. This is
+    the same clock the ``[Current time]`` capability block and
+    the cron scheduler reason in, so the dashboard, the model,
+    and the scheduler all agree.
+
+    ``mode``: ``"full"`` → ``YYYY-MM-DD HH:MM:SS <TZ>``; ``"time"``
+    → ``HH:MM:SS <TZ>`` (for the "refreshed at" footers where the
+    date is implied).
+
+    Only display *labels* flow through here. Data the operator
+    inspects (raw response JSON, dispatched messages, audit/eval
+    content) is rendered verbatim elsewhere and stays in whatever
+    form it was stored — never localized — so a log line always
+    shows the exact value it holds.
+    """
     if ts is None:
         return "—"
-    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    dt = datetime.fromtimestamp(ts, tz=UTC).astimezone()
+    tz_name = dt.tzname() or "local"
+    if mode == "time":
+        return f"{dt.strftime('%H:%M:%S')} {tz_name}"
+    return f"{dt.strftime('%Y-%m-%d %H:%M:%S')} {tz_name}"
 
 
 def _fmt_tokens(n: int | None) -> str:
@@ -233,7 +257,7 @@ def _build_overview_context(request: Request) -> dict[str, Any]:
         "history_pruner_text": _fmt_age(history_last_sweep),
         "event_pruner_text": _fmt_age(event_last_sweep),
         "telegram_text": "configured" if telegram_configured else "not configured",
-        "generated_at_human": datetime.fromtimestamp(now, tz=UTC).strftime("%H:%M:%S UTC"),
+        "generated_at_human": _fmt_iso(now, mode="time"),
     }
 
 
@@ -958,7 +982,7 @@ def _build_aliases_context(request: Request) -> dict[str, Any]:
 
     return {
         "alias_rows": alias_rows,
-        "generated_at_human": datetime.fromtimestamp(now, tz=UTC).strftime("%H:%M:%S UTC"),
+        "generated_at_human": _fmt_iso(now, mode="time"),
     }
 
 
@@ -2529,7 +2553,7 @@ def _build_tools_context(request: Request) -> dict[str, Any]:
             )
     return {
         "tool_rows": tool_rows,
-        "generated_at_human": datetime.fromtimestamp(now, tz=UTC).strftime("%H:%M:%S UTC"),
+        "generated_at_human": _fmt_iso(now, mode="time"),
     }
 
 
@@ -2590,7 +2614,7 @@ def _build_cron_context(request: Request) -> dict[str, Any]:
             )
     return {
         "cron_rows": cron_rows,
-        "generated_at_human": datetime.fromtimestamp(now, tz=UTC).strftime("%H:%M:%S UTC"),
+        "generated_at_human": _fmt_iso(now, mode="time"),
     }
 
 
@@ -2716,7 +2740,7 @@ def _build_health_context(request: Request) -> dict[str, Any]:
         "telegram_text": "configured" if telegram_configured else "not configured",
         "alias_count": alias_count,
         "alias_ok_count": alias_ok_count,
-        "generated_at_human": datetime.fromtimestamp(now, tz=UTC).strftime("%H:%M:%S UTC"),
+        "generated_at_human": _fmt_iso(now, mode="time"),
     }
 
 

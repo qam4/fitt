@@ -158,22 +158,6 @@ def test_static_htmx_served(client: TestClient) -> None:
     assert "htmx" in r.text[:200].lower()
 
 
-def test_static_tz_served(client: TestClient) -> None:
-    """tz.js (UTC->local timestamp localization) is served and
-    loaded after htmx in base.html. Purely additive — no JS still
-    shows correct UTC — but a missing file would mean the page
-    never localizes, so pin that it's reachable."""
-    r = client.get("/dashboard/static/tz.js")
-    assert r.status_code == 200
-    ct = r.headers["content-type"].lower()
-    assert "javascript" in ct
-    # It localizes the server's UTC format via Intl.
-    assert "Intl" in r.text
-    # base.html loads it.
-    page = client.get("/dashboard/", headers=_auth())
-    assert "/dashboard/static/tz.js" in page.text
-
-
 # --------------------------------------------------------------- nav highlight
 
 
