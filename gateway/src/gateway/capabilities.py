@@ -131,6 +131,23 @@ def build_capability_block(registry: ToolRegistry) -> str:
     #
     # 3. How to report a missing capability. Unchanged from
     #    Phase 4; the gap log consumes this format.
+    #
+    # 4. Using tools for current facts (2026-06-03). The
+    #    capability false-negative: a model refusing a
+    #    time-varying question ("today's match results",
+    #    "is it going to rain") with "I can't access real-time
+    #    data" instead of reaching for web_search, even though
+    #    the tool is listed right above. Observed 2026-05-10
+    #    (weather) and 2026-06-03 (Roland Garros). Borrows the
+    #    enumerate-the-must-use-a-tool-categories shape that both
+    #    Hermes (OPENAI_MODEL_EXECUTION_GUIDANCE mandatory_tool_use)
+    #    and OpenClaw (execution-bias "mutable facts need live
+    #    checks") independently landed on. The retry-on-thin-
+    #    results line also targets the link-dump-instead-of-answer
+    #    symptom. Prompting alone won't fix an undersized model
+    #    (model choice is the real lever; see choosing-a-model),
+    #    but it's free and reduces the rate; measured via the
+    #    realistic suite's live_fact_web_search case.
     trailer_lines = [
         "",
         "[How tool calls work]",
@@ -157,6 +174,19 @@ def build_capability_block(registry: ToolRegistry) -> str:
         "been verified, and do not claim to have done things "
         "you only described. No victory laps. If a tool call "
         "failed or was never made, say so.",
+        "",
+        "[Using tools for current facts]",
+        "Some things must not be answered from memory - use a tool instead:",
+        "- Current or time-varying facts (weather, news, live "
+        "scores or schedules, prices, latest software versions) "
+        "-> web_search.",
+        "- Today's date and time -> already given in [Current time] above.",
+        "- File contents, git state, system status -> the matching file, git, or shell tool.",
+        "You are not limited to your training data when a tool "
+        "can fetch the live answer. If web_search returns thin "
+        "or off-topic results, try a different query before "
+        "giving up - don't just relay a list of links; read the "
+        "snippets and answer the question.",
         "",
         "When a request needs a capability not listed above, "
         "reply in this format: \"I'd need a tool to <action>. "

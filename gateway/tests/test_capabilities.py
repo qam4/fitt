@@ -119,6 +119,27 @@ def test_build_block_explains_approval_ux() -> None:
     assert "typing" in block.lower() or "paste" in block.lower()
 
 
+def test_build_block_steers_current_facts_to_tools() -> None:
+    """The capability false-negative fix (2026-06-03): the block
+    tells the model that time-varying facts must go through a
+    tool, naming web_search for current facts, so it stops
+    refusing live questions with "I can't access real-time data"
+    when web_search is right there. Borrows the
+    enumerate-the-categories shape from Hermes / OpenClaw."""
+    reg = ToolRegistry()
+    reg.register(_mk_tool("web_search", "Search the web."))
+    block = build_capability_block(reg)
+    assert "[Using tools for current facts]" in block
+    # Names the tool for the live-fact category.
+    assert "web_search" in block
+    # The "not limited to training data" reframing is the lever
+    # against the real-time refusal reflex.
+    assert "training data" in block.lower()
+    # The retry-on-thin-results / don't-dump-links guidance is
+    # present (targets the link-dump-instead-of-answer symptom).
+    assert "links" in block.lower()
+
+
 def test_build_block_keeps_trailer_even_when_truncated() -> None:
     """When tool count overflows the hard-cap budget, we still
     need the model to see both the approval-UX note AND the

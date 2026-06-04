@@ -762,6 +762,43 @@ try:
   shape: "ask about the weather → model should call
   `http_get`, not refuse."
 
+**Update 2026-06-03 — recurred (Roland Garros), then fixed.**
+Same shape, different domain: asked `fitt-hermes` for "today's
+Roland Garros match results"; it refused with "my capabilities
+don't allow direct access to real-time data" despite
+`web_search` being live. Pointing at the tool explicitly made
+it search (so the wiring is fine; it's the proactive judgment
+that fails). Two-part fix landed:
+
+1. **Made it measurable.** New `live_fact_web_search` case in
+   the eval *realistic* suite (`realistic_cases()`): a
+   time-varying question with `web_search` offered, expecting
+   the call. A refusal scores `narrated` → red verdict on the
+   per-alias page. Kept out of the bare default suite on
+   purpose — the prompt-sensitive case belongs only in the
+   suite that runs under FITT's live prompt, so the before/
+   after is a clean A/B.
+2. **Prompt nudge (always-on).** New `[Using tools for current
+   facts]` section in the capability-block trailer
+   (`capabilities.py`), borrowing the enumerate-the-must-use-a-
+   tool-categories shape that **both** Hermes
+   (`OPENAI_MODEL_EXECUTION_GUIDANCE` `<mandatory_tool_use>`:
+   "Current facts (weather, news, versions) → use web_search")
+   and OpenClaw (execution-bias "mutable facts need live
+   checks") independently landed on. Names web_search for live
+   facts, reframes "you are not limited to training data when a
+   tool can fetch the answer", and adds Hermes' retry-on-thin-
+   results line to fight the link-dump-instead-of-answer
+   symptom.
+
+Caveat (unchanged): prompting reduces the rate, doesn't
+eliminate it on an undersized model. Model choice is the real
+lever — Hermes' own enforcement list (`gpt`, `gemini`, `qwen`,
+`deepseek`, ...) notably excludes the Hermes model family,
+implying it tool-calls well natively; the families FITT runs
+locally are exactly the ones that need the steering. Validate
+per-binding with the realistic eval before trusting it.
+
 ---
 
 ## Cheerleading / success theater in replies
