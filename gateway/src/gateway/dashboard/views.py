@@ -2333,7 +2333,7 @@ def _build_sessions_context(request: Request) -> dict[str, Any]:
                     "id": s.id,
                     "name": s.name,
                     "archived": s.archived,
-                    "created_iso": s.created_at.isoformat(),
+                    "created_iso": _fmt_iso(s.created_at.timestamp()),
                     "history_days": day_count,
                     "capture_days": capture_day_count,
                 }
