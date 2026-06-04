@@ -383,3 +383,65 @@ def test_stream_wanted_returns_streaming_chunk_shape(
     # Second chunk is the terminator.
     second = frames[1]
     assert second["choices"][0]["finish_reason"] == "stop"
+
+
+# --------------------------------------------------------------- capture timestamps
+
+
+def test_tool_loop_capture_records_walltime_started_at(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the turn capture's ``started_at`` must be a
+    wall-clock Unix timestamp, not a ``perf_counter`` monotonic
+    value.
+
+    The bug (2026-06-03): the chat handler passed its
+    ``perf_counter`` start straight into the capture builder,
+    while the builder set ``finished_at`` from ``time.time()``.
+    Mixing the two clocks made the dashboard show ~1.78e9 s
+    latency and "20597d ago" ages. We assert started_at is a
+    recent epoch and the derived latency is sane (sub-minute for
+    this instant turn)."""
+    import time as _time
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _fake_response(
+                tool_calls=[
+                    _tool_call("call-1", "read_file", {"project": "hub", "path": "README.md"})
+                ]
+            )
+        return _fake_response(content="README says: # Hello")
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    before = _time.time()
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "fitt-smart",
+            "messages": [{"role": "user", "content": "read the readme"}],
+            "tool_choice": "auto",
+        },
+        headers=_auth(),
+    )
+    after = _time.time()
+    assert r.status_code == 200, r.text
+
+    turn_id = r.headers.get("X-FITT-Turn-Id")
+    assert turn_id, "tool-loop turn should carry X-FITT-Turn-Id"
+
+    store = client.app.state.turn_capture
+    cap = store.read("main", turn_id)
+    assert cap is not None, "tool-loop turn should have been captured"
+
+    # started_at is a wall-clock epoch within the request window
+    # (allow a small slack for the monotonic-to-wall conversion).
+    assert before - 1.0 <= cap.started_at <= after + 1.0
+    # finished_at is at/after start, and the turn was instant, so
+    # the derived latency is well under a minute — never ~1.78e9 s.
+    latency_s = cap.finished_at - cap.started_at
+    assert 0.0 <= latency_s < 60.0

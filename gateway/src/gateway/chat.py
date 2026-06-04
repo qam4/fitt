@@ -911,6 +911,15 @@ async def _run_tool_loop(
             config_default=traceability_default_capture or [],
             enabled=traceability_enabled,
         ):
+            # Wall-clock start for the capture. ``started`` is a
+            # ``perf_counter`` (monotonic, process-relative) — right
+            # for the latency deltas this handler logs, but NOT a
+            # Unix epoch. The capture stores ``started_at`` as
+            # wall-clock (its ``finished_at`` is ``time.time()``), so
+            # passing the raw monotonic value produced a ~1.78e9 s
+            # latency and "20597d ago" ages on the dashboard. Recover
+            # the wall clock from the monotonic elapsed.
+            _started_wall = time.time() - (time.perf_counter() - started)
             cw_tokens: int | None = None
             if context_windows is not None and model_used is not None:
                 cw = context_windows.get(model_used.backend, model_used.id)
@@ -959,7 +968,7 @@ async def _run_tool_loop(
                 session_key=session_id,
                 alias=parsed.model,
                 client=tool_ctx.client,
-                started_at=started,
+                started_at=_started_wall,
             )
             builder.dispatched_messages = list(result.messages or [])
             builder.response = response_dict
