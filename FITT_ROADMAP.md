@@ -1345,6 +1345,48 @@ this list is the index.
   renderer; no new dependency. Trigger: when a single latency
   number stops being enough to answer "is this binding getting
   worse." Pairs naturally with the per-alias page from 7.6.
+- **Reading web pages, not just finding them (2026-06-03).**
+  Surfaced by the Roland Garros turn: with the `[Using tools
+  for current facts]` nudge live, Hermes now `web_search`es a
+  live-fact question unprompted (good), but the DDGS snippets
+  were pure boilerplate ("delivering live scores, schedules
+  ...") — the actual match list lives behind the link. The
+  model relayed the authoritative links, which is the honest
+  fallback. So the gap is reading, not searching. There is no
+  single fix; it's a cost/coverage ladder, and which rung is
+  worth it is **site- and use-case-specific** (server- vs
+  JS-rendered page; prose answer vs structured/live data):
+  1. `web_search` (have it) — links + snippets.
+  2. `http_get` (have it) — raw HTML, capped at 200KB. The
+     model *can* already chain search → http_get, but on a
+     heavy modern page the content is buried in script/nav/ad
+     markup and may be truncated before the needle; an 8B
+     model rarely extracts it cleanly.
+  3. **+ readability extraction** (cheap, no key) — an
+     `extract: bool` option on `http_get` (or a thin
+     `web_fetch`) that runs the body through
+     trafilatura / readability-lxml / markdownify and returns
+     main content instead of raw HTML. Reuses the existing
+     tool, deny-list, approval wiring; one pure-Python dep.
+     Helps any server-rendered *prose* page regardless of
+     model size. Does NOT help JS-rendered pages (the data
+     isn't in the HTML the gateway fetches).
+  4. headless browser — covers JS-rendered/dynamic pages.
+     Heavy (a real browser dep + sandbox); a different class
+     of feature. Both Hermes and OpenClaw have a `browser`
+     tool for exactly this.
+  5. paid search-with-extract API (Tavily / Firecrawl / Exa,
+     which Hermes lists) — someone else renders + extracts.
+     Best coverage, but adds an API key + cost; deliberately
+     off FITT's no-key DDGS default.
+  Don't pitch one rung. Decide on the general merit when a
+  *recurring* use case justifies it: rung 3 is the obvious
+  next step (broad payoff, cheap) if "read the page and
+  answer" shows up repeatedly; rungs 4-5 only if dynamic/live
+  data (schedules, scores, dashboards) becomes a real daily
+  need. The Roland Garros case alone doesn't justify either —
+  it's one site, and it may well be rung-4 territory. See the
+  capability false-negative entry in `docs/observed-issues.md`.
 
 ### Items observed in OpenClaw / Hermes audits
 
