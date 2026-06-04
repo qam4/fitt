@@ -1374,11 +1374,19 @@ this list is the index.
   4. headless browser — covers JS-rendered/dynamic pages.
      Heavy (a real browser dep + sandbox); a different class
      of feature. Both Hermes and OpenClaw have a `browser`
-     tool for exactly this.
-  5. paid search-with-extract API (Tavily / Firecrawl / Exa,
-     which Hermes lists) — someone else renders + extracts.
-     Best coverage, but adds an API key + cost; deliberately
-     off FITT's no-key DDGS default.
+     tool for exactly this. **Self-hosted Firecrawl** also
+     lives here: its AGPL-3.0 core is free and docker-compose
+     self-hostable (no API key), but it runs headless-browser
+     pools + proxies + anti-bot handling, so the cost is
+     standing up and babysitting a separate service on the
+     cluster, not an in-process library. AGPL network clause:
+     fine to run unmodified behind FITT; copyleft bites if you
+     fork/network-expose a modified build (matters for a public
+     repo).
+  5. paid hosted search/extract API (Tavily / Exa, or
+     Firecrawl's *cloud* tier) — someone else runs the
+     browser pool. Best coverage, least ops; adds an API key +
+     cost. Deliberately off FITT's no-key default.
   Don't pitch one rung. Decide on the general merit when a
   *recurring* use case justifies it: rung 3 is the obvious
   next step (broad payoff, cheap) if "read the page and
@@ -1387,6 +1395,16 @@ this list is the index.
   need. The Roland Garros case alone doesn't justify either —
   it's one site, and it may well be rung-4 territory. See the
   capability false-negative entry in `docs/observed-issues.md`.
+
+  Framing that keeps the decision honest: rungs 3+ are **web
+  scraping** (extract content from a page), a distinct
+  capability from **web search** (find where content is).
+  They got conflated here only because both start with "the
+  web." The prompt nudge fixed the *search* half (Hermes now
+  searches unprompted); anything past rung 2 is adding a
+  scraper, not improving search. Read this entry as "do we
+  want a scraper, and how heavy a one?" — not "is our search
+  broken?"
 
 ### Items observed in OpenClaw / Hermes audits
 
