@@ -122,6 +122,56 @@ keeps this class of bug from recurring on the next tool.
 
 ---
 
+## Tool-schema fumble surface across the registry (edit_file, message/text naming)
+
+**First observed:** 2026-06-08 (audit prompted by the
+`cron_add` failure above). **Tag:** tool-schema ergonomics,
+open. Standalone entry so these don't stay buried in the
+cron writeup.
+
+The `cron_add` fix closed one fumble magnet; the registry
+audit turned up two more that no model has thrashed on *yet*
+but that have the same shape. Pinning them here so they're
+findable on a "what's next" scan instead of living inside
+another issue's audit section.
+
+1. **`edit_file` has 4 required fields** — `project`, `path`,
+   `old_str`, `new_str` — and `old_str` additionally has to
+   match the file exactly once. That's the largest required
+   set of any inline tool plus a correctness constraint on one
+   field. A small model has to land all four in one shot. This
+   is the next tool I'd expect to fail the way `cron_add` did.
+   Possible eases: derive nothing here (all four are
+   load-bearing), but the exactly-once constraint could give a
+   more actionable error that quotes the near-miss, and the
+   description could lead with the required set the way
+   `cron_add`'s now does. `write_file` is the milder sibling
+   (3 required: `project`, `path`, `content`).
+
+2. **"The words" has three different names across tools** —
+   `cron_add` uses `message`, `send_message` uses `text`,
+   `learn_add` uses `text`. The model already tripped on this
+   live (supplied `message` to a `text` slot →
+   `'text' is required`). Inconsistency taxes every session
+   that touches more than one of these tools. Fix is a rename
+   to one canonical name, but it's a breaking change to the
+   tool contract, so it wants the eval harness covering the
+   real registry first (see the cron entry's open follow-up)
+   so the rename is regression-checked rather than hand-waved.
+
+**Cost:** latent. No live failure attributed to these two yet
+(beyond the one `message`/`text` slip), but they're the same
+class of bug as the cron one, which *did* cost a full failed
+turn. The point of recording them now is to fix them before
+they're the next live incident.
+
+**Dependency:** both are best done *after* the eval harness
+exercises the real registered tools, so the changes are
+measured against an actual model rather than asserted safe.
+Until then this is a watch-list, not a work item.
+
+---
+
 ## Probe flattened "slow / cold-loading" into "transport_error" on a shared-GPU laptop
 
 **First observed:** 2026-05-28. **Fixed:** 2026-06-02
