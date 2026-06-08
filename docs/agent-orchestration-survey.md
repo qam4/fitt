@@ -222,10 +222,12 @@ speculating about. Verified from source 2026-06-08.
   pattern in the flesh.
 - **Neither structurally forces a plan.** Both rely on strong
   prompting + recovery, not a code path that refuses to execute until
-  a plan exists. So a "forced planning" mode is *original to FITT* — a
-  last-resort escape hatch, not something either reference system
-  found necessary. The proven combination is: **elected + strong
-  (per-model) prompt nudge + ground-truth recovery.**
+  a plan exists. Structurally forcing a plan *is* a known pattern —
+  the classic **plan-and-execute** architecture — but it is **not**
+  what these three chose; they all elect. So a `forced` mode in FITT
+  would be borrowing from plan-and-execute, not from our audited
+  references, and it sits behind the proven combination: **elected +
+  strong (per-model) prompt nudge + ground-truth recovery.**
 
 ---
 
