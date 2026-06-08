@@ -191,6 +191,44 @@ the pair, not compaction by itself.
 
 ---
 
+## How the planning *trigger* works (verified from prompts + loop)
+
+Earlier sections read the structural code; this reads the prompts
+and loop that govern *when* a plan happens — the part we had been
+speculating about. Verified from source 2026-06-08.
+
+- **OpenCode: elected, driven by a strong prompt nudge, varied per
+  model.** The trigger is not code, it's the system prompt.
+  `packages/opencode/src/session/prompt/anthropic.txt`: *"Use these
+  tools VERY frequently... If you do not use this tool when planning,
+  you may forget to do important tasks - and that is unacceptable,"*
+  plus *"Use the TodoWrite tool to plan the task if required"* and
+  *"IMPORTANT: Always use the TodoWrite tool to plan and track
+  tasks."* The model elects (it's "if required"), pushed hard. The
+  prompt is **per-provider** — separate `anthropic.txt`, `gemini.txt`,
+  `beast.txt`, each with its own planning guidance. So both
+  "planning-trigger-is-a-prompt" and "prompt varies per model" are
+  confirmed from source.
+- **Hermes: elected todo tool + interval nudges + ground-truth
+  recovery nudge.** `agent/conversation_loop.py` carries per-session
+  nudge counters (`_turns_since_memory`, `_iters_since_skill`) that
+  periodically inject review nudges. More relevant: a *ground-truth*
+  recovery — when a weak model returns an empty response after
+  executing tools, Hermes appends a user message: *"You just executed
+  tool calls but returned an empty response. Please process the tool
+  results above and continue with the task."* Triggered by an
+  observable fact (empty-after-tools), explicitly for weaker models
+  (it names mimo-v2-pro, GLM-5). This is the recovery-on-ground-truth
+  pattern in the flesh.
+- **Neither structurally forces a plan.** Both rely on strong
+  prompting + recovery, not a code path that refuses to execute until
+  a plan exists. So a "forced planning" mode is *original to FITT* — a
+  last-resort escape hatch, not something either reference system
+  found necessary. The proven combination is: **elected + strong
+  (per-model) prompt nudge + ground-truth recovery.**
+
+---
+
 ## What's portable to FITT (mapped to existing phases)
 
 Ordered cheapest-first. The striking thing: the cheapest cures are
