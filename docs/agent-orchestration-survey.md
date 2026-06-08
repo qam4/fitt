@@ -149,6 +149,48 @@ Cross-cutting facts true of all three:
 
 ---
 
+## Don't conflate: planning vs endurance vs decomposition
+
+The single most load-bearing distinction, because mixing these up
+leads to building the wrong thing (e.g. expecting compaction to
+make a model "plan better" — it can't):
+
+- **Planning** = deciding *what steps to take and in what order*.
+  In OpenCode this is `todowrite` (the model writes and maintains
+  its own checklist as durable state) plus the model's step-by-step
+  reasoning in the loop. The plan lives *outside* working memory and
+  is re-injected.
+- **Endurance** = keeping the plan and progress coherent as the
+  transcript grows. This is **compaction**. It is a janitor, not a
+  strategist. On context overflow it drops the noise (verbose tool
+  outputs, dead ends) and distills the rest into a tight structured
+  anchor (Goal / Done / In Progress / Blocked / Next Steps), keeping
+  the recent tail verbatim. The template *looks* plan-shaped only
+  because, when summarizing a working session, the goal/progress/
+  next-steps are the things most worth preserving. Compaction
+  **protects** a plan; it never **produces** one.
+- **Decomposition** = splitting a genuinely large task into
+  independent (often parallel) sub-tasks with isolated contexts.
+  This is **subagents** (Hermes/OpenClaw), and *none* of planning,
+  the loop, or compaction does it.
+
+Why it matters for weak models: a complex task is many steps → a
+growing transcript → degradation exactly when the task is hardest
+(the granite "lost in the middle" effect). The one-context recipe
+that sustains it is **`todowrite` + loop + compaction together**:
+the model writes a checklist, works it, and when context overflows
+the checklist/goal/next-steps survive in the anchor instead of being
+truncated away. That buys *endurance*, not *intelligence*. When the
+task needs real decomposition into independent pieces, that's a
+different mechanism (subagents), added later.
+
+Compaction *alone*, with no `todowrite`, just summarizes a flat
+conversation — useful, but the model still re-derives its plan from
+prose each time. That's why FITT's first orchestration increment is
+the pair, not compaction by itself.
+
+---
+
 ## What's portable to FITT (mapped to existing phases)
 
 Ordered cheapest-first. The striking thing: the cheapest cures are
