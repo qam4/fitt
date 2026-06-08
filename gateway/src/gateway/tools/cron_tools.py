@@ -60,19 +60,25 @@ _CRON_ID_ARG = {
 _SCHEMA_CRON_ADD: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "name": {
-            "type": "string",
-            "description": "Human-readable label (e.g. 'morning briefing').",
-        },
         "message": {
             "type": "string",
             "description": (
-                "The prompt submitted to a fresh agent session when "
-                "this cron fires. Should read like a self-contained "
-                "user turn (e.g. 'List my open PRs and summarise.')."
+                "REQUIRED. The prompt submitted to a fresh agent "
+                "session when this cron fires. Should read like a "
+                "self-contained user turn (e.g. 'Remind me to take "
+                "out the trash.' or 'List my open PRs and "
+                "summarise.')."
             ),
         },
         "schedule_spec": _SCHEDULE_SPEC_ARG,
+        "name": {
+            "type": "string",
+            "description": (
+                "Optional short label (e.g. 'morning briefing'). "
+                "If omitted, it is derived from the message — you "
+                "do NOT need to supply one."
+            ),
+        },
         "silent": {
             "type": "boolean",
             "description": (
@@ -119,7 +125,7 @@ _SCHEMA_CRON_ADD: dict[str, Any] = {
             "default": "UTC",
         },
     },
-    "required": ["name", "message", "schedule_spec"],
+    "required": ["message", "schedule_spec"],
     "additionalProperties": False,
 }
 
@@ -160,6 +166,16 @@ _SCHEMA_CRON_UPDATE: dict[str, Any] = {
 
 
 # --------------------------------------------------------------- helpers
+
+
+def _derive_cron_name(message: str) -> str:
+    """Derive a short label from the cron's message when the
+    caller didn't supply one. First line, collapsed whitespace,
+    capped at 50 chars. Names need not be unique (the cron id is
+    the key), so a derived label is always safe."""
+    first_line = message.strip().splitlines()[0] if message.strip() else "cron"
+    label = " ".join(first_line.split())[:50].strip()
+    return label or "cron"
 
 
 def _get_cron_service(ctx: ToolContext) -> Any:
@@ -217,12 +233,19 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     name = args.get("name")
     message = args.get("message")
     schedule_spec = args.get("schedule_spec")
-    if not isinstance(name, str) or not name.strip():
-        return ToolResult.error("'name' is required and must be non-empty")
+    # Only message + schedule_spec are required. ``name`` is an
+    # optional label — if the model didn't supply one, derive it
+    # from the message. Requiring a third field (and one named
+    # ``name``, which collides with the function's own name)
+    # made small models thrash: they'd give two of the three and
+    # oscillate. Observed 2026-06-08 — hermes3:8b could not set a
+    # plain reminder because of it. See docs/observed-issues.md.
     if not isinstance(message, str) or not message.strip():
         return ToolResult.error("'message' is required and must be non-empty")
     if not isinstance(schedule_spec, str) or not schedule_spec.strip():
         return ToolResult.error("'schedule_spec' is required")
+    if not isinstance(name, str) or not name.strip():
+        name = _derive_cron_name(message)
 
     tz = str(args.get("timezone") or "UTC")
     try:
@@ -381,13 +404,17 @@ def build_cron_tools() -> list[Tool]:
         Tool(
             name="cron_add",
             description=(
-                "Schedule an agent session to fire on its own. "
-                "Accepts interval ('every 60s'), one-shot "
+                "Schedule an agent session to fire on its own — "
+                "use this for reminders and recurring jobs. "
+                "REQUIRED args: `message` (what the cron should do "
+                "or say when it fires) and `schedule_spec` (when). "
+                "Schedules: interval ('every 60s'), one-shot "
                 "('at 2026-05-06T09:00:00'), or cron-expression "
-                "('cron 0 9 * * *') schedules. Defaults to ask for "
-                "approval; the cron's `silent` and `approval_mode` "
-                "flags control whether firings announce and whether "
-                "their internal tools auto-approve."
+                "('cron 0 9 * * *'). `name` is optional (derived "
+                "from the message if omitted). Defaults to ask for "
+                "approval; `silent` and `approval_mode` control "
+                "whether firings announce and whether their "
+                "internal tools auto-approve."
             ),
             schema=_SCHEMA_CRON_ADD,
             callable=_tool_cron_add,

@@ -135,14 +135,36 @@ async def test_cron_add_rejects_bad_schedule(svc: CronService) -> None:
     assert "invalid schedule" in result.payload
 
 
-async def test_cron_add_requires_name(svc: CronService) -> None:
+async def test_cron_add_name_optional_derived_from_message(svc: CronService) -> None:
+    """Regression for the 2026-06-08 reminder failure: ``name``
+    used to be required, and a required field literally called
+    ``name`` (colliding with the function name) made small models
+    thrash — hermes3:8b couldn't set a plain reminder. ``name`` is
+    now optional and derived from the message; only ``message`` +
+    ``schedule_spec`` are required."""
     tool = _tools()["cron_add"]
     result = await tool.callable(
-        {"name": "", "message": "m", "schedule_spec": "every 60"},
+        {
+            "message": "Take out the trash tonight",
+            "schedule_spec": "at 2026-06-08T20:00:00-04:00",
+        },
+        _ctx(svc),
+    )
+    assert not result.is_error, result.payload
+    jobs = svc.list(include_disabled=True)
+    assert len(jobs) == 1
+    assert jobs[0].name == "Take out the trash tonight"
+
+
+async def test_cron_add_still_requires_message(svc: CronService) -> None:
+    """message is the one field that can't be derived."""
+    tool = _tools()["cron_add"]
+    result = await tool.callable(
+        {"name": "label", "schedule_spec": "every 60"},
         _ctx(svc),
     )
     assert result.is_error
-    assert "'name'" in result.payload
+    assert "'message'" in result.payload
 
 
 async def test_cron_add_rejects_invalid_approval_mode(svc: CronService) -> None:
