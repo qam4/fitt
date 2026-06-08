@@ -33,6 +33,95 @@ doc.
 
 ---
 
+## cron_add couldn't be driven by a small model — and no test could have caught it
+
+**First observed:** 2026-06-08. **Fixed:** 2026-06-08.
+**Tag:** tool-schema ergonomics + eval-coverage gap (the
+schema half closed; the harness half open).
+
+Asked FITT (Telegram, `fitt-hermes` → `hermes3:8b`) to set a
+plain reminder: "remind me to take out the trash at 8pm
+tonight." Three `cron_add` calls, all errored, turn gave up.
+The turn-detail page told the whole story: call 1 supplied
+`message` + `schedule_spec` → `'name' is required`; call 2
+supplied `name` + `schedule_spec` → `'message' is required`;
+call 3 supplied `message` + `schedule_spec` again → `'name' is
+required`. The model oscillated between two of three required
+fields and never converged. (Two secondary `hermes3:8b`
+weaknesses rode along: it generated past dates — 2022/2023 —
+and on the final iteration narrated the tool call as text
+instead of emitting a real `tool_call`.)
+
+**Root cause:** `_SCHEMA_CRON_ADD` required three fields —
+`name`, `message`, `schedule_spec` — and one of them was
+literally named `name`, colliding with the function's own
+name. That's a fumble magnet for a small model: three slots to
+fill correctly in one shot, with a confusing label on one of
+them. `name` was never load-bearing — the cron `id` is the
+key; the label is cosmetic and trivially derivable from the
+message.
+
+**Fix (schema half, commit cead402):** required reduced to
+`[message, schedule_spec]`; `name` made optional and derived
+from the message (`_derive_cron_name`) when absent; properties
+reordered so the required pair leads; tool description rewritten
+to state REQUIRED args explicitly. Regression tests swapped
+`test_cron_add_requires_name` for
+`test_cron_add_name_optional_derived_from_message` +
+`test_cron_add_still_requires_message`.
+
+**Why no test caught it — the real lesson.** There *are*
+`cron_add` unit tests, and they passed the whole time. But
+every one of them hand-writes a *correct* args dict — they
+prove the handler works when given good arguments, which can
+never surface a schema that a *model* can't fill. The thing
+that should catch this is the eval suite ("can this model emit
+the right tool call?"). But `alias_eval.py` /
+`alias_eval_coding.py` test **synthetic** tool schemas declared
+inline (`read_file`, `grep_repo`, `list_capabilities`, and in
+the coding suite `edit_file`/`glob_search`/`shell`) — they
+never load the real registry from `build_cron_tools()` /
+`build_fileops_tools()`. So the actual `cron_add` schema, with
+its fumble-inducing shape, was never put in front of a model by
+any test. It only met one in live use.
+
+**The coverage gap, stated plainly:** our eval harness tests
+tools we wrote *for the eval*, not the tools we *ship*. Schema-
+ergonomics bugs in the real registry are invisible to it by
+construction.
+
+**Audit of the rest of the registry (the "other tools?"
+question):**
+
+- `edit_file` — **4 required** (`project`, `path`, `old_str`,
+  `new_str`), plus `old_str` must match exactly once. Highest
+  remaining fumble surface; the next one I'd expect to thrash.
+- `write_file` — 3 required (`project`, `path`, `content`).
+- **Naming inconsistency across tools:** `cron_add` calls the
+  text-to-say `message`; `send_message` and `learn_add` call it
+  `text`. The model hit this live (put `message` where `text`
+  was expected → `'text' is required`). Three tools, three
+  names for "the words" — a fumble cause in its own right.
+- Clean (single obvious required arg): `web_search` (`query`),
+  `http_get` (`url`), the cron id-only tools, gitops
+  (`project`).
+
+**Fix plan (harness half, open):** extend the eval harness to
+run the **real registered tools** (not re-declared synthetic
+copies) so schema-ergonomics regressions surface in the
+dashboard verdict instead of in a live reminder. When that
+lands, normalising the `message`/`text` naming and flattening
+`edit_file`'s required set become eval-measurable rather than
+guesses. Not started — needs an explicit go and probably its
+own small spec.
+
+**Urgency:** the schema fix was high (a personal assistant that
+can't set a reminder is failing its core promise) and is done.
+The harness extension is medium — it's the systemic fix that
+keeps this class of bug from recurring on the next tool.
+
+---
+
 ## Probe flattened "slow / cold-loading" into "transport_error" on a shared-GPU laptop
 
 **First observed:** 2026-05-28. **Fixed:** 2026-06-02
