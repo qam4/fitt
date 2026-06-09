@@ -51,7 +51,7 @@ references point at `requirements.md`; property refs (Cn) at
 - [x] 5. `PromptResolver.resolve(step, alias)` with per-step defaults
   for `plan|execute|compact|recover` and optional per-alias overrides;
   config-driven, no code change to override (Story 2.1-2.5).
-- [ ] 6. `PlanStore`: durable structured plan (markdown todo),
+- [x] 6. `PlanStore`: durable structured plan (markdown todo),
   persist + re-inject, hydrate-from-history (fresh-agent-per-turn).
   Structured round-trip, no lossy summary (Story 1.2, 1.4; property
   C5).
