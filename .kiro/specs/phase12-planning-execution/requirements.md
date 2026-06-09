@@ -223,6 +223,35 @@ are driven by data, not vibes.
   (skips planning on a turn that needed it), so the per-alias planner
   prompt (Story 2.4) can be tuned from data rather than guesswork.
 
+### 8. Behavior keys off capability, not model identity
+
+As the operator, I want harness behavior driven by what a model can
+demonstrably do, not by its name or family, so that swapping or
+adding a model is a data operation and FITT never hardcodes
+assumptions about a named model.
+
+#### Acceptance Criteria
+- 8.1 No harness branch keys on a model name/family substring.
+  Per-`(step, alias)` prompt selection (Story 2) and any behavioral
+  switch key off a capability profile, not identity.
+- 8.2 The profile is a **hybrid**: declared metadata (context window,
+  nominal tool support — cheap, static, models.dev-style catalog)
+  plus **measured** grades (Story 7.5 / tasks 24) for the
+  load-conditioned behaviors a catalog cannot capture (e.g.
+  tool-calling reliability at large prompt sizes — the granite case,
+  where declared "supports tools: yes" was wrong in practice).
+- 8.3 A model whose profile shows it cannot meet a capability an alias
+  requires (e.g. tool-calling at the operator's prompt size) is
+  flagged unsuitable at bind/boot — fail-loud (Principle 11), not
+  silently bound.
+- 8.4 Reference contrast (rationale, see
+  `docs/agent-orchestration-survey.md`): Hermes keys behavior on
+  model-name/family substring matching (including whether a model
+  "supports tool calling"); OpenCode uses a declared capability
+  catalog (models.dev); neither runtime-measures. FITT's
+  single-operator, few-models, stress-weak-models context justifies
+  the measured layer they omit.
+
 ## Non-Goals (this phase)
 
 - **Subagent / many-context execution.** Named successor work; v1 is
