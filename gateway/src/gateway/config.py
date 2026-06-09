@@ -264,6 +264,14 @@ class Config(BaseModel):
     # all defaults from the registry's client table.
     tools: dict[str, Any] | None = None
 
+    # ``prompts:`` block is Phase 12: per-(alias, step) system-prompt
+    # overrides for the planning/execution orchestrator, plus an
+    # optional ``defaults:`` key for global per-step default
+    # overrides. Loose dict here, parsed strictly by
+    # ``PromptResolver.from_config`` (mirrors the ``tools:`` pattern).
+    # Absent block = built-in, model-agnostic step defaults.
+    prompts: dict[str, Any] | None = None
+
     # ``events:`` block is Phase 4.5 Task 10 event-log pruning.
     # Shape:
     #   events:
