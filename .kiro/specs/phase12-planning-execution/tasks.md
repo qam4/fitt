@@ -57,7 +57,7 @@ references point at `requirements.md`; property refs (Cn) at
   C5).
 - [x] 7. A `todowrite`-style plan tool offered in the planner pass;
   writes to `PlanStore`.
-- [ ] 8. Planner pass: `run_agent_loop` with the `plan`-step prompt +
+- [x] 8. Planner pass: `run_agent_loop` with the `plan`-step prompt +
   plan tool, elected (prompt-nudged), model self-elects (Story 1.1,
   1.3).
 - [ ] 9. Executor pass: `run_agent_loop` with the `execute`-step
