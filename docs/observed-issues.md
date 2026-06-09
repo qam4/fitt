@@ -33,6 +33,57 @@ doc.
 
 ---
 
+## Dev loop was blind to real models; now wired to local + EC2 Ollama
+
+**First observed:** 2026-06-09. **Addressed:** 2026-06-09.
+**Tag:** dev-workflow / Phase 12 task 1 (resolved).
+
+Starting Phase 12 (planning/orchestration) surfaced that the
+dev/eval loop couldn't exercise a real model: unit tests use
+fakes, and the bound models run at home / on EC2, not from the
+dev box. For a phase whose correctness *is* real weak-model
+behavior (does it plan, does it tool-call under prompt load),
+that meant building the prompt-sensitive parts blind — and my
+"eval first" instinct was really "I can't see the model and want
+to." Diagnosed mid-session (operator caught the framing).
+
+**Addressed** by wiring the existing eval harness
+(`fitt eval alias`) to real Ollama backends — no new harness, just
+config + reachability:
+
+- A local dev config (`~/.fitt/config.yaml`) pointing at this
+  box's Ollama (`qwen3:8b`, `qwen2.5-coder:14b`).
+- The EC2 A10G reached over an **SSH local-port-forward**
+  (`-L 11435:localhost:11434 ec2-instance-1`) — Ollama stays bound
+  to localhost on EC2, no public exposure, no security-group
+  change. Pulled `hermes3:8b` + `qwen3:14b` (the home pair) +
+  `qwen3:8b`.
+
+First real signal (the payoff):
+
+- `hermes3:8b` (EC2 A10G): **6/6 bare, 6/6 realistic (~970-token
+  capability block)**, sub-second/case.
+- `qwen2.5-coder:14b` (local): **1/5 bare**, narrated 4/5,
+  ~1 min/case — the documented narration failure mode, reproduced
+  live with a real model.
+
+**Caveats / open:** the realistic run only reached ~970 tokens
+(memory/skills off in the dev config); the documented degradation
+was ~5K. A true degradation read needs a full production-size
+prompt. Record/replay for deterministic CI (phase12 task 3) is
+still to come. Context-tolerance method (declared window as free
+bound + measured operating-point + cheap binary-searched probe) is
+captured in phase12 task 24.
+
+**Lesson:** get a real model in the loop *before* building
+model-sensitive code — the "enabling step, not a baseline ritual"
+framing in phase12 task 1. Also: qwen3 is a reasoning model whose
+long thinking phase makes `stream:false` calls block a long time
+(disable with `think:false` or budget it) — `hermes3:8b` doesn't
+think, hence the latency gap.
+
+---
+
 ## cron_add couldn't be driven by a small model — and no test could have caught it
 
 **First observed:** 2026-06-08. **Fixed:** 2026-06-08.

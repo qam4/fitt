@@ -27,7 +27,7 @@ references point at `requirements.md`; property refs (Cn) at
 
 ## Phase 12a — Real model in the loop (de-blind the dev workflow)
 
-- [ ] 1. Wire the dev/eval harness to a real model backend: local
+- [x] 1. Wire the dev/eval harness to a real model backend: local
   Ollama (`localhost:11434`) and/or the EC2 GPU box. Pull a couple of
   representative weak models (e.g. `qwen3:8b` plus the bound model).
   Model-agnostic — no hardcoded model names; the backend/models are
@@ -126,6 +126,20 @@ references point at `requirements.md`; property refs (Cn) at
   Behavior keys off measured capability, never model names (the
   model-agnostic guarantee). Keep it to the dimensions that change a
   harness decision now; the full profiler is successor work.
+  Context-tolerance method: the declared context window
+  (Ollama/models.dev) is a free bound — it rules out prompts that can
+  never fit and gives headroom (operating-point vs ceiling) at zero
+  cost; the **measured operating-point pass-rate** at FITT's real
+  prompt size is the actual degradation signal (declared gives the
+  ceiling, only measurement finds where it breaks below it). Optional
+  deeper read: binary-search a coarse threshold with a *cheap*
+  structure-adherence probe (one "emit a tool_call" case, multi-
+  sampled) rather than the full suite. Degradation depends on task +
+  prompt content, so record a measured range, not a universal scalar.
+  NOTE (2026-06-09): dev runs only reached ~970 tokens (capability
+  block; memory/skills off) — hermes3:8b held 6/6 bare and realistic —
+  so a true degradation read still needs a full production-size
+  prompt.
 - [ ] 25. Run the planner-on-`qwen3:14b` / executor-on-`hermes3:8b`
   experiment ("concentrate intelligence in planning") and record the
   delta — a concrete test that the harness, not the model, is the
