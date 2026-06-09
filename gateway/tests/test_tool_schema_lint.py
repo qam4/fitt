@@ -49,6 +49,7 @@ from gateway.tools import (
     build_git_tools,
     build_inline_tools,
     build_lessons_tools,
+    build_plan_tools,
     build_project_shell_tool,
     build_send_message_tool,
     build_shell_tools,
@@ -75,6 +76,7 @@ def _all_registered_tools() -> list[Tool]:
     tools += build_git_tools()
     tools += build_inline_tools(registry_ref=None)
     tools += build_lessons_tools()
+    tools += build_plan_tools()
     tools.append(build_project_shell_tool())
     tools.append(build_send_message_tool())
     tools += build_shell_tools()

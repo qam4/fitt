@@ -23,6 +23,7 @@ from .fileops import build_fileops_tools
 from .gitops import build_git_tools
 from .inline import build_inline_tools
 from .lessons import build_lessons_tools
+from .plan_tools import build_plan_tools
 from .project_shell import build_project_shell_tool
 from .registry import ToolPolicy, ToolRegistry
 from .send_message import SendMessageRateLimiter, build_send_message_tool
@@ -46,6 +47,7 @@ __all__ = [
     "build_git_tools",
     "build_inline_tools",
     "build_lessons_tools",
+    "build_plan_tools",
     "build_project_shell_tool",
     "build_send_message_tool",
     "build_shell_tools",

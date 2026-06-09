@@ -275,6 +275,13 @@ class ToolContext:
     tests that don't exercise web search can leave it
     default."""
 
+    plan_store: Any = None
+    """Phase 12 — the :class:`~gateway.plan_store.PlanStore` the
+    ``todowrite`` plan tool writes to. Typed ``Any`` for the same
+    import-cycle reason as the other handles above. ``None`` in
+    contexts where planning isn't wired; the plan tool fails with a
+    readable error when it's missing."""
+
 
 # --------------------------------------------------------------- decisions
 

@@ -55,7 +55,7 @@ references point at `requirements.md`; property refs (Cn) at
   persist + re-inject, hydrate-from-history (fresh-agent-per-turn).
   Structured round-trip, no lossy summary (Story 1.2, 1.4; property
   C5).
-- [ ] 7. A `todowrite`-style plan tool offered in the planner pass;
+- [x] 7. A `todowrite`-style plan tool offered in the planner pass;
   writes to `PlanStore`.
 - [ ] 8. Planner pass: `run_agent_loop` with the `plan`-step prompt +
   plan tool, elected (prompt-nudged), model self-elects (Story 1.1,
