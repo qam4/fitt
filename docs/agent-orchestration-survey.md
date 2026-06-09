@@ -231,6 +231,36 @@ speculating about. Verified from source 2026-06-08.
 
 ---
 
+## How the references key *per-model* behavior (verified)
+
+Relevant to FITT's model-agnostic goal. Verified from source
+2026-06-08.
+
+- **Hermes: model-name / family substring matching.**
+  `agent/anthropic_adapter.py` and `bedrock_adapter.py` gate behavior
+  with `any(substring in model_name)` checks
+  (`_supports_adaptive_thinking`, `_*_SUBSTRINGS`,
+  `_KIMI_FAMILY_MODEL_PREFIXES`). Notably even *whether a model
+  supports tool calling* is decided by name pattern
+  (`_NON_TOOL_CALLING_PATTERNS`), not by measuring it. Plus the
+  `TOOL_USE_ENFORCEMENT_MODELS` family tuple.
+- **OpenCode: declared capability catalog (`models.dev`).** Models
+  carry a `capabilities: { temperature, reasoning, ... }` object plus
+  context length and tool support, pulled from the catalog —
+  capability-shaped but *published/static*, not measured.
+- **Neither runtime-measures capability to drive behavior.** Both
+  choices are pragmatic for broad-compatibility tools (you can't eval
+  every model a user might plug in). FITT's opposite context
+  (few models, one operator, willing to eval, deliberately stressing
+  weak ones) justifies a **measured** layer, used as a hybrid:
+  declared catalog for static facts (context window, nominal tool
+  support) + measured grades for load-conditioned behavior a catalog
+  cannot capture (granite declared "supports tools" yet narrated at
+  5K tokens). This is a deliberate improvement on the references, not
+  a copy. See phase12 requirements Story 8.
+
+---
+
 ## What's portable to FITT (mapped to existing phases)
 
 Ordered cheapest-first. The striking thing: the cheapest cures are
