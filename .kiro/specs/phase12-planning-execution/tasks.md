@@ -60,7 +60,7 @@ references point at `requirements.md`; property refs (Cn) at
 - [x] 8. Planner pass: `run_agent_loop` with the `plan`-step prompt +
   plan tool, elected (prompt-nudged), model self-elects (Story 1.1,
   1.3).
-- [ ] 9. Executor pass: `run_agent_loop` with the `execute`-step
+- [x] 9. Executor pass: `run_agent_loop` with the `execute`-step
   prompt and the plan re-injected from `PlanStore`; ticks todos as
   steps complete (Story 3.1; property C1).
 - [ ] 10. Orchestrator sequencing plan -> execute for one turn; single

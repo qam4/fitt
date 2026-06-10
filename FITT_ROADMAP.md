@@ -1464,6 +1464,24 @@ and "Borrow-list updates").
   want FITT to research X while executing Y." Hermes's
   `delegate_tool.py` has the reference shape (leaf vs
   orchestrator roles, per-thread approval callbacks).
+- **Self-learning: automatic lesson extraction + consolidation.**
+  FITT's Phase 5 lessons are explicit-only (`learn_add` on a user
+  correction); storage + always-on injection work. MeshClaw
+  (2026-06-10 observation) additionally *extracts* lessons from task
+  failures/successes via a background consolidation pass — roughly
+  half its live lessons are `source=consolidation`, not
+  `user_explicit` — and carries richer metadata (confidence score,
+  source, and the "do X — NOT: don't Z" anti-example shape) plus
+  structured `project.*` / `user.*` key-value memory. Gap for FITT:
+  (1) a post-turn / background extraction+dedup pass that proposes
+  lessons from outcomes, not just corrections; (2) lesson schema
+  upgrade (source + confidence + anti-example); (3) structured
+  preference/project KV memory. MeshClaw's lesson schema is concrete
+  prior art to borrow. Lands with / after Phase 9 (Memory v1); the
+  schema upgrade is cheap and could come first. Cheap prereq step:
+  validate Phase 5's explicit path against a real weak model (does it
+  learn-on-correction at all?) using the real-model loop. Trigger:
+  when explicit-only learning proves insufficient in daily use.
 
 ### Latent items from earlier phase scope-boundaries
 

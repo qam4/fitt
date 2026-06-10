@@ -139,6 +139,41 @@ Per alias:
 No code change to add an override or flip a mode. Aliases that do
 fine on defaults carry no config.
 
+## Profiling -> config -> loop (two clocks)
+
+Two clocks, deliberately decoupled:
+
+- **Offline (occasional, operator-run):** the eval/profiler. The
+  operator runs `fitt eval alias <x>` (or the dashboard action)
+  against a real backend on bind / model-swap / periodically. It
+  produces a per-alias capability profile (per-dimension grades +
+  declared metadata).
+- **Runtime (every turn):** the agent loop.
+
+The data flow is one-directional and **never per-turn**:
+
+```
+eval (operator-run, real backend)
+  -> capability profile (stored)
+  -> per-alias config (operator sets, profile-informed)
+  -> agent loop reads CONFIG
+```
+
+The loop never consults the eval at runtime. The profile *informs*
+config (Story 8 / task 24: informs/surfaces, does not silently
+auto-drive). What the profile changes is all config the loop already
+reads: per-`(step, alias)` prompt selection, alias suitability
+(fail-loud at bind), context budget. The loop's structure
+(plan -> execute -> recover) is identical for every model; only config
+varies per model, and the loop keys off config values, never model
+names. Feedback loop: a live failure becomes a new eval case ->
+re-run -> updated profile -> updated config.
+
+**v1 is operator-in-the-loop** (the profile informs/recommends; the
+operator sets config). Auto-applying the profile to behavior at
+runtime is deferred — a noisy, sample-limited measurement driving
+live behavior is the silent-degradation failure we avoid.
+
 ## Design decisions
 
 - **D1 — One role-switched loop, not a planner subsystem.**
