@@ -23,9 +23,21 @@ import asyncio
 from typing import Any
 
 import httpx
+import pytest
 
 from .._llm_stubs import stub_reply, stub_tool_call
 from .conftest import E2EApprover, StubbedLLM, fetch_events, wait_for_event
+
+
+@pytest.fixture
+def detach_threshold() -> float:
+    """Enable detach for these tests (the e2e default is off).
+
+    Overrides the conftest ``detach_threshold`` fixture so ``e2e_app``
+    wires a 50ms threshold; both tests below deliberately hold the
+    approval past it to exercise the detach path.
+    """
+    return 0.05
 
 
 async def test_detach_placeholder_then_late_tool_result(

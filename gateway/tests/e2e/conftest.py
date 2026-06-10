@@ -349,21 +349,35 @@ async def fetch_events(
 
 
 @pytest.fixture
-def e2e_app(tmp_path: Path) -> Any:
+def detach_threshold() -> float | None:
+    """Approval-detach threshold for ``e2e_app``, in seconds.
+
+    Default ``None`` = detach OFF. A normal (fast) approval must
+    never spuriously detach: under full-suite load a 50ms threshold
+    occasionally tripped on tests that approve immediately (e.g. the
+    cron-lifecycle test), making them flaky. The detach-lifecycle
+    tests override this fixture to a low value to deliberately
+    exercise detach.
+    """
+    return None
+
+
+@pytest.fixture
+def e2e_app(tmp_path: Path, detach_threshold: float | None) -> Any:
     """Build an in-process gateway with memory enabled and a
     scratch ``hub`` project pre-registered.
 
     Lifespan is not entered (see module docstring).
     """
     cfg = build_test_config(tmp_path, memory_enabled=True)
-    # Wire the detach threshold below the approval timeout so
-    # detach-lifecycle tests can flip the behaviour per-test via
-    # the test's build step. Tests that don't use detach won't
-    # trip it.
-    cfg.tools = {
-        "approval_timeout_secs": 5.0,
-        "approval_detach_threshold_secs": 0.05,
-    }
+    # Detach is off by default (see ``detach_threshold``); only the
+    # detach-lifecycle tests opt in by overriding that fixture.
+    # Keeping it off elsewhere stops a fast approval from racing the
+    # threshold under load (the old 50ms default made approve-fast
+    # tests flaky in the full suite).
+    cfg.tools = {"approval_timeout_secs": 5.0}
+    if detach_threshold is not None:
+        cfg.tools["approval_detach_threshold_secs"] = detach_threshold
     app = create_app(cfg)
 
     # Pre-register a project so tools that take ``project=...`` can
