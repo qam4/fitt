@@ -13,7 +13,9 @@ from textwrap import dedent
 import pytest
 
 from gateway.config import (
+    AliasOrchestrationConfig,
     Config,
+    ModelConfig,
     Secrets,
     default_config_path,
     default_secrets_path,
@@ -527,3 +529,45 @@ def test_secrets_allows_multiple_untagged_tokens(tmp_path: Path) -> None:
     sp = _write(tmp_path / "secrets.yaml", secrets_yaml, secure=True)
     secrets = load_secrets(sp)
     assert len(secrets.allowed_tokens) == 2
+
+
+# --------------------------------------------------------------- orchestration gate (Phase 12 task 10)
+
+
+def _orchestration_config(
+    orchestration: dict[str, AliasOrchestrationConfig] | None = None,
+) -> Config:
+    """Minimal valid Config for exercising the per-alias orchestrate gate."""
+    from decimal import Decimal
+
+    return Config(
+        aliases={"fitt-default": "m1"},
+        models=[
+            ModelConfig(
+                id="m1",
+                backend="ollama",
+                endpoint="http://localhost:11434",
+                model="qwen3:8b",
+                cost_per_mtok_in=Decimal("0"),
+                cost_per_mtok_out=Decimal("0"),
+            )
+        ],
+        orchestration=orchestration or {},
+    )
+
+
+def test_orchestration_defaults_off() -> None:
+    cfg = _orchestration_config()
+    assert cfg.is_orchestrated("fitt-default") is False
+    # Unknown alias is not an error for the gate query — just False.
+    assert cfg.is_orchestrated("does-not-exist") is False
+
+
+def test_orchestration_enabled_per_alias() -> None:
+    cfg = _orchestration_config({"fitt-default": AliasOrchestrationConfig(enabled=True)})
+    assert cfg.is_orchestrated("fitt-default") is True
+
+
+def test_orchestration_entry_for_unknown_alias_rejected() -> None:
+    with pytest.raises(ValueError, match="no such alias"):
+        _orchestration_config({"ghost": AliasOrchestrationConfig(enabled=True)})

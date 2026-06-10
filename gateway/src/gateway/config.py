@@ -228,6 +228,21 @@ class TraceabilityConfig(BaseModel):
     the secrets-in-bodies risk that implies)."""
 
 
+class AliasOrchestrationConfig(BaseModel):
+    """Phase 12 — per-alias orchestration settings.
+
+    ``enabled`` gates plan -> execute orchestration for the alias.
+    Default off: the alias uses the flat agent loop (today's
+    behaviour) until an operator opts it in (Principle 9 "live with
+    it before extending" cutover). Task 11 will grow this with
+    per-alias iteration budgets and an optional planner alias.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+
+
 class Config(BaseModel):
     """Top-level configuration loaded from config.yaml."""
 
@@ -272,6 +287,13 @@ class Config(BaseModel):
     # Absent block = built-in, model-agnostic step defaults.
     prompts: dict[str, Any] | None = None
 
+    # ``orchestration:`` block is Phase 12 task 10: per-alias gate for
+    # plan -> execute orchestration. Keyed by alias name; aliases
+    # absent here use the flat loop. Default off everywhere, so the
+    # block is optional and adding it changes nothing until an alias
+    # is explicitly enabled.
+    orchestration: dict[str, AliasOrchestrationConfig] = Field(default_factory=dict)
+
     # ``events:`` block is Phase 4.5 Task 10 event-log pruning.
     # Shape:
     #   events:
@@ -298,6 +320,13 @@ class Config(BaseModel):
             if target not in ids:
                 raise ValueError(
                     f"alias {alias!r} → {target!r} but no model with that id is configured"
+                )
+        # Every orchestration entry must reference a configured alias
+        # (fail-loud on a typo'd alias name — Principle 11).
+        for alias in self.orchestration:
+            if alias not in self.aliases:
+                raise ValueError(
+                    f"orchestration entry for {alias!r} but no such alias is configured"
                 )
         # Every fallback target must exist
         for m in self.models:
@@ -339,6 +368,13 @@ class Config(BaseModel):
 
     def alias_names(self) -> list[str]:
         return sorted(self.aliases.keys())
+
+    def is_orchestrated(self, alias: str) -> bool:
+        """True iff ``alias`` is opted into plan -> execute
+        orchestration (Phase 12). Default False — the alias uses the
+        flat agent loop."""
+        cfg = self.orchestration.get(alias)
+        return cfg.enabled if cfg is not None else False
 
 
 # -------------------------------------------------------------- secrets schema
