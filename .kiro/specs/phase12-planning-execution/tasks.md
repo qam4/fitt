@@ -63,9 +63,14 @@ references point at `requirements.md`; property refs (Cn) at
 - [x] 9. Executor pass: `run_agent_loop` with the `execute`-step
   prompt and the plan re-injected from `PlanStore`; ticks todos as
   steps complete (Story 3.1; property C1).
-- [ ] 10. Orchestrator sequencing plan -> execute for one turn; single
+- [~] 10. Orchestrator sequencing plan -> execute for one turn; single
   entry point that the chat handler and cron runner call (as they
-  call `run_agent_loop` today).
+  call `run_agent_loop` today). DONE: `run_orchestrated_turn`
+  (`orchestrator.py`) sequences planner -> executor + tests. PENDING:
+  wire it into chat + cron, **gated per alias** (config `orchestrate`,
+  default off — Principle 9 cutover); the flat loop stays the default
+  until an alias opts in. Wiring must preserve the assembled system
+  prompt (identity + capability block) chat.py builds upstream.
 - [ ] 11. Make the iteration budget configurable per alias (replaces
   the hard-coded 10), higher default for planned turns (Story 3.3).
 - [ ] 12. Unit tests (fakes): resolver precedence, PlanStore
@@ -118,9 +123,11 @@ references point at `requirements.md`; property refs (Cn) at
   tuning (Story 2.4).
 - [ ] 24. Thin capability profile: measure a small set of **per-
   dimension** grades — tool-calling reliability (and at what prompt
-  size it degrades), plans-when-nudged, context tolerance — across the
-  model roster. Per-dimension, **not** a single scalar tier. The
-  profile **informs/surfaces** recommended config to the operator; it
+  size it degrades), plans-when-nudged, **orchestration-readiness**
+  (plans AND follows through on multi-step execution, not just chats —
+  the dimension that gates the per-alias `orchestrate` flag),
+  context tolerance — across the model roster. Per-dimension, **not**
+  a single scalar tier. The profile **informs/surfaces** recommended config to the operator; it
   does **not** silently auto-drive behavior in v1. Cases drawn from
   real usage to avoid overfitting the harness to the benchmark.
   Behavior keys off measured capability, never model names (the

@@ -135,6 +135,14 @@ Per alias:
 - `prompts.<step>: <override id>` for any of `plan|execute|compact|recover` (optional; defaults used when unset).
 - `iteration_budget` (replaces today's hard-coded 10; higher default for planned turns — Story 3.3).
 - `planner_alias` (optional; defaults to the turn's alias — Story 2.2).
+- `orchestrate` (bool, default **false**) — gate plan -> execute
+  orchestration per alias. Off means the flat loop (today's
+  behaviour); on routes the turn through the orchestrator. Lets an
+  operator enable orchestration only for aliases whose measured
+  **orchestration-readiness** supports it (Story 8 / task 24): a
+  chat-only model will fail plan-election + execute-follow-through, so
+  enabling the gate for it just adds a wasted planner pass. Default-off
+  is the Principle 9 "live with it before extending" cutover.
 
 No code change to add an override or flip a mode. Aliases that do
 fine on defaults carry no config.
