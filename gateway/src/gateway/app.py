@@ -95,6 +95,21 @@ def create_app(config: Config) -> FastAPI:
     )
     app.state.lessons = lessons_store
 
+    # Phase 12: the PlanStore holds the durable plan artifact (the
+    # todo list the planner emits and the executor works), keyed by
+    # session, persisted to a single JSON file alongside the other
+    # agent-mutated state (matching the CronService / LessonsStore
+    # single-file pattern). Wired onto every ToolContext so the
+    # ``todowrite`` tool and the orchestrator can read/write it.
+    from .plan_store import PlanStore
+    from .prompt_resolver import PromptResolver
+
+    app.state.plan_store = PlanStore(fitt_home() / "plans.json")
+    # Phase 12: resolves per-(step, alias) system prompts for the
+    # orchestrator's plan/execute/recover passes. Built from the
+    # optional ``prompts:`` config block (defaults when absent).
+    app.state.prompt_resolver = PromptResolver.from_config(config.prompts)
+
     app.state.memory = MemoryStore(
         identity_dir=memory_cfg.identity_dir,
         sessions_dir=memory_cfg.sessions_dir,
@@ -150,6 +165,7 @@ def create_app(config: Config) -> FastAPI:
         build_git_tools,
         build_inline_tools,
         build_lessons_tools,
+        build_plan_tools,
         build_project_shell_tool,
         build_send_message_tool,
         build_shell_tools,
@@ -246,6 +262,8 @@ def create_app(config: Config) -> FastAPI:
     for t in build_cron_tools():
         tool_registry.register(t)
     for t in build_lessons_tools():
+        tool_registry.register(t)
+    for t in build_plan_tools():
         tool_registry.register(t)
 
     # Phase 4.7: project_shell. Registered with baked-in per-
@@ -428,6 +446,8 @@ def create_app(config: Config) -> FastAPI:
         lessons=app.state.lessons,
         artifact_store=app.state.artifact_store,
         turns=app.state.turns,
+        plan_store=app.state.plan_store,
+        prompt_resolver=app.state.prompt_resolver,
     )
     app.state.cron_runner = cron_runner
     app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=cron_runner.fire)

@@ -63,14 +63,14 @@ references point at `requirements.md`; property refs (Cn) at
 - [x] 9. Executor pass: `run_agent_loop` with the `execute`-step
   prompt and the plan re-injected from `PlanStore`; ticks todos as
   steps complete (Story 3.1; property C1).
-- [~] 10. Orchestrator sequencing plan -> execute for one turn; single
-  entry point that the chat handler and cron runner call (as they
-  call `run_agent_loop` today). DONE: `run_orchestrated_turn`
-  (`orchestrator.py`) sequences planner -> executor + tests. PENDING:
-  wire it into chat + cron, **gated per alias** (config `orchestrate`,
-  default off — Principle 9 cutover); the flat loop stays the default
-  until an alias opts in. Wiring must preserve the assembled system
-  prompt (identity + capability block) chat.py builds upstream.
+- [x] 10. Orchestrator sequencing plan -> execute for one turn; single
+  entry point that the chat handler and cron runner call. DONE:
+  `run_orchestrated_turn` (`orchestrator.py`) is a messages-based
+  drop-in returning `AgentLoopResult`; wired into chat + cron **gated
+  per alias** (`Config.is_orchestrated`, default off); PlanStore +
+  `todowrite` tool + PromptResolver wired into `create_app`. Preserves
+  the assembled system prompt (plan re-injected, identity kept). Full
+  suite green (1534 passed).
 - [ ] 11. Make the iteration budget configurable per alias (replaces
   the hard-coded 10), higher default for planned turns (Story 3.3).
 - [ ] 12. Unit tests (fakes): resolver precedence, PlanStore

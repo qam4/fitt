@@ -1,81 +1,99 @@
 """Phase 12 task 10 — the orchestrator.
 
-Sequences a single turn as **plan -> execute** by driving the two
-role-switched passes (:func:`gateway.planner.run_planner_pass` then
-:func:`gateway.executor.run_executor_pass`) and aggregating their
-result. It is a state machine, not an agent: it contains no model
-intelligence (design D1) — the intelligence lives in the passes; the
-orchestrator just owns the sequence and the PlanStore lifecycle for
-the turn.
+Runs one turn as **plan -> execute** and is shaped as a drop-in for
+:func:`gateway.agent_loop.run_agent_loop`: same call surface (alias,
+messages, request_body_extras, collaborators) and the same
+:class:`AgentLoopResult` return, so the chat handler and cron runner
+can route a turn through it without changing any downstream handling
+(memory append, envelope shaping, detached delivery, cost accounting).
 
-Recovery (task 13/14) and turn-event emission (task 17) are deliberate
-later additions; this version is the bare plan -> execute spine so the
-core hypothesis (elected planning helps a weak model on a multi-step
-turn) becomes testable after task 12c without the heavier pieces.
+It is a state machine, not an agent (design D1) — the intelligence
+lives in the two passes; the orchestrator owns the sequence:
 
-**Not yet wired into chat/cron.** Making this the single entry point
-the chat handler and cron runner call (replacing their direct
-``run_agent_loop`` calls) is a deliberate prod-behaviour cutover: it
-flips every turn to plan-then-execute and must preserve the assembled
-system prompt (identity + capability block) that chat.py builds
-upstream. That wiring — likely behind a config flag — is the
-remaining part of task 10 and is intentionally left for an explicit
-follow-up rather than flipped here.
+1. **Plan pass** (lean, ``todowrite``-only) via
+   :func:`gateway.planner.run_planner_pass` on the latest user turn.
+   Elected: the model decides whether to emit a plan.
+2. **Execute pass** via ``run_agent_loop`` on the *full assembled
+   messages* (identity + capability block preserved), with the
+   execute-step prompt and the plan re-injected into the system
+   message (property C1), offering the original toolset.
+
+The returned ``AgentLoopResult`` is the execute pass's, with the
+planner pass's token and iteration counts folded in so cost
+accounting reflects both passes.
+
+Recovery (tasks 13/14) and turn-event emission (task 17) are
+deliberate later additions; this is the bare plan -> execute spine.
+Whether a turn is routed here at all is gated per alias by
+``Config.is_orchestrated`` (default off) — see the chat/cron wiring.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import dataclasses
 from typing import Any
 
-from .executor import ExecutorResult, run_executor_pass
+from .agent_loop import AgentLoopResult, run_agent_loop
 from .plan_store import Plan
-from .planner import PlannerResult, run_planner_pass
+from .planner import run_planner_pass
 from .prompt_resolver import PromptResolver
 from .router import AliasRouter
 from .tools import ToolContext, ToolRegistry
 
-# Per-pass iteration caps. Planning should be tight (emit a plan,
-# maybe revise once); execution gets the larger budget. Task 11
-# replaces these literals with per-alias config (higher default for
-# planned turns); until then they mirror the primitives' own
-# defaults so behaviour is unchanged.
+# Per-pass iteration caps. Planning is tight (emit a plan, maybe
+# revise once); execution gets the larger budget. Task 11 replaces
+# these literals with per-alias config; until then they mirror the
+# primitives' own defaults so behaviour is unchanged.
 _DEFAULT_PLANNER_ITERATIONS = 3
 _DEFAULT_EXECUTOR_ITERATIONS = 10
 
 
-@dataclass(slots=True)
-class OrchestratorResult:
-    """Outcome of one orchestrated turn.
+def _latest_user_message(messages: list[dict[str, Any]]) -> str:
+    """The most recent user-role text in the assembled messages.
 
-    * ``assistant_text`` — the executor's final reply (what the caller
-      delivers to the user).
-    * ``status`` — the executor loop's status (``ok`` /
-      ``tool_loop_exhausted`` / ``upstream_error``).
-    * ``planned`` — True iff the planner elected to emit a plan.
-    * ``plan`` — the plan as it stands after execution (todo ticks
-      applied), or ``None``.
-    * ``plan_complete`` — True iff a plan exists and every item is done.
-    * ``planner`` / ``executor`` — the underlying pass results for
-      callers needing detail.
-    * ``in_tokens`` / ``out_tokens`` — summed across both passes.
-    """
+    The plan pass is deliberately lean — it plans against the user's
+    actual request, not the whole transcript (matching the focused
+    planner prompt). Returns ``""`` if there's no user message (the
+    planner then simply elects not to plan)."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content
+    return ""
 
-    assistant_text: str
-    status: str
-    planned: bool
-    plan: Plan | None
-    plan_complete: bool
-    planner: PlannerResult
-    executor: ExecutorResult
-    in_tokens: int
-    out_tokens: int
+
+def _plan_block(plan: Plan) -> str:
+    return (
+        "[Plan]\n"
+        + plan.render_markdown()
+        + "\n\nWork this plan: do the next step that is not yet done, and call "
+        "`todowrite` to mark each step done as you complete it. When every step "
+        "is done, give your final answer."
+    )
+
+
+def _augment_system(messages: list[dict[str, Any]], additions: list[str]) -> list[dict[str, Any]]:
+    """Return a copy of ``messages`` with ``additions`` merged into the
+    system message (appended to an existing leading system message, or
+    prepended as one if absent). Preserves the assembled identity /
+    capability prompt — we add to it, never replace it."""
+    extra = "\n\n".join(a for a in additions if a and a.strip())
+    if not extra:
+        return list(messages)
+    out = [dict(m) for m in messages]
+    if out and out[0].get("role") == "system" and isinstance(out[0].get("content"), str):
+        out[0] = {**out[0], "content": out[0]["content"] + "\n\n" + extra}
+    else:
+        out.insert(0, {"role": "system", "content": extra})
+    return out
 
 
 async def run_orchestrated_turn(
     *,
     alias: str,
-    user_message: str,
+    messages: list[dict[str, Any]],
+    request_body_extras: dict[str, Any] | None = None,
     alias_router: AliasRouter,
     tool_registry: ToolRegistry,
     approval: Any,
@@ -84,19 +102,18 @@ async def run_orchestrated_turn(
     session_key: str,
     planner_max_iterations: int = _DEFAULT_PLANNER_ITERATIONS,
     executor_max_iterations: int = _DEFAULT_EXECUTOR_ITERATIONS,
-) -> OrchestratorResult:
-    """Run one turn as plan -> execute.
+    artifact_store: Any = None,
+) -> AgentLoopResult:
+    """Run one turn as plan -> execute and return the execute pass's
+    :class:`AgentLoopResult` (with the planner pass's tokens folded in).
 
-    The planner pass (elected) may write a plan to
-    ``tool_ctx.plan_store``; the executor pass then runs with the full
-    toolset and that plan re-injected (property C1). The planner pass
-    runs every turn — election is the model's call inside it, not a
-    branch here — so there is no separate fast path (a deliberate
-    design choice; latency optimisation is a non-goal).
+    The planner pass runs every turn — election is the model's call
+    inside it, not a branch here — so there is no separate fast path
+    (a deliberate design choice; latency optimisation is a non-goal).
     """
     planner = await run_planner_pass(
         alias=alias,
-        user_message=user_message,
+        user_message=_latest_user_message(messages),
         alias_router=alias_router,
         tool_registry=tool_registry,
         approval=approval,
@@ -106,29 +123,39 @@ async def run_orchestrated_turn(
         max_iterations=planner_max_iterations,
     )
 
-    executor = await run_executor_pass(
+    plan: Plan | None = None
+    if tool_ctx.plan_store is not None:
+        plan = tool_ctx.plan_store.get(session_key)
+
+    additions: list[str] = []
+    execute_prompt = prompt_resolver.resolve("execute", alias)
+    if execute_prompt.strip():
+        additions.append(execute_prompt.strip())
+    if plan is not None and plan.items:
+        additions.append(_plan_block(plan))
+
+    exec_messages = _augment_system(messages, additions)
+    exec_result = await run_agent_loop(
         alias=alias,
-        user_message=user_message,
+        messages=exec_messages,
+        request_body_extras=request_body_extras,
         alias_router=alias_router,
         tool_registry=tool_registry,
         approval=approval,
         tool_ctx=tool_ctx,
-        prompt_resolver=prompt_resolver,
         session_key=session_key,
         max_iterations=executor_max_iterations,
+        artifact_store=artifact_store,
     )
 
-    return OrchestratorResult(
-        assistant_text=executor.loop.assistant_text,
-        status=executor.loop.status,
-        planned=planner.planned,
-        plan=executor.plan,
-        plan_complete=executor.plan_complete,
-        planner=planner,
-        executor=executor,
-        in_tokens=planner.loop.in_tokens + executor.loop.in_tokens,
-        out_tokens=planner.loop.out_tokens + executor.loop.out_tokens,
+    # Fold the planner pass's usage into the returned result so cost
+    # accounting upstream sees both passes.
+    return dataclasses.replace(
+        exec_result,
+        in_tokens=exec_result.in_tokens + planner.loop.in_tokens,
+        out_tokens=exec_result.out_tokens + planner.loop.out_tokens,
+        iterations=exec_result.iterations + planner.loop.iterations,
     )
 
 
-__all__ = ["OrchestratorResult", "run_orchestrated_turn"]
+__all__ = ["run_orchestrated_turn"]

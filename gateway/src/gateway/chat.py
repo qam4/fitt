@@ -503,6 +503,7 @@ def _build_tool_context(request: Request) -> ToolContext:
         audit=getattr(request.app.state, "audit", None),
         cron=getattr(request.app.state, "cron", None),
         events=getattr(request.app.state, "events", None),
+        plan_store=getattr(request.app.state, "plan_store", None),
     )
 
 
@@ -574,6 +575,8 @@ async def _run_tool_loop(
     turn_capture_store: Any = None,
     traceability_default_capture: list[str] | None = None,
     traceability_enabled: bool = True,
+    config: Config | None = None,
+    prompt_resolver: Any = None,
 ) -> Response:
     """Dispatch, execute tool calls, re-dispatch, repeat, then return.
 
@@ -616,6 +619,31 @@ async def _run_tool_loop(
     detach_threshold = tool_registry.policy.approval_detach_threshold_secs
 
     def _build_loop_coro():  # type: ignore[no-untyped-def]
+        # Phase 12: route through the plan -> execute orchestrator when
+        # this alias is opted in (Config.orchestration, default off);
+        # otherwise the flat loop exactly as before. Both return an
+        # AgentLoopResult, so all downstream handling (detach, memory,
+        # envelope) is unchanged.
+        if (
+            config is not None
+            and config.is_orchestrated(parsed.model)
+            and prompt_resolver is not None
+            and getattr(tool_ctx, "plan_store", None) is not None
+        ):
+            from .orchestrator import run_orchestrated_turn
+
+            return run_orchestrated_turn(
+                alias=parsed.model,
+                messages=original_messages,
+                request_body_extras=body_extras,
+                alias_router=alias_router,
+                tool_registry=tool_registry,
+                approval=approval,
+                tool_ctx=tool_ctx,
+                prompt_resolver=prompt_resolver,
+                session_key=session_id,
+                artifact_store=artifact_store,
+            )
         return run_agent_loop(
             alias=parsed.model,
             messages=original_messages,
@@ -1199,6 +1227,7 @@ async def chat_completions(request: Request) -> Response:
             turns=getattr(request.app.state, "turns", None),
             turn_id=turn_id,
             web_search_backend=config.web.search_backend,
+            plan_store=getattr(request.app.state, "plan_store", None),
         )
         # Phase 4.9: pass cfg-derived upstream timeout +
         # request_id into the tool loop so its dispatch can
@@ -1228,6 +1257,8 @@ async def chat_completions(request: Request) -> Response:
             turn_capture_store=getattr(request.app.state, "turn_capture", None),
             traceability_default_capture=list(cfg.traceability.default_capture),
             traceability_enabled=cfg.traceability.enabled,
+            config=cfg,
+            prompt_resolver=getattr(request.app.state, "prompt_resolver", None),
         )
 
     # Phase 4.9: wrap the dispatch in a shielded ``wait_for``

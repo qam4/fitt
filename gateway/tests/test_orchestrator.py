@@ -1,9 +1,11 @@
 """Tests for Phase 12 task 10 — the orchestrator (plan -> execute).
 
-Wiring tested with fakes: a sequenced router serves the planner pass's
-responses first, then the executor pass's. Covers the plan-then-execute
-path, the elected-no-plan path, todo completion across the passes, and
-token aggregation.
+The orchestrator is a drop-in for run_agent_loop: messages in,
+AgentLoopResult out. A sequenced router serves the planner pass's
+responses first, then the executor pass's. Covers the
+plan-then-execute path (incl. C1 re-injection into the execute pass's
+system message), the elected-no-plan path, todo completion across the
+passes, and token aggregation across both passes.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from gateway.agent_loop import AgentLoopResult
 from gateway.config import ModelConfig
 from gateway.orchestrator import run_orchestrated_turn
 from gateway.plan_store import PlanStore
@@ -120,10 +123,10 @@ def _todowrite_call(todos: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-async def _run(store: PlanStore, router: _SeqRouter, msg: str):  # type: ignore[no-untyped-def]
+async def _run(store: PlanStore, router: _SeqRouter, msg: str) -> AgentLoopResult:
     return await run_orchestrated_turn(
         alias="fitt-local-qwen3",
-        user_message=msg,
+        messages=[{"role": "user", "content": msg}],
         alias_router=router,  # type: ignore[arg-type]
         tool_registry=_registry(),
         approval=_AutoApprove(),
@@ -145,12 +148,20 @@ async def test_orchestrator_plans_then_executes() -> None:
         ]
     )
     result = await _run(store, router, "summarise today's news")
-    assert result.planned is True
-    assert result.plan is not None
-    assert [i.text for i in result.plan.items] == ["search news", "summarise"]
-    assert result.assistant_text == "here is your summary"
+    # Drop-in shape: AgentLoopResult with the executor's reply.
+    assert isinstance(result, AgentLoopResult)
     assert result.status == "ok"
-    # 3 dispatches, each usage 5/10
+    assert result.assistant_text == "here is your summary"
+    # Plan landed in the store.
+    plan = store.get("main")
+    assert plan is not None
+    assert [i.text for i in plan.items] == ["search news", "summarise"]
+    # C1: the execute pass (last dispatch) re-injected the plan into its system message.
+    exec_body = router.bodies[-1]
+    assert exec_body["messages"][0]["role"] == "system"
+    assert "[Plan]" in exec_body["messages"][0]["content"]
+    assert "search news" in exec_body["messages"][0]["content"]
+    # Tokens summed across planner (2 dispatches) + executor (1).
     assert result.in_tokens == 15
     assert result.out_tokens == 30
 
@@ -164,10 +175,12 @@ async def test_orchestrator_elects_no_plan_single_action() -> None:
         ]
     )
     result = await _run(store, router, "what time is it")
-    assert result.planned is False
-    assert result.plan is None
-    assert result.plan_complete is False
     assert result.assistant_text == "it is 3pm"
+    assert store.get("main") is None
+    # No plan and empty execute prompt -> no system message added; the
+    # execute pass sees the bare user turn.
+    exec_body = router.bodies[-1]
+    assert exec_body["messages"][0] == {"role": "user", "content": "what time is it"}
     assert result.in_tokens == 10
     assert result.out_tokens == 20
 
@@ -185,8 +198,8 @@ async def test_orchestrator_executor_completes_plan() -> None:
         ]
     )
     result = await _run(store, router, "do it")
-    assert result.planned is True
-    assert result.plan_complete is True
-    assert result.plan is not None
-    assert result.plan.items[0].status == "done"
     assert result.assistant_text == "finished"
+    plan = store.get("main")
+    assert plan is not None
+    assert plan.is_complete() is True
+    assert plan.items[0].status == "done"

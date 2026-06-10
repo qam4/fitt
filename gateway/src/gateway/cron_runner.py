@@ -34,6 +34,7 @@ from .capabilities import build_capability_block
 from .cron import CronJob
 from .events import EventLog
 from .events import new_entry as new_event
+from .orchestrator import run_orchestrated_turn
 from .router import AliasRouter
 from .tools import ApprovalBucket, ApprovalDecision, Tool, ToolContext, ToolRegistry
 
@@ -70,6 +71,8 @@ class CronRunner:
         lessons: Any = None,
         artifact_store: Any = None,
         turns: Any = None,
+        plan_store: Any = None,
+        prompt_resolver: Any = None,
     ) -> None:
         self._config = config
         self._tool_registry = tool_registry
@@ -85,6 +88,8 @@ class CronRunner:
         self._lessons = lessons
         self._artifact_store = artifact_store
         self._turns = turns
+        self._plan_store = plan_store
+        self._prompt_resolver = prompt_resolver
 
     # -------------------------------------------------- public API
 
@@ -323,6 +328,7 @@ class CronRunner:
             turns=self._turns,
             turn_id=turn_id,
             web_search_backend=self._config.web.search_backend,
+            plan_store=self._plan_store,
         )
 
         alias_router = AliasRouter(self._config)
@@ -334,6 +340,28 @@ class CronRunner:
             "tools": [t.to_openai_schema() for t in self._tool_registry.list_all()],
             "tool_choice": "auto",
         }
+
+        # Phase 12: route through the plan -> execute orchestrator when
+        # this alias is opted in (Config.orchestration); otherwise the
+        # flat loop exactly as before. Default off, so cron behaviour
+        # is unchanged until an alias is enabled.
+        if (
+            self._config.is_orchestrated(alias)
+            and self._prompt_resolver is not None
+            and self._plan_store is not None
+        ):
+            return await run_orchestrated_turn(
+                alias=alias,
+                messages=messages,
+                request_body_extras=request_body_extras,
+                alias_router=alias_router,
+                tool_registry=self._tool_registry,
+                approval=approval_for_firing,
+                tool_ctx=tool_ctx,
+                prompt_resolver=self._prompt_resolver,
+                session_key=session_key,
+                artifact_store=self._artifact_store,
+            )
 
         return await run_agent_loop(
             alias=alias,
