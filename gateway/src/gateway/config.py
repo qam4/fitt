@@ -231,16 +231,24 @@ class TraceabilityConfig(BaseModel):
 class AliasOrchestrationConfig(BaseModel):
     """Phase 12 — per-alias orchestration settings.
 
-    ``enabled`` gates plan -> execute orchestration for the alias.
-    Default off: the alias uses the flat agent loop (today's
-    behaviour) until an operator opts it in (Principle 9 "live with
-    it before extending" cutover). Task 11 will grow this with
-    per-alias iteration budgets and an optional planner alias.
+    ``enabled`` gates plan -> execute orchestration for the alias
+    (default off; Principle 9 "live with it before extending" cutover).
+    ``planner_alias`` optionally runs the planner pass on a *different*
+    alias (Story 2.2: e.g. plan with a capable model, execute with a
+    fast one, possibly on another host) — empty means use the turn's
+    own alias. ``planner_iterations`` / ``executor_iterations`` override
+    the orchestrator's per-pass iteration budgets (Story 3.3); ``None``
+    uses the defaults (planner low — the plan is captured on the first
+    todowrite, keeping cloud planners under RPM limits; executor higher,
+    for working a multi-step plan).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    planner_alias: str = ""
+    planner_iterations: int | None = Field(default=None, ge=1)
+    executor_iterations: int | None = Field(default=None, ge=1)
 
 
 class Config(BaseModel):
@@ -323,10 +331,15 @@ class Config(BaseModel):
                 )
         # Every orchestration entry must reference a configured alias
         # (fail-loud on a typo'd alias name — Principle 11).
-        for alias in self.orchestration:
+        for alias, ocfg in self.orchestration.items():
             if alias not in self.aliases:
                 raise ValueError(
                     f"orchestration entry for {alias!r} but no such alias is configured"
+                )
+            if ocfg.planner_alias and ocfg.planner_alias not in self.aliases:
+                raise ValueError(
+                    f"orchestration[{alias!r}].planner_alias={ocfg.planner_alias!r} "
+                    f"but no such alias is configured"
                 )
         # Every fallback target must exist
         for m in self.models:

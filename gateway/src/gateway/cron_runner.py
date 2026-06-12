@@ -350,6 +350,7 @@ class CronRunner:
             and self._prompt_resolver is not None
             and self._plan_store is not None
         ):
+            ocfg = self._config.orchestration.get(alias)
             return await run_orchestrated_turn(
                 alias=alias,
                 messages=messages,
@@ -360,6 +361,9 @@ class CronRunner:
                 tool_ctx=tool_ctx,
                 prompt_resolver=self._prompt_resolver,
                 session_key=session_key,
+                planner_alias=ocfg.planner_alias if ocfg is not None else "",
+                planner_max_iterations=(ocfg.planner_iterations if ocfg is not None else None),
+                executor_max_iterations=(ocfg.executor_iterations if ocfg is not None else None),
                 artifact_store=self._artifact_store,
             )
 

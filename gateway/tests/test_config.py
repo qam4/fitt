@@ -571,3 +571,74 @@ def test_orchestration_enabled_per_alias() -> None:
 def test_orchestration_entry_for_unknown_alias_rejected() -> None:
     with pytest.raises(ValueError, match="no such alias"):
         _orchestration_config({"ghost": AliasOrchestrationConfig(enabled=True)})
+
+
+# --------------------------------------------------------------- orchestration budgets + planner_alias (Phase 12 task 11)
+
+
+def _two_alias_config(
+    orchestration: dict[str, AliasOrchestrationConfig] | None = None,
+) -> Config:
+    """Valid Config with two aliases, for planner_alias cross-references."""
+    from decimal import Decimal
+
+    return Config(
+        aliases={"fitt-default": "m1", "fitt-smart": "m2"},
+        models=[
+            ModelConfig(
+                id="m1",
+                backend="ollama",
+                endpoint="http://localhost:11434",
+                model="qwen3:8b",
+                cost_per_mtok_in=Decimal("0"),
+                cost_per_mtok_out=Decimal("0"),
+            ),
+            ModelConfig(
+                id="m2",
+                backend="openrouter",
+                model="anthropic/claude-sonnet-4.5",
+                cost_per_mtok_in=Decimal("0"),
+                cost_per_mtok_out=Decimal("0"),
+            ),
+        ],
+        orchestration=orchestration or {},
+    )
+
+
+def test_orchestration_budget_fields_parse() -> None:
+    cfg = _two_alias_config(
+        {
+            "fitt-default": AliasOrchestrationConfig(
+                enabled=True,
+                planner_iterations=1,
+                executor_iterations=20,
+            )
+        }
+    )
+    ocfg = cfg.orchestration["fitt-default"]
+    assert ocfg.planner_iterations == 1
+    assert ocfg.executor_iterations == 20
+    # Default when omitted is None (orchestrator falls back to its defaults).
+    assert ocfg.planner_alias == ""
+
+
+def test_orchestration_planner_alias_must_be_configured() -> None:
+    # A planner_alias pointing at a known alias is accepted.
+    cfg = _two_alias_config(
+        {"fitt-default": AliasOrchestrationConfig(enabled=True, planner_alias="fitt-smart")}
+    )
+    assert cfg.orchestration["fitt-default"].planner_alias == "fitt-smart"
+
+
+def test_orchestration_planner_alias_unknown_rejected() -> None:
+    with pytest.raises(ValueError, match="planner_alias"):
+        _two_alias_config(
+            {"fitt-default": AliasOrchestrationConfig(enabled=True, planner_alias="ghost")}
+        )
+
+
+def test_orchestration_iterations_must_be_positive() -> None:
+    with pytest.raises(ValueError):
+        AliasOrchestrationConfig(planner_iterations=0)
+    with pytest.raises(ValueError):
+        AliasOrchestrationConfig(executor_iterations=0)

@@ -1293,6 +1293,23 @@ this list is the index.
 
 ### Operator-observed friction (from `docs/observed-issues.md`)
 
+- **Stream-and-buffer the upstream dispatch for a tight idle timeout
+  (2026-06-12).** Today `run_agent_loop` dispatches non-streaming, so
+  the only guard is a *total* `upstream_timeout_secs` (300s) — a poor
+  hang detector: it can't tell "slow reasoning model" from "wedged"
+  (both are silence), so it must be huge and detects nothing early.
+  Streaming the upstream call and **buffering the deltas** (assemble
+  content + `tool_calls` before handing to the loop, so the loop is
+  unchanged) turns inter-token gaps into a liveness signal: a generous
+  time-to-first-token budget plus a tight inter-token idle timeout
+  catches a hung upstream in ~30s while never tripping on a working
+  slow model. Motivated by qwen3:14b's ~60s "thinking" on the EC2
+  path. Cost: tool-call delta assembly (accumulate by index; LiteLLM
+  supports it) and backend variance for streamed tool_calls (Ollama vs
+  OpenRouter) needs a fallback. Touches Phase 4.9's upstream-timeout
+  discipline; own commit + verification. Robustness candidate, **not** a
+  Phase 12 blocker (the qwen3 planner empties were `status=ok`, not
+  timeouts).
 - **Cheerleading / success theater.** Add to the system prompt a
   "report what actually happened, including failures; no victory
   laps" instruction. Minutes of work; partial impact (research

@@ -71,8 +71,16 @@ references point at `requirements.md`; property refs (Cn) at
   `todowrite` tool + PromptResolver wired into `create_app`. Preserves
   the assembled system prompt (plan re-injected, identity kept). Full
   suite green (1534 passed).
-- [ ] 11. Make the iteration budget configurable per alias (replaces
+- [x] 11. Make the iteration budget configurable per alias (replaces
   the hard-coded 10), higher default for planned turns (Story 3.3).
+  DONE: `AliasOrchestrationConfig` gained `planner_alias` (Story 2.2),
+  `planner_iterations`, `executor_iterations` (all optional). Orchestrator
+  defaults `_DEFAULT_PLANNER_ITERATIONS=1` (plan captured on first
+  `todowrite`, keeps a cloud `planner_alias` under RPM) and
+  `_DEFAULT_EXECUTOR_ITERATIONS=15` (a planned turn works a multi-step
+  plan). `planner_alias` runs the plan pass on a different alias than
+  the executor; fail-loud if it names an unknown alias. Wired through
+  chat + cron call sites. Full suite green (1543 passed).
 - [ ] 12. Unit tests (fakes): resolver precedence, PlanStore
   round-trip (hypothesis, C5), planner-elects-on-multistep, executor
   re-injects plan (C1).

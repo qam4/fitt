@@ -71,9 +71,11 @@ class _SeqRouter:
     def __init__(self, responses: list[dict[str, Any]]) -> None:
         self._responses = list(responses)
         self.bodies: list[dict[str, Any]] = []
+        self.aliases: list[str] = []
 
     async def dispatch(self, alias: str, body: dict[str, Any]) -> DispatchResult:
         self.bodies.append(body)
+        self.aliases.append(alias)
         resp = self._responses.pop(0)
         return DispatchResult(response=resp, stream=None, model_used=_MODEL, fallback_used=False)
 
@@ -140,9 +142,8 @@ async def test_orchestrator_plans_then_executes() -> None:
     store = PlanStore()
     router = _SeqRouter(
         [
-            # planner pass: emit a plan, then stop
+            # planner pass: emit a plan (one dispatch — default budget 1)
             _resp(tool_calls=[_todowrite_call([{"text": "search news"}, {"text": "summarise"}])]),
-            _resp(content="plan ready"),
             # executor pass: produce the answer
             _resp(content="here is your summary"),
         ]
@@ -161,9 +162,9 @@ async def test_orchestrator_plans_then_executes() -> None:
     assert exec_body["messages"][0]["role"] == "system"
     assert "[Plan]" in exec_body["messages"][0]["content"]
     assert "search news" in exec_body["messages"][0]["content"]
-    # Tokens summed across planner (2 dispatches) + executor (1).
-    assert result.in_tokens == 15
-    assert result.out_tokens == 30
+    # Tokens summed across planner (1 dispatch) + executor (1).
+    assert result.in_tokens == 10
+    assert result.out_tokens == 20
 
 
 async def test_orchestrator_elects_no_plan_single_action() -> None:
@@ -189,9 +190,8 @@ async def test_orchestrator_executor_completes_plan() -> None:
     store = PlanStore()
     router = _SeqRouter(
         [
-            # planner: one-step plan
+            # planner: one-step plan (one dispatch — default budget 1)
             _resp(tool_calls=[_todowrite_call([{"id": "1", "text": "do it"}])]),
-            _resp(content="planned"),
             # executor: tick the step done, then answer
             _resp(tool_calls=[_todowrite_call([{"id": "1", "text": "do it", "status": "done"}])]),
             _resp(content="finished"),
@@ -203,3 +203,115 @@ async def test_orchestrator_executor_completes_plan() -> None:
     assert plan is not None
     assert plan.is_complete() is True
     assert plan.items[0].status == "done"
+
+
+# --------------------------------------------------------------- task 11
+
+
+async def test_orchestrator_planner_alias_routes_plan_pass() -> None:
+    """planner_alias runs the plan pass on a different alias than the
+    executor pass (Story 2.2): plan with a capable model, execute with
+    a fast one."""
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            # planner pass (on the planner alias): emit a plan
+            _resp(tool_calls=[_todowrite_call([{"text": "step one"}])]),
+            # executor pass (on the turn's own alias): answer
+            _resp(content="done"),
+        ]
+    )
+    result = await run_orchestrated_turn(
+        alias="fitt-local-qwen3",
+        messages=[{"role": "user", "content": "do a thing"}],
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+        planner_alias="fitt-cloud-smart",
+        planner_max_iterations=1,
+    )
+    assert result.assistant_text == "done"
+    # First dispatch (planner pass) used the planner alias; the last
+    # (executor pass) used the turn's own alias.
+    assert router.aliases[0] == "fitt-cloud-smart"
+    assert router.aliases[-1] == "fitt-local-qwen3"
+
+
+async def test_orchestrator_planner_budget_one_stops_after_first_dispatch() -> None:
+    """planner_max_iterations=1 caps the plan pass at a single model
+    request — the plan is captured on the first todowrite and no second
+    planner dispatch is made (keeps a cloud planner under RPM)."""
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            # planner pass: emit a plan on the first (only) dispatch
+            _resp(tool_calls=[_todowrite_call([{"text": "only step"}])]),
+            # executor pass: answer
+            _resp(content="answer"),
+        ]
+    )
+    result = await run_orchestrated_turn(
+        alias="fitt-local-qwen3",
+        messages=[{"role": "user", "content": "go"}],
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+        planner_max_iterations=1,
+    )
+    assert result.assistant_text == "answer"
+    # Exactly two dispatches total: one planner (budget=1), one executor.
+    assert len(router.aliases) == 2
+    plan = store.get("main")
+    assert plan is not None
+    assert [i.text for i in plan.items] == ["only step"]
+
+
+async def test_orchestrator_executor_budget_caps_loop() -> None:
+    """executor_max_iterations caps the execute pass's tool round-trips."""
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            # planner elects out (no plan)
+            _resp(content="no plan"),
+            # executor: keep calling a tool; the budget should stop it
+            _resp(
+                tool_calls=[
+                    {
+                        "id": "t1",
+                        "type": "function",
+                        "function": {"name": "noop", "arguments": "{}"},
+                    }
+                ]
+            ),
+            _resp(
+                tool_calls=[
+                    {
+                        "id": "t2",
+                        "type": "function",
+                        "function": {"name": "noop", "arguments": "{}"},
+                    }
+                ]
+            ),
+        ]
+    )
+    result = await run_orchestrated_turn(
+        alias="fitt-local-qwen3",
+        messages=[{"role": "user", "content": "loop"}],
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+        planner_max_iterations=1,
+        executor_max_iterations=2,
+    )
+    # 1 planner dispatch + 2 executor dispatches (capped by budget=2).
+    assert len(router.aliases) == 3
+    assert result.status == "tool_loop_exhausted"

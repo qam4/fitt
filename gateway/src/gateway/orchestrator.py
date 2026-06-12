@@ -40,12 +40,15 @@ from .prompt_resolver import PromptResolver
 from .router import AliasRouter
 from .tools import ToolContext, ToolRegistry
 
-# Per-pass iteration caps. Planning is tight (emit a plan, maybe
-# revise once); execution gets the larger budget. Task 11 replaces
-# these literals with per-alias config; until then they mirror the
-# primitives' own defaults so behaviour is unchanged.
-_DEFAULT_PLANNER_ITERATIONS = 3
-_DEFAULT_EXECUTOR_ITERATIONS = 10
+# Per-pass iteration-budget defaults, overridable per alias via
+# AliasOrchestrationConfig (task 11). Planner defaults to 1: the plan
+# is captured on the first `todowrite` call, so one model request
+# suffices and keeps a cloud planner_alias under RPM limits (a second
+# pass would only produce a reply we discard). Executor defaults
+# higher than the flat loop's 10 — a planned turn works a multi-step
+# plan and needs more tool round-trips (Story 3.3).
+_DEFAULT_PLANNER_ITERATIONS = 1
+_DEFAULT_EXECUTOR_ITERATIONS = 15
 
 
 def _latest_user_message(messages: list[dict[str, Any]]) -> str:
@@ -100,8 +103,9 @@ async def run_orchestrated_turn(
     tool_ctx: ToolContext,
     prompt_resolver: PromptResolver,
     session_key: str,
-    planner_max_iterations: int = _DEFAULT_PLANNER_ITERATIONS,
-    executor_max_iterations: int = _DEFAULT_EXECUTOR_ITERATIONS,
+    planner_alias: str = "",
+    planner_max_iterations: int | None = None,
+    executor_max_iterations: int | None = None,
     artifact_store: Any = None,
 ) -> AgentLoopResult:
     """Run one turn as plan -> execute and return the execute pass's
@@ -110,9 +114,17 @@ async def run_orchestrated_turn(
     The planner pass runs every turn — election is the model's call
     inside it, not a branch here — so there is no separate fast path
     (a deliberate design choice; latency optimisation is a non-goal).
+
+    ``planner_alias`` (when non-empty) runs the planner pass on a
+    different alias than the executor — "plan with a capable model,
+    execute with a fast one" (Story 2.2). Per-pass budgets default to
+    ``_DEFAULT_*`` when ``None`` (task 11 / Story 3.3).
     """
+    planner_budget = planner_max_iterations or _DEFAULT_PLANNER_ITERATIONS
+    executor_budget = executor_max_iterations or _DEFAULT_EXECUTOR_ITERATIONS
+
     planner = await run_planner_pass(
-        alias=alias,
+        alias=planner_alias or alias,
         user_message=_latest_user_message(messages),
         alias_router=alias_router,
         tool_registry=tool_registry,
@@ -120,7 +132,7 @@ async def run_orchestrated_turn(
         tool_ctx=tool_ctx,
         prompt_resolver=prompt_resolver,
         session_key=session_key,
-        max_iterations=planner_max_iterations,
+        max_iterations=planner_budget,
     )
 
     plan: Plan | None = None
@@ -144,7 +156,7 @@ async def run_orchestrated_turn(
         approval=approval,
         tool_ctx=tool_ctx,
         session_key=session_key,
-        max_iterations=executor_max_iterations,
+        max_iterations=executor_budget,
         artifact_store=artifact_store,
     )
 

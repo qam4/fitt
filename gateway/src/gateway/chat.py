@@ -632,6 +632,7 @@ async def _run_tool_loop(
         ):
             from .orchestrator import run_orchestrated_turn
 
+            ocfg = config.orchestration.get(parsed.model)
             return run_orchestrated_turn(
                 alias=parsed.model,
                 messages=original_messages,
@@ -642,6 +643,9 @@ async def _run_tool_loop(
                 tool_ctx=tool_ctx,
                 prompt_resolver=prompt_resolver,
                 session_key=session_id,
+                planner_alias=ocfg.planner_alias if ocfg is not None else "",
+                planner_max_iterations=(ocfg.planner_iterations if ocfg is not None else None),
+                executor_max_iterations=(ocfg.executor_iterations if ocfg is not None else None),
                 artifact_store=artifact_store,
             )
         return run_agent_loop(
