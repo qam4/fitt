@@ -296,6 +296,10 @@ def test_iteration_cap_returns_504(client: TestClient, monkeypatch: pytest.Monke
     assert r.json()["error"]["type"] == "tool_loop_exhausted"
     # Iteration cap is 10.
     assert len(calls) == 10
+    # Message reports the actual budget hit (result.iterations), not a
+    # hardcoded constant — matters now that the orchestrator's executor
+    # budget is per-alias (Phase 12 task 11).
+    assert "10 iterations" in r.json()["error"]["message"]
 
 
 def test_malformed_tool_call_arguments_surface_as_tool_error(

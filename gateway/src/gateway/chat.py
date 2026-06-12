@@ -30,7 +30,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from .agent_loop import (
-    _MAX_TOOL_CALL_ITERATIONS,
     record_gap,
     response_to_dict,
     run_agent_loop,
@@ -901,7 +900,7 @@ async def _run_tool_loop(
                     "type": "tool_loop_exhausted",
                     "message": (
                         f"tool-call loop did not terminate within "
-                        f"{_MAX_TOOL_CALL_ITERATIONS} iterations"
+                        f"{result.iterations} iterations"
                     ),
                 }
             },
