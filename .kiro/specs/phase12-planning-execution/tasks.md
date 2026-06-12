@@ -81,16 +81,33 @@ references point at `requirements.md`; property refs (Cn) at
   plan). `planner_alias` runs the plan pass on a different alias than
   the executor; fail-loud if it names an unknown alias. Wired through
   chat + cron call sites. Full suite green (1543 passed).
-- [ ] 12. Unit tests (fakes): resolver precedence, PlanStore
+- [x] 12. Unit tests (fakes): resolver precedence, PlanStore
   round-trip (hypothesis, C5), planner-elects-on-multistep, executor
-  re-injects plan (C1).
+  re-injects plan (C1). DONE incrementally across tasks 5-11; the four
+  required cases live in: `test_prompt_resolver.py`
+  (`test_per_alias_override_beats_default`,
+  `test_global_default_override_beats_builtin_but_loses_to_alias`),
+  `test_plan_store.py` (`test_plan_round_trip_property`, @given 150
+  examples, + disk round-trip), `test_planner.py`
+  (`test_planner_writes_plan_when_model_elects` /
+  `test_planner_elects_not_to_plan`), and `test_orchestrator.py`
+  (`test_orchestrator_plans_then_executes` asserts `[Plan]` re-injected
+  into the execute pass's system message). 49 passed.
 
 ## Phase 12c — Recovery (make elected safe)
 
-- [ ] 13. Ground-truth trouble detector: tool error, identical
+- [x] 13. Ground-truth trouble detector: tool error, identical
   retried call, empty-after-tools, N iterations with zero successful
   calls, budget exhausted. Facts only — no prose-shape/intent
-  inference (Story 5.1, 5.2; property C4).
+  inference (Story 5.1, 5.2; property C4). DONE: `trouble.py`
+  `detect_trouble(status, tool_calls, assistant_text)` returns a
+  `Trouble(kind, detail)` over the facts an `AgentLoopResult` already
+  carries (`tool_calls_for_memory` statuses, loop status, final text).
+  Precedence: most-specific cause first, `budget_exhausted` is the
+  catch-all. Emptiness is treated as presence-of-content, never prose
+  shape (C4). `test_trouble.py`: each signal + precedence + C4-negative
+  hypothesis property (clean all-success transcript never trips
+  recovery). 17 passed. Actions are task 14.
 - [ ] 14. Recovery actions, escalating: continue-nudge (Hermes's
   empty-after-tools pattern) -> repair malformed tool call -> re-plan
   on a **clean context** (Story 5.3) -> honest stop (Story 4.1, 4.2).
