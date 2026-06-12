@@ -272,37 +272,74 @@ async def test_orchestrator_planner_budget_one_stops_after_first_dispatch() -> N
     assert [i.text for i in plan.items] == ["only step"]
 
 
-async def test_orchestrator_executor_budget_caps_loop() -> None:
-    """executor_max_iterations caps the execute pass's tool round-trips."""
+# --------------------------------------------------------------- task 14 (recovery)
+
+
+def _noop_call(cid: str = "n1") -> dict[str, Any]:
+    return {
+        "id": cid,
+        "type": "function",
+        "function": {"name": "noop", "arguments": "{}"},
+    }
+
+
+async def test_recovery_not_triggered_on_clean_turn() -> None:
+    """A clean turn (planner elects out, executor answers directly)
+    runs no recovery re-runs: exactly planner + executor dispatches."""
     store = PlanStore()
     router = _SeqRouter(
         [
-            # planner elects out (no plan)
-            _resp(content="no plan"),
-            # executor: keep calling a tool; the budget should stop it
-            _resp(
-                tool_calls=[
-                    {
-                        "id": "t1",
-                        "type": "function",
-                        "function": {"name": "noop", "arguments": "{}"},
-                    }
-                ]
-            ),
-            _resp(
-                tool_calls=[
-                    {
-                        "id": "t2",
-                        "type": "function",
-                        "function": {"name": "noop", "arguments": "{}"},
-                    }
-                ]
-            ),
+            _resp(content="no plan needed"),  # planner elects out
+            _resp(content="the answer"),  # executor: clean, no tools
+        ]
+    )
+    result = await _run(store, router, "easy question")
+    assert result.assistant_text == "the answer"
+    assert result.status == "ok"
+    assert len(router.aliases) == 2  # no recovery re-run
+
+
+async def test_recovery_nudge_recovers_empty_after_tools() -> None:
+    """empty-after-tools triggers a continue-nudge; the re-run produces
+    content and the turn recovers."""
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            _resp(content="no plan"),  # planner elects out
+            _resp(tool_calls=[_noop_call()]),  # executor runs a tool
+            _resp(content=""),  # ...then returns an empty reply
+            _resp(content="recovered answer"),  # nudge re-run answers
+        ]
+    )
+    result = await _run(store, router, "do a thing")
+    assert result.assistant_text == "recovered answer"
+    assert result.status == "ok"
+    assert len(router.aliases) == 4  # planner + exec(2) + nudge(1)
+    # The nudge re-run carried the recover-step prompt as a system msg.
+    recover_prompt = PromptResolver().resolve("recover", "fitt-local-qwen3")
+    nudge_body = router.bodies[-1]
+    assert any(
+        m.get("role") == "system" and recover_prompt in m.get("content", "")
+        for m in nudge_body["messages"]
+    )
+
+
+async def test_recovery_replan_uses_clean_context() -> None:
+    """budget exhaustion re-plans on a clean context: the re-run's
+    messages drop the flailing transcript (no assistant tool_calls
+    carried over), keeping only goal + recover prompt (Story 5.3)."""
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            _resp(content="no plan"),  # planner elects out
+            _resp(tool_calls=[_noop_call("a")]),  # exec iter 1
+            _resp(tool_calls=[_noop_call("b")]),  # exec iter 2 -> budget exhausted
+            _resp(content="done after replan"),  # replan re-run answers
         ]
     )
     result = await run_orchestrated_turn(
         alias="fitt-local-qwen3",
-        messages=[{"role": "user", "content": "loop"}],
+        messages=[{"role": "user", "content": "loop then recover"}],
         alias_router=router,  # type: ignore[arg-type]
         tool_registry=_registry(),
         approval=_AutoApprove(),
@@ -312,6 +349,32 @@ async def test_orchestrator_executor_budget_caps_loop() -> None:
         planner_max_iterations=1,
         executor_max_iterations=2,
     )
-    # 1 planner dispatch + 2 executor dispatches (capped by budget=2).
-    assert len(router.aliases) == 3
-    assert result.status == "tool_loop_exhausted"
+    assert result.assistant_text == "done after replan"
+    assert result.status == "ok"
+    replan_body = router.bodies[-1]
+    # Clean context: no assistant tool_calls message carried forward.
+    assert not any(
+        m.get("role") == "assistant" and m.get("tool_calls") for m in replan_body["messages"]
+    )
+
+
+async def test_recovery_honest_stop_when_trouble_persists() -> None:
+    """When the trouble keeps recurring through nudge and re-plan, the
+    turn ends with an honest stop report (status ok, no fabrication)."""
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            _resp(content="no plan"),  # planner elects out
+            _resp(tool_calls=[_noop_call()]),  # exec tool
+            _resp(content=""),  # exec empty -> trouble
+            _resp(tool_calls=[_noop_call()]),  # nudge tool
+            _resp(content=""),  # nudge empty -> trouble again
+            _resp(tool_calls=[_noop_call()]),  # replan tool
+            _resp(content=""),  # replan empty -> trouble again -> stop
+        ]
+    )
+    result = await _run(store, router, "stubborn task")
+    assert result.status == "ok"
+    assert "stopping" in result.assistant_text.lower()
+    assert "empty" in result.assistant_text.lower()  # the observed fact
+    assert len(router.aliases) == 7  # planner + exec(2) + nudge(2) + replan(2)

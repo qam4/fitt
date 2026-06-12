@@ -22,10 +22,14 @@ The returned ``AgentLoopResult`` is the execute pass's, with the
 planner pass's token and iteration counts folded in so cost
 accounting reflects both passes.
 
-Recovery (tasks 13/14) and turn-event emission (task 17) are
-deliberate later additions; this is the bare plan -> execute spine.
-Whether a turn is routed here at all is gated per alias by
-``Config.is_orchestrated`` (default off) — see the chat/cron wiring.
+Recovery (task 14) is wired in after the execute pass: a ground-truth
+trouble signal (:mod:`gateway.trouble`) drives an escalating, bounded
+recovery ladder (:mod:`gateway.recover`) — continue-nudge -> clean-
+context re-plan -> honest stop — always on the same alias (never a
+cloud escalation, property C6). Turn-event emission (task 17) is a
+deliberate later addition. Whether a turn is routed here at all is
+gated per alias by ``Config.is_orchestrated`` (default off) — see the
+chat/cron wiring.
 """
 
 from __future__ import annotations
@@ -37,8 +41,10 @@ from .agent_loop import AgentLoopResult, run_agent_loop
 from .plan_store import Plan
 from .planner import run_planner_pass
 from .prompt_resolver import PromptResolver
+from .recover import decide_recovery, honest_report
 from .router import AliasRouter
 from .tools import ToolContext, ToolRegistry
+from .trouble import detect_trouble
 
 # Per-pass iteration-budget defaults, overridable per alias via
 # AliasOrchestrationConfig (task 11). Planner defaults to 1: the plan
@@ -147,7 +153,7 @@ async def run_orchestrated_turn(
         additions.append(_plan_block(plan))
 
     exec_messages = _augment_system(messages, additions)
-    exec_result = await run_agent_loop(
+    result = await run_agent_loop(
         alias=alias,
         messages=exec_messages,
         request_body_extras=request_body_extras,
@@ -160,13 +166,89 @@ async def run_orchestrated_turn(
         artifact_store=artifact_store,
     )
 
-    # Fold the planner pass's usage into the returned result so cost
-    # accounting upstream sees both passes.
+    # Token/iteration totals accumulate across the planner pass, the
+    # executor pass, and any recovery re-runs so cost accounting
+    # upstream sees every model request this turn made.
+    total_in = result.in_tokens + planner.loop.in_tokens
+    total_out = result.out_tokens + planner.loop.out_tokens
+    total_iters = result.iterations + planner.loop.iterations
+
+    # Recovery (task 14): if the executor pass hit a ground-truth
+    # trouble signal, apply an escalating, bounded recovery action —
+    # always on the SAME alias (never a cloud escalation, property
+    # C6). The loop ends when the trouble clears, when recovery
+    # decides to stop (honest report), or at the attempt cap.
+    recover_prompt = prompt_resolver.resolve("recover", alias)
+    attempt = 0
+    replanned = False
+    while True:
+        trouble = detect_trouble(
+            status=result.status,
+            tool_calls=result.tool_calls_for_memory,
+            assistant_text=result.assistant_text,
+        )
+        if not trouble:
+            break
+        action = decide_recovery(trouble, attempt=attempt, replanned=replanned)
+        if action == "stop":
+            current_plan = (
+                tool_ctx.plan_store.get(session_key) if tool_ctx.plan_store is not None else plan
+            )
+            # Deliver an honest report (Story 4.2) as the turn's reply.
+            # status="ok" so the chat handler delivers the message
+            # rather than returning an error envelope — the honest
+            # "I couldn't do X" IS the successful outcome to surface.
+            result = dataclasses.replace(
+                result,
+                status="ok",
+                assistant_text=honest_report(trouble, current_plan),
+            )
+            break
+
+        if action == "nudge":
+            # Bounded retry on the EXISTING transcript: append the
+            # recover-step prompt and re-run. Cheapest rung.
+            run_messages = list(result.messages)
+            if recover_prompt.strip():
+                run_messages.append({"role": "system", "content": recover_prompt.strip()})
+        else:  # replan — clean context (Story 5.3): discard the
+            # flailing transcript, carry forward only the goal and the
+            # progress-bearing plan re-injected from the store.
+            replanned = True
+            current_plan = (
+                tool_ctx.plan_store.get(session_key) if tool_ctx.plan_store is not None else plan
+            )
+            replan_additions: list[str] = []
+            if recover_prompt.strip():
+                replan_additions.append(recover_prompt.strip())
+            elif execute_prompt.strip():
+                replan_additions.append(execute_prompt.strip())
+            if current_plan is not None and current_plan.items:
+                replan_additions.append(_plan_block(current_plan))
+            run_messages = _augment_system(messages, replan_additions)
+
+        result = await run_agent_loop(
+            alias=alias,
+            messages=run_messages,
+            request_body_extras=request_body_extras,
+            alias_router=alias_router,
+            tool_registry=tool_registry,
+            approval=approval,
+            tool_ctx=tool_ctx,
+            session_key=session_key,
+            max_iterations=executor_budget,
+            artifact_store=artifact_store,
+        )
+        total_in += result.in_tokens
+        total_out += result.out_tokens
+        total_iters += result.iterations
+        attempt += 1
+
     return dataclasses.replace(
-        exec_result,
-        in_tokens=exec_result.in_tokens + planner.loop.in_tokens,
-        out_tokens=exec_result.out_tokens + planner.loop.out_tokens,
-        iterations=exec_result.iterations + planner.loop.iterations,
+        result,
+        in_tokens=total_in,
+        out_tokens=total_out,
+        iterations=total_iters,
     )
 
 

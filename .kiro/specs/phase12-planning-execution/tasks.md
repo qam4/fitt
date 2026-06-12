@@ -108,9 +108,23 @@ references point at `requirements.md`; property refs (Cn) at
   shape (C4). `test_trouble.py`: each signal + precedence + C4-negative
   hypothesis property (clean all-success transcript never trips
   recovery). 17 passed. Actions are task 14.
-- [ ] 14. Recovery actions, escalating: continue-nudge (Hermes's
+- [x] 14. Recovery actions, escalating: continue-nudge (Hermes's
   empty-after-tools pattern) -> repair malformed tool call -> re-plan
   on a **clean context** (Story 5.3) -> honest stop (Story 4.1, 4.2).
+  DONE: `recover.py` `decide_recovery(trouble, attempt, replanned)`
+  (pure policy) + `honest_report(trouble, plan)`. Wired a bounded
+  recovery loop into `run_orchestrated_turn`: nudge re-runs the
+  executor with the `recover`-step prompt on the existing transcript
+  (carries repair guidance); replan restarts on a clean context with
+  only goal + progress-bearing plan re-injected (flailing transcript
+  discarded); honest stop delivers a truthful report (status ok, no
+  fabrication). Capped at `MAX_RECOVERY_ATTEMPTS=2`, replan at most
+  once. Always same alias — no cloud escalation (property C6 / Story
+  4.3). Token/iteration totals accumulate across every re-run.
+  `test_recover.py` (pure ladder + report) + orchestrator integration
+  tests (clean turn = no recovery, nudge recovers empty-after-tools,
+  replan uses clean context, honest stop on persistent trouble). Full
+  suite 1574 passed.
 - [ ] 15. Capability-gap ("I'd need a tool to X") is a terminal
   honest outcome, distinct from thrash; not retried/escalated (Story
   4.4). No path rebinds to a cloud alias (Story 4.3; property C6).
