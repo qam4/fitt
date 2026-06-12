@@ -251,3 +251,62 @@ web:
 #       write_file: block
 #       edit_file: block
 #       git_commit: block
+
+# ------------------------------------------------------------------
+# Orchestration (Phase 12) - OPT-IN, default off
+# ------------------------------------------------------------------
+# Route a turn as plan -> execute instead of the flat agent loop.
+# Keyed by alias name; any alias NOT listed here uses the flat loop
+# exactly as before. The whole block is optional - omit it and every
+# alias behaves as it did pre-Phase-12.
+#
+# The planner pass elicits an explicit plan (the model self-elects
+# whether a plan is warranted via the `todowrite` tool); the executor
+# pass then works the plan with the full toolset. See
+# .kiro/specs/phase12-planning-execution/ for the design.
+#
+# Fail-loud (Principle 11): an entry for an alias that isn't in
+# `aliases:` above - or a `planner_alias` that isn't a configured
+# alias - refuses to boot.
+#
+# orchestration:
+#   fitt-default:
+#     enabled: true
+#     # --- everything below is optional ---
+#     # Run the PLAN pass on a different alias than the executor:
+#     # "plan with a capable (possibly cloud) model, execute with a
+#     # fast local one." Empty/omitted = plan on the turn's own alias.
+#     planner_alias: fitt-smart
+#     # Per-pass iteration budgets. Omit to use the built-in defaults.
+#     #   planner_iterations default 1 - the plan is captured on the
+#     #     first `todowrite` call, so one model request suffices; this
+#     #     also keeps a cloud planner_alias under its requests-per-
+#     #     minute limit (a second pass would only produce a reply we
+#     #     discard).
+#     #   executor_iterations default 15 - a planned turn works a
+#     #     multi-step plan and needs more tool round-trips than the
+#     #     flat loop's hard-coded 10.
+#     planner_iterations: 1
+#     executor_iterations: 15
+
+# ------------------------------------------------------------------
+# Prompts (Phase 12) - OPT-IN, built-in defaults otherwise
+# ------------------------------------------------------------------
+# Per-(alias, step) system-prompt overrides for the orchestrator's
+# passes. Steps: `plan`, `execute`, `compact`, `recover`. Each step
+# has a built-in, model-agnostic default; you only add entries here to
+# tune a step's wording for a specific model (or globally).
+#
+# Resolution precedence for a (step, alias): per-alias override ->
+# global `defaults` override -> built-in code default.
+#
+# Fail-loud (Principle 11): an unknown step name, or a non-string
+# value, refuses to boot. (An alias literally named `defaults` is not
+# addressable - that key is reserved for the global overrides below.)
+#
+# prompts:
+#   defaults:                 # global per-step default overrides
+#     plan: "When a task needs multiple steps, call todowrite first..."
+#   fitt-default:             # per-alias per-step overrides
+#     plan: "..."
+#     execute: "..."
