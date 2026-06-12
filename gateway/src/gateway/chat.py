@@ -899,8 +899,7 @@ async def _run_tool_loop(
                 "error": {
                     "type": "tool_loop_exhausted",
                     "message": (
-                        f"tool-call loop did not terminate within "
-                        f"{result.iterations} iterations"
+                        f"tool-call loop did not terminate within {result.iterations} iterations"
                     ),
                 }
             },
