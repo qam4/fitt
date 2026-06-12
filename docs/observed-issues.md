@@ -33,6 +33,60 @@ doc.
 
 ---
 
+## Planner tool-blindness: capability hint lifts plan-election ~40% -> ~100% (on a capable planner)
+
+**First observed:** 2026-06-11. **Addressed:** 2026-06-12.
+**Tag:** Phase 12 task 2.4 / planner pass / eval methodology.
+
+The Phase 12 planner pass offered the model only the `todowrite`
+tool. With real models this produced unreliable plan-election:
+hermes3:8b and qwen3:14b each emitted a plan only ~2/5 of the time
+on a multi-step task ("summarise today's news and send it to me").
+qwen3's misses were the tell — it *refused* on feasibility ("I don't
+have access to real-time news data or the internet"). The planner
+couldn't see that the *execution* step has `web_search`,
+`send_message`, etc., so a capable model judged the task impossible
+and declined to plan. Prompt micro-tuning didn't help (and a tweak
+regressed it); swapping to the bigger model didn't help either — so
+it was neither a wording nor a raw-capability problem.
+
+**Fix:** inject the executor's toolset into the planner's system
+prompt, framed as "the execution step that carries out your plan has
+these tools" (so the model plans steps that *use* them rather than
+trying to call them itself). `run_planner_pass` now builds this from
+the registry (excluding `todowrite`). qwen3:14b went from 2/5 to
+**10/10** plan-election (one run 7/10 with 3 transient empties),
+producing clean, tool-grounded plans (web_search -> compile ->
+send_message) with clean stops. Validated through the shipped path,
+not a prompt hack.
+
+**But it needs a capable planner.** hermes3:8b did NOT benefit
+(0/5, n=5): the longer prompt degraded the 8b into emitting the plan
+as *JSON text* in the reply or hallucinating a news summary. So the
+hint helps a capable planner and hurts the small one. Conclusion:
+this is the `planner_alias` lever (design Story 2.2) and the
+orchestration-readiness eval dimension (task 24) — **plan with a
+capable model (qwen3:14b), execute with the fast one (hermes3:8b)**
+(task 25). hermes "feeling better" in daily use is consistent: it's
+the strong *executor* (6/6 at direct tool-calling), just not the
+planner.
+
+**Eval-methodology note (operator's point).** Inference itself is
+flaky — slow models on the EC2/SSM tunnel eat transient timeouts and
+empty completions. The eval must categorize each attempt
+(PLANNED / NO_PLAN / EMPTY / ERROR-infra) and compute the capability
+rate over *valid* attempts, excluding infra/transient failures, and
+multi-sample to average noise. The empties here were
+non-reproducible (10/10 the very next run) -> transient, not a
+capability miss. Caveat: all rates measured on the EC2-over-SSM path
+(flaky + slow for qwen3); a stable/home setup will differ, and call
+latency correlates with transient-failure exposure (hermes's ~6s
+calls dodge what qwen3's ~60s calls catch). The categorization is now
+in the multisample harness (`.scratch/run_planner_multisample.py`)
+and feeds the task-24 capability profile.
+
+---
+
 ## Dev loop was blind to real models; now wired to local + EC2 Ollama
 
 **First observed:** 2026-06-09. **Addressed:** 2026-06-09.

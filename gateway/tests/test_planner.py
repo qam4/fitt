@@ -21,10 +21,13 @@ from gateway.projects import ProjectRegistry
 from gateway.prompt_resolver import PromptResolver
 from gateway.router import DispatchResult
 from gateway.tools import (
+    ApprovalBucket,
     ApprovalDecision,
+    Tool,
     ToolContext,
     ToolPolicy,
     ToolRegistry,
+    ToolResult,
     build_plan_tools,
 )
 
@@ -170,3 +173,66 @@ async def test_planner_sends_plan_step_prompt_and_offers_todowrite() -> None:
     assert body["messages"][1] == {"role": "user", "content": "do a thing"}
     offered = [t["function"]["name"] for t in body["tools"]]
     assert offered == ["todowrite"]
+
+
+# --------------------------------------------------------------- executor-tool-visibility hint
+
+
+async def _noop_tool(args: Any, ctx: ToolContext) -> ToolResult:
+    return ToolResult.ok("ok")
+
+
+async def test_planner_injects_executor_tool_hint() -> None:
+    """When the registry carries executor tools beyond todowrite, the plan
+    prompt is augmented with a hint naming them (validated to lift
+    plan-election on a capable model). The planner still OFFERS only
+    todowrite."""
+    store = PlanStore()
+    reg = _registry()  # has todowrite
+    reg.register(
+        Tool(
+            name="web_search",
+            description="search the web for current information",
+            schema={"type": "object", "properties": {}, "additionalProperties": False},
+            callable=_noop_tool,
+            default_bucket=ApprovalBucket.AUTO,
+        )
+    )
+    router = _SeqRouter([_resp(content="ok")])
+    await run_planner_pass(
+        alias="fitt-local-qwen3",
+        user_message="summarise the news",
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=reg,
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+    )
+    sys_msg = router.bodies[0]["messages"][0]["content"]
+    assert "execution step" in sys_msg.lower()
+    assert "web_search" in sys_msg
+    # todowrite is the planner's own tool, not listed as an executor tool.
+    assert "- todowrite:" not in sys_msg
+    # Only todowrite is actually offered for calling.
+    offered = [t["function"]["name"] for t in router.bodies[0]["tools"]]
+    assert offered == ["todowrite"]
+
+
+async def test_planner_no_hint_when_only_todowrite() -> None:
+    """With no executor tools registered, the plan prompt is unchanged."""
+    store = PlanStore()
+    router = _SeqRouter([_resp(content="ok")])
+    resolver = PromptResolver()
+    await run_planner_pass(
+        alias="fitt-local-qwen3",
+        user_message="x",
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=resolver,
+        session_key="main",
+    )
+    sys_msg = router.bodies[0]["messages"][0]["content"]
+    assert sys_msg == resolver.resolve("plan", "fitt-local-qwen3")

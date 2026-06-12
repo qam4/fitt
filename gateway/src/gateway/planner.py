@@ -38,6 +38,40 @@ _PLAN_TOOL = "todowrite"
 _DEFAULT_PLANNER_ITERATIONS = 3
 
 
+def _executor_tools_hint(tool_registry: ToolRegistry) -> str:
+    """Render the executor's toolset as a hint appended to the plan prompt.
+
+    The planner only *calls* ``todowrite``, but it must know what the
+    *execution* step can do — otherwise a capable model judges a
+    tool-dependent task infeasible and refuses to plan. Validated
+    2026-06-11: qwen3:14b went from 2/5 to 10/10 plan-election (clean
+    stops, tool-grounded plans) once shown the toolset; a blind planner
+    refused with "I don't have internet access". Framed as the execution
+    step's tools so the planner plans steps that USE them rather than
+    trying to call them itself.
+
+    Returns ``""`` when no tools beyond ``todowrite`` are registered
+    (e.g. unit tests), leaving the plain plan prompt unchanged.
+    """
+    lines: list[str] = []
+    for tool in tool_registry.list_all():
+        if tool.name == _PLAN_TOOL:
+            continue
+        desc = " ".join((tool.description or "").split())
+        if len(desc) > 100:
+            desc = desc[:97] + "..."
+        lines.append(f"- {tool.name}: {desc}")
+    if not lines:
+        return ""
+    return (
+        "\n\nThe execution step that carries out your plan has these tools "
+        "available, so assume each step is achievable with them:\n"
+        + "\n".join(lines)
+        + "\nPlan concrete steps that use these tools; do not refuse for lack "
+        "of access."
+    )
+
+
 @dataclass(slots=True)
 class PlannerResult:
     """Outcome of the planner pass.
@@ -82,7 +116,7 @@ async def run_planner_pass(
             f"planner pass requires the {_PLAN_TOOL!r} tool to be registered"
         ) from exc
 
-    system_prompt = prompt_resolver.resolve("plan", alias)
+    system_prompt = prompt_resolver.resolve("plan", alias) + _executor_tools_hint(tool_registry)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
