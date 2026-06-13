@@ -39,6 +39,17 @@
   </div>
 </div>
 
+{% if turn.plan %}
+<div class="card">
+  <h3>Plan <span class="dim" style="font-size: 12px;">({{ turn.plan.done }}/{{ turn.plan.total }} done{% if turn.plan.replan_count %}, re-planned {{ turn.plan.replan_count }}x{% endif %})</span></h3>
+  <ul style="list-style: none; padding-left: 0; margin: 0;">
+    {% for item in turn.plan.items %}
+    <li class="mono" style="padding: 2px 0;">{{ item.glyph }} {{ item.text }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 {% if turn.tool_calls %}
 <div class="card">
   <h3>Tool calls</h3>

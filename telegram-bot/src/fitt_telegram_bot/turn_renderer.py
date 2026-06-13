@@ -84,6 +84,16 @@ per chat. Coalesce events arriving faster than this into a
 single edit to stay well inside the limit."""
 
 
+_PLAN_STATUS_ICONS: dict[str, str] = {
+    "done": "✅",
+    "in_progress": "🔄",
+    "blocked": "🚫",
+    "pending": "⬜",
+}
+"""Phase 12 — checklist glyphs for the plan section of the stream
+bubble. Unknown statuses fall back to the pending box."""
+
+
 # --------------------------------------------------------------- protocols
 
 
@@ -187,6 +197,20 @@ class TurnRenderState:
     """Ordered list of tool-call task cards in the stream
     bubble, in the order they were planned."""
 
+    plan_items: list[dict[str, str]] = field(default_factory=list)
+    """Phase 12 — the orchestrator's plan as ``[{"id", "text",
+    "status"}, ...]``. Populated on ``plan_created`` and mutated
+    in place on ``plan_step_started`` / ``plan_step_completed``.
+    Empty for non-orchestrated turns, so the plan checklist is
+    simply omitted from the bubble (no behaviour change for
+    plain chat / flat-loop turns)."""
+
+    replan_count: int = 0
+    """Phase 12 — how many times recovery re-planned on a clean
+    context this turn. Surfaced as a small marker under the plan
+    checklist so a multi-minute turn that had to restart is
+    legible rather than silent (Story 6.2)."""
+
     reply_text: str = ""
     """Accumulated final-reply text. Fed in via
     :meth:`TurnRenderer.append_reply_text` as tokens stream
@@ -260,7 +284,13 @@ class TurnRenderer:
             # tool_call_planned / reply-token is what actually
             # forces a bubble post (short-chat-turn detection).
             return
-        if kind == "tool_call_planned":
+        if kind == "plan_created":
+            await self._on_plan_created(event)
+        elif kind in ("plan_step_started", "plan_step_completed"):
+            await self._on_plan_step(event)
+        elif kind == "replan":
+            await self._on_replan(event)
+        elif kind == "tool_call_planned":
             await self._on_tool_call_planned(event)
         elif kind == "tool_call_executed":
             await self._on_tool_call_executed(event)
@@ -329,6 +359,43 @@ class TurnRenderer:
             await self._edit_stream_bubble()
 
     # ------------------------------------------------ handlers
+
+    async def _on_plan_created(self, event: dict[str, Any]) -> None:
+        """Store the plan and post the bubble so the user sees the
+        plan before any step runs (Story 6.1)."""
+        meta = event.get("meta") or {}
+        items = meta.get("items") or []
+        self.state.plan_items = [
+            {
+                "id": str(i.get("id", "")),
+                "text": str(i.get("text", "")),
+                "status": str(i.get("status", "pending")),
+            }
+            for i in items
+            if isinstance(i, dict)
+        ]
+        if not self.state.plan_items:
+            return
+        await self._ensure_stream_bubble_exists()
+        await self._flush_stream_bubble_if_due(force=True)
+
+    async def _on_plan_step(self, event: dict[str, Any]) -> None:
+        """Advance a plan item's status and refresh the bubble
+        (Story 6.2)."""
+        meta = event.get("meta") or {}
+        step_id = str(meta.get("step_id", ""))
+        new_status = "done" if event.get("kind") == "plan_step_completed" else "in_progress"
+        for item in self.state.plan_items:
+            if item.get("id") == step_id:
+                item["status"] = new_status
+                break
+        await self._flush_stream_bubble_if_due(force=True)
+
+    async def _on_replan(self, event: dict[str, Any]) -> None:
+        """Note a clean-context re-plan so the restart is legible
+        (Story 6.2)."""
+        self.state.replan_count += 1
+        await self._flush_stream_bubble_if_due(force=True)
 
     async def _on_tool_call_planned(self, event: dict[str, Any]) -> None:
         meta = event.get("meta") or {}
@@ -516,6 +583,19 @@ class TurnRenderer:
         from .markdown_render import markdown_to_telegram_html
 
         lines: list[str] = []
+        # Phase 12: plan checklist first, so the user scans the plan
+        # and its progress before the tool rows. Omitted entirely when
+        # there's no plan (plain chat / flat-loop turns are unchanged).
+        if self.state.plan_items:
+            lines.append("📋 <b>Plan</b>")
+            for item in self.state.plan_items:
+                icon = _PLAN_STATUS_ICONS.get(item.get("status", ""), "⬜")
+                lines.append(f"{icon} " + markdown_to_telegram_html(item.get("text", "")))
+            if self.state.replan_count:
+                lines.append(
+                    _html.escape(f"↻ re-planned on a clean context (x{self.state.replan_count})")
+                )
+            lines.append("")
         for task in self.state.tool_tasks:
             line = task.final or task.placeholder
             lines.append(markdown_to_telegram_html(line))

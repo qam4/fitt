@@ -369,6 +369,10 @@ def test_turn_event_kinds_include_all_planned_kinds() -> None:
         "approval_decided",
         "tool_call_executed",
         "gap_reported",
+        "plan_created",
+        "plan_step_started",
+        "plan_step_completed",
+        "replan",
         "turn_finished",
     }
     assert TURN_EVENT_KINDS == expected

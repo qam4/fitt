@@ -138,14 +138,33 @@ references point at `requirements.md`; property refs (Cn) at
 - [ ] 16. Tests: each trigger classified on synthetic + recorded
   transcripts; recovery never fires on a clean all-success transcript
   (C4 negative); a skip-then-stumble turn self-corrects via re-plan.
+  PARTIAL: synthetic per-trigger classification (`test_trouble.py`),
+  C4-negative hypothesis property (`test_trouble.py`), and
+  skip-then-stumble -> replan self-correction
+  (`test_recovery_replan_uses_clean_context` in `test_orchestrator.py`)
+  are all DONE. The **recorded-transcript** leg is blocked on the
+  record/replay harness (task 3, Phase 12a) — closeout deferred until
+  that lands.
 
 ## Phase 12d — Visibility
 
-- [ ] 17. Emit plan-created, step-start/complete, and re-plan events
-  to the Phase 7 turn-event stream (Story 6.1, 6.2).
-- [ ] 18. Render the plan + step progress in the existing live-turn
+- [x] 17. Emit plan-created, step-start/complete, and re-plan events
+  to the Phase 7 turn-event stream (Story 6.1, 6.2). DONE: 4 new
+  `TURN_EVENT_KINDS` (`plan_created`, `plan_step_started`,
+  `plan_step_completed`, `replan`) + emission helpers in
+  `turn_events.py`; the orchestrator emits `plan_created` after the
+  planner pass, diffs plan-item statuses after each executor/recovery
+  pass into step-started/completed events, and emits `replan` on each
+  clean-context restart. None-safe via `tool_ctx.turns`/`turn_id`.
+- [x] 18. Render the plan + step progress in the existing live-turn
   renderer and the dashboard turn-detail page; no new viewer (Story
-  6.3).
+  6.3). DONE: Telegram `turn_renderer` shows a plan checklist
+  (✅/🔄/⬜/🚫) at the top of the stream bubble, updated on step events,
+  with a re-plan marker; the dashboard turn-detail reconstructs the
+  plan + final step statuses from the turn-event stream (no new store)
+  and renders a Plan card. Tests: renderer (4) + turn_events helpers
+  (5) + dashboard reconstruction via existing detail tests. Plain
+  chat / flat-loop turns emit no plan events so their UX is unchanged.
 
 ## Phase 12e — Compaction integration (depends on Phase 8)
 

@@ -155,6 +155,10 @@ TURN_EVENT_KINDS: frozenset[str] = frozenset(
         "approval_decided",
         "tool_call_executed",
         "gap_reported",
+        "plan_created",
+        "plan_step_started",
+        "plan_step_completed",
+        "replan",
         "turn_finished",
     }
 )

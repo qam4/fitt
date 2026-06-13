@@ -29,6 +29,10 @@ from gateway.turn_events import (
     record_gap_event,
     record_llm_call_completed,
     record_llm_call_started,
+    record_plan_created,
+    record_plan_step_completed,
+    record_plan_step_started,
+    record_replan,
     record_tool_call_executed,
     record_tool_call_planned,
     record_turn_finished,
@@ -446,3 +450,51 @@ def test_emit_swallows_append_errors(caplog: pytest.LogCaptureFixture) -> None:
     # No exception propagated.
     # A warning was logged with the failure context.
     assert any("turn_events.emit_failed" in r.message for r in caplog.records)
+
+
+# --------------------------------------------------------------- planning (Phase 12)
+
+
+def test_record_plan_created(tmp_path: Path) -> None:
+    log = TurnLog(tmp_path)
+    items = [
+        {"id": "1", "text": "search", "status": "pending"},
+        {"id": "2", "text": "summarise", "status": "pending"},
+    ]
+    record_plan_created(log, "turn-1", "main", items=items)
+    e = _one_event(log, "main")
+    assert e.kind == "plan_created"
+    assert e.meta == {"item_count": 2, "items": items}
+
+
+def test_record_plan_step_started(tmp_path: Path) -> None:
+    log = TurnLog(tmp_path)
+    record_plan_step_started(log, "turn-1", "main", step_id="2", text="summarise")
+    e = _one_event(log, "main")
+    assert e.kind == "plan_step_started"
+    assert e.meta == {"step_id": "2", "text": "summarise"}
+
+
+def test_record_plan_step_completed(tmp_path: Path) -> None:
+    log = TurnLog(tmp_path)
+    record_plan_step_completed(log, "turn-1", "main", step_id="1", text="search")
+    e = _one_event(log, "main")
+    assert e.kind == "plan_step_completed"
+    assert e.meta == {"step_id": "1", "text": "search"}
+
+
+def test_record_replan(tmp_path: Path) -> None:
+    log = TurnLog(tmp_path)
+    record_replan(log, "turn-1", "main", attempt=1, reason="budget_exhausted: ...")
+    e = _one_event(log, "main")
+    assert e.kind == "replan"
+    assert e.meta == {"attempt": 1, "reason": "budget_exhausted: ..."}
+
+
+def test_plan_helpers_noop_without_turn_id(tmp_path: Path) -> None:
+    log = TurnLog(tmp_path)
+    record_plan_created(log, None, "main", items=[{"id": "1", "text": "x", "status": "pending"}])
+    record_replan(log, None, "main", attempt=0, reason="x")
+    import time as _time
+
+    assert log.read("main", now=_time.time()) == []

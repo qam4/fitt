@@ -601,3 +601,80 @@ def _asyncio_mode() -> None:
     """No-op; asyncio_mode=auto in pyproject.toml handles it.
     Present so a future tightening (say, selective opt-in)
     doesn't silently skip these tests."""
+
+
+# --------------------------------------------------------------- plan (Phase 12)
+
+
+async def test_plan_created_posts_bubble_with_checklist() -> None:
+    """plan_created posts the stream bubble immediately (before any
+    tool runs) showing the plan as a checklist."""
+    bot = _FakeBot()
+    r = _make_renderer(bot, _Clock())
+    await r.handle_event(
+        {
+            "kind": "plan_created",
+            "meta": {
+                "item_count": 2,
+                "items": [
+                    {"id": "1", "text": "search news", "status": "pending"},
+                    {"id": "2", "text": "summarise", "status": "pending"},
+                ],
+            },
+        }
+    )
+    sends = bot.sends()
+    assert len(sends) == 1
+    text = sends[0].text
+    assert "Plan" in text
+    assert "search news" in text
+    assert "summarise" in text
+    assert "⬜" in text  # pending glyph
+
+
+async def test_plan_step_completed_updates_checklist() -> None:
+    bot = _FakeBot()
+    clock = _Clock()
+    r = _make_renderer(bot, clock)
+    await r.handle_event(
+        {
+            "kind": "plan_created",
+            "meta": {"items": [{"id": "1", "text": "do it", "status": "pending"}]},
+        }
+    )
+    clock.advance(MIN_STREAM_EDIT_INTERVAL_S + 0.1)
+    await r.handle_event({"kind": "plan_step_completed", "meta": {"step_id": "1", "text": "do it"}})
+    edits = bot.edits()
+    assert edits, "step completion should edit the plan bubble"
+    assert "✅" in edits[-1].text
+
+
+async def test_replan_marker_rendered() -> None:
+    bot = _FakeBot()
+    clock = _Clock()
+    r = _make_renderer(bot, clock)
+    await r.handle_event(
+        {
+            "kind": "plan_created",
+            "meta": {"items": [{"id": "1", "text": "do it", "status": "pending"}]},
+        }
+    )
+    clock.advance(MIN_STREAM_EDIT_INTERVAL_S + 0.1)
+    await r.handle_event({"kind": "replan", "meta": {"attempt": 0, "reason": "budget_exhausted"}})
+    edits = bot.edits()
+    assert edits
+    assert "re-planned" in edits[-1].text
+
+
+async def test_no_plan_section_when_no_plan_created() -> None:
+    """A flat-loop / plain tool turn (no plan_created) renders no
+    plan section — behaviour unchanged."""
+    bot = _FakeBot()
+    r = _make_renderer(bot, _Clock())
+    await r.handle_event(
+        {
+            "kind": "tool_call_planned",
+            "meta": {"tool_name": "read_file", "args": {"path": "x"}, "call_id": "c1"},
+        }
+    )
+    assert "Plan" not in bot.sends()[-1].text

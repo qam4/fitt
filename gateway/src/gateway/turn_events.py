@@ -389,3 +389,89 @@ def record_gap_event(
             "suggestion": suggestion,
         },
     )
+
+
+# --------------------------------------------------------------- planning (Phase 12)
+
+
+def record_plan_created(
+    turns: TurnLog | None,
+    turn_id: str | None,
+    session_key: str,
+    *,
+    items: list[dict[str, str]],
+) -> None:
+    """The planner pass produced a plan (Phase 12, Story 6.1).
+
+    ``items`` is the ordered plan as ``[{"id", "text", "status"}, ...]``
+    — the full plan, so the live renderer and the dashboard turn-detail
+    page can show it without re-reading the PlanStore. Emitted once per
+    turn when planning is elected; an elected-out turn emits nothing."""
+    _emit(
+        turns,
+        turn_id=turn_id,
+        kind="plan_created",
+        session_key=session_key,
+        meta={
+            "item_count": len(items),
+            "items": items,
+        },
+    )
+
+
+def record_plan_step_started(
+    turns: TurnLog | None,
+    turn_id: str | None,
+    session_key: str,
+    *,
+    step_id: str,
+    text: str,
+) -> None:
+    """A plan step transitioned to in-progress (Story 6.2)."""
+    _emit(
+        turns,
+        turn_id=turn_id,
+        kind="plan_step_started",
+        session_key=session_key,
+        meta={"step_id": step_id, "text": text},
+    )
+
+
+def record_plan_step_completed(
+    turns: TurnLog | None,
+    turn_id: str | None,
+    session_key: str,
+    *,
+    step_id: str,
+    text: str,
+) -> None:
+    """A plan step transitioned to done (Story 6.2)."""
+    _emit(
+        turns,
+        turn_id=turn_id,
+        kind="plan_step_completed",
+        session_key=session_key,
+        meta={"step_id": step_id, "text": text},
+    )
+
+
+def record_replan(
+    turns: TurnLog | None,
+    turn_id: str | None,
+    session_key: str,
+    *,
+    attempt: int,
+    reason: str,
+) -> None:
+    """Recovery restarted execution on a clean context (Story 6.2).
+
+    ``attempt`` is the recovery attempt index; ``reason`` is the
+    ground-truth trouble kind/detail that triggered the re-plan — a
+    fact, never an interpretation of prose (property C4)."""
+    _emit(
+        turns,
+        turn_id=turn_id,
+        kind="replan",
+        session_key=session_key,
+        meta={"attempt": attempt, "reason": reason},
+    )

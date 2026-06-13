@@ -48,6 +48,12 @@ from .recover import decide_recovery, honest_report
 from .router import AliasRouter
 from .tools import ToolContext, ToolRegistry
 from .trouble import detect_trouble
+from .turn_events import (
+    record_plan_created,
+    record_plan_step_completed,
+    record_plan_step_started,
+    record_replan,
+)
 
 # Per-pass iteration-budget defaults, overridable per alias via
 # AliasOrchestrationConfig (task 11). Planner defaults to 1: the plan
@@ -101,6 +107,44 @@ def _augment_system(messages: list[dict[str, Any]], additions: list[str]) -> lis
     return out
 
 
+def _status_map(plan: Plan | None) -> dict[str, str]:
+    """Snapshot ``{item_id: status}`` for plan-progress diffing."""
+    if plan is None:
+        return {}
+    return {item.id: item.status for item in plan.items}
+
+
+def _plan_items_meta(plan: Plan) -> list[dict[str, str]]:
+    """Render a plan as the ``plan_created`` event's ``items`` payload."""
+    return [{"id": i.id, "text": i.text, "status": i.status} for i in plan.items]
+
+
+def _emit_step_transitions(
+    turns: Any,
+    turn_id: str | None,
+    session_key: str,
+    *,
+    before: dict[str, str],
+    after: Plan | None,
+) -> None:
+    """Emit a step-started / step-completed event for each plan item
+    whose status advanced between ``before`` and ``after`` (Story 6.2).
+
+    A pass can tick several todos (or skip in-progress straight to
+    done); we diff the net status per item rather than tracking each
+    ``todowrite`` call, which keeps the orchestrator decoupled from the
+    tool internals while still surfacing progress."""
+    if after is None:
+        return
+    for item in after.items:
+        if before.get(item.id) == item.status:
+            continue
+        if item.status == "in_progress":
+            record_plan_step_started(turns, turn_id, session_key, step_id=item.id, text=item.text)
+        elif item.status == "done":
+            record_plan_step_completed(turns, turn_id, session_key, step_id=item.id, text=item.text)
+
+
 async def run_orchestrated_turn(
     *,
     alias: str,
@@ -132,6 +176,11 @@ async def run_orchestrated_turn(
     planner_budget = planner_max_iterations or _DEFAULT_PLANNER_ITERATIONS
     executor_budget = executor_max_iterations or _DEFAULT_EXECUTOR_ITERATIONS
 
+    # Turn-event stream (Phase 7) handles, read off the ToolContext the
+    # way the agent loop does. None-safe: no TurnLog wired -> no-op.
+    turns = getattr(tool_ctx, "turns", None)
+    turn_id = getattr(tool_ctx, "turn_id", None)
+
     planner = await run_planner_pass(
         alias=planner_alias or alias,
         user_message=_latest_user_message(messages),
@@ -148,12 +197,21 @@ async def run_orchestrated_turn(
     if tool_ctx.plan_store is not None:
         plan = tool_ctx.plan_store.get(session_key)
 
+    # Story 6.1: surface the plan on the turn-event stream the moment
+    # it's elected. An elected-out turn (no plan) emits nothing.
+    if plan is not None and plan.items:
+        record_plan_created(turns, turn_id, session_key, items=_plan_items_meta(plan))
+
     additions: list[str] = []
     execute_prompt = prompt_resolver.resolve("execute", alias)
     if execute_prompt.strip():
         additions.append(execute_prompt.strip())
     if plan is not None and plan.items:
         additions.append(_plan_block(plan))
+
+    # Snapshot plan statuses so each pass's progress can be diffed into
+    # step-started / step-completed events (Story 6.2).
+    step_status = _status_map(plan)
 
     exec_messages = _augment_system(messages, additions)
     result = await run_agent_loop(
@@ -168,6 +226,9 @@ async def run_orchestrated_turn(
         max_iterations=executor_budget,
         artifact_store=artifact_store,
     )
+    plan_after = tool_ctx.plan_store.get(session_key) if tool_ctx.plan_store is not None else plan
+    _emit_step_transitions(turns, turn_id, session_key, before=step_status, after=plan_after)
+    step_status = _status_map(plan_after)
 
     # Token/iteration totals accumulate across the planner pass, the
     # executor pass, and any recovery re-runs so cost accounting
@@ -230,6 +291,13 @@ async def run_orchestrated_turn(
             current_plan = (
                 tool_ctx.plan_store.get(session_key) if tool_ctx.plan_store is not None else plan
             )
+            record_replan(
+                turns,
+                turn_id,
+                session_key,
+                attempt=attempt,
+                reason=f"{trouble.kind}: {trouble.detail}",
+            )
             replan_additions: list[str] = []
             if recover_prompt.strip():
                 replan_additions.append(recover_prompt.strip())
@@ -251,6 +319,11 @@ async def run_orchestrated_turn(
             max_iterations=executor_budget,
             artifact_store=artifact_store,
         )
+        plan_after = (
+            tool_ctx.plan_store.get(session_key) if tool_ctx.plan_store is not None else plan
+        )
+        _emit_step_transitions(turns, turn_id, session_key, before=step_status, after=plan_after)
+        step_status = _status_map(plan_after)
         total_in += result.in_tokens
         total_out += result.out_tokens
         total_iters += result.iterations

@@ -451,3 +451,116 @@ async def test_capability_gap_after_tool_error_not_recovered() -> None:
     )
     assert result.assistant_text == gap_reply
     assert len(router.aliases) == 3  # no recovery despite the tool error
+
+
+# --------------------------------------------------------------- task 17 (plan events)
+
+
+def _ctx_with_turns(store: PlanStore, log: Any, turn_id: str = "t1") -> ToolContext:
+    return ToolContext(
+        client="cli",
+        session_key="main",
+        projects=ProjectRegistry(Path("nonexistent.yaml")),
+        plan_store=store,
+        turns=log,
+        turn_id=turn_id,
+    )
+
+
+def _kinds(log: Any) -> list[str]:
+    return [e.kind for e in _events(log)]
+
+
+def _events(log: Any) -> list[Any]:
+    import time as _time
+
+    return log.read("main", now=_time.time())
+
+
+async def test_emits_plan_created_and_step_completed(tmp_path: Path) -> None:
+    from gateway.turns import TurnLog
+
+    log = TurnLog(tmp_path)
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            # planner: a one-step plan (created pending)
+            _resp(tool_calls=[_todowrite_call([{"id": "1", "text": "do it"}])]),
+            # executor: tick it done, then answer
+            _resp(tool_calls=[_todowrite_call([{"id": "1", "text": "do it", "status": "done"}])]),
+            _resp(content="finished"),
+        ]
+    )
+    await run_orchestrated_turn(
+        alias="fitt-local-qwen3",
+        messages=[{"role": "user", "content": "do it"}],
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx_with_turns(store, log),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+    )
+    events = _events(log)
+    kinds = [e.kind for e in events]
+    assert "plan_created" in kinds
+    assert "plan_step_completed" in kinds
+    created = next(e for e in events if e.kind == "plan_created")
+    assert created.meta["item_count"] == 1
+    completed = next(e for e in events if e.kind == "plan_step_completed")
+    assert completed.meta["step_id"] == "1"
+
+
+async def test_no_plan_created_when_elected_out(tmp_path: Path) -> None:
+    from gateway.turns import TurnLog
+
+    log = TurnLog(tmp_path)
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            _resp(content="no plan needed"),  # planner elects out
+            _resp(content="the answer"),  # executor
+        ]
+    )
+    await run_orchestrated_turn(
+        alias="fitt-local-qwen3",
+        messages=[{"role": "user", "content": "easy"}],
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx_with_turns(store, log),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+    )
+    assert "plan_created" not in _kinds(log)
+
+
+async def test_emits_replan_event(tmp_path: Path) -> None:
+    from gateway.turns import TurnLog
+
+    log = TurnLog(tmp_path)
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            _resp(content="no plan"),  # planner elects out
+            _resp(tool_calls=[_noop_call("a")]),  # exec iter 1
+            _resp(tool_calls=[_noop_call("b")]),  # exec iter 2 -> budget exhausted
+            _resp(content="done after replan"),  # replan re-run answers
+        ]
+    )
+    await run_orchestrated_turn(
+        alias="fitt-local-qwen3",
+        messages=[{"role": "user", "content": "loop then recover"}],
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx_with_turns(store, log),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+        planner_max_iterations=1,
+        executor_max_iterations=2,
+    )
+    kinds = _kinds(log)
+    assert "replan" in kinds
+    replan = next(e for e in _events(log) if e.kind == "replan")
+    assert "budget_exhausted" in replan.meta["reason"]

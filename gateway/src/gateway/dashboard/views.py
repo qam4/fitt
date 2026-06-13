@@ -1213,6 +1213,8 @@ def _build_turn_detail_context(
 
     day = datetime.fromtimestamp(finished, tz=UTC).strftime("%Y-%m-%d")
 
+    plan = _reconstruct_plan_for_turn(request, session_key=session_key, turn_id=turn_id)
+
     turn = {
         "turn_id": cap.turn_id,
         "alias": cap.alias,
@@ -1234,6 +1236,7 @@ def _build_turn_detail_context(
         "finish_reason": cap.finish_reason,
         "narration_warning": cap.narration_warning,
         "status": cap.status,
+        "plan": plan,
         "dispatched_messages": messages,
         "tool_calls": tool_calls,
         "response_pretty": _json.dumps(cap.response, indent=2, ensure_ascii=False),
@@ -1241,6 +1244,79 @@ def _build_turn_detail_context(
         "day": day,
     }
     return {"session_key": session_key, "turn": turn}
+
+
+_PLAN_STATUS_GLYPHS: dict[str, str] = {
+    "done": "✅",
+    "in_progress": "🔄",
+    "blocked": "🚫",
+    "pending": "⬜",
+}
+
+
+def _reconstruct_plan_for_turn(
+    request: Request, *, session_key: str, turn_id: str
+) -> dict[str, Any] | None:
+    """Rebuild the turn's plan + final step statuses from the
+    Phase 7 turn-event stream (Phase 12, Story 6.3 — reuse the
+    existing substrate, no new store).
+
+    Returns ``None`` when the turn emitted no ``plan_created`` event
+    (an elected-out / flat-loop turn). Applies the step-started /
+    step-completed events onto the created plan so the dashboard shows
+    where execution actually got, and counts re-plans."""
+    import time as _time
+
+    turns_log = getattr(request.app.state, "turns", None)
+    if turns_log is None:
+        return None
+    try:
+        events = turns_log.read(session_key, turn_id=turn_id, now=_time.time())
+    except Exception:
+        return None
+
+    created = next((e for e in events if e.kind == "plan_created"), None)
+    if created is None:
+        return None
+
+    raw_items = created.meta.get("items") or []
+    order: list[str] = []
+    by_id: dict[str, dict[str, str]] = {}
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        sid = str(item.get("id", ""))
+        order.append(sid)
+        by_id[sid] = {
+            "text": str(item.get("text", "")),
+            "status": str(item.get("status", "pending")),
+        }
+
+    for e in events:
+        sid = str((e.meta or {}).get("step_id", ""))
+        if sid not in by_id:
+            continue
+        if e.kind == "plan_step_completed":
+            by_id[sid]["status"] = "done"
+        elif e.kind == "plan_step_started" and by_id[sid]["status"] != "done":
+            by_id[sid]["status"] = "in_progress"
+
+    replan_count = sum(1 for e in events if e.kind == "replan")
+    items = [
+        {
+            "text": by_id[sid]["text"],
+            "status": by_id[sid]["status"],
+            "glyph": _PLAN_STATUS_GLYPHS.get(by_id[sid]["status"], "⬜"),
+        }
+        for sid in order
+    ]
+    done = sum(1 for i in items if i["status"] == "done")
+    return {
+        "items": items,
+        "replan_count": replan_count,
+        "done": done,
+        "total": len(items),
+    }
 
 
 def _render_turn_list(request: Request, *, session_key: str | None, client: str) -> Response:
