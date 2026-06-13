@@ -125,9 +125,16 @@ references point at `requirements.md`; property refs (Cn) at
   tests (clean turn = no recovery, nudge recovers empty-after-tools,
   replan uses clean context, honest stop on persistent trouble). Full
   suite 1574 passed.
-- [ ] 15. Capability-gap ("I'd need a tool to X") is a terminal
+- [x] 15. Capability-gap ("I'd need a tool to X") is a terminal
   honest outcome, distinct from thrash; not retried/escalated (Story
   4.4). No path rebinds to a cloud alias (Story 4.3; property C6).
+  DONE: the recovery loop checks `capabilities.parse_gap(reply)` first
+  each iteration — a gap reply is delivered as-is and never
+  nudged/replanned over, even when a trouble signal (e.g. a preceding
+  tool error) co-occurs. C6 holds structurally: every recovery re-run
+  passes `alias=alias` (the turn's own alias), never the planner_alias
+  or any cloud alias. Tests: gap terminal with/without a co-occurring
+  tool error (no recovery re-run fires).
 - [ ] 16. Tests: each trigger classified on synthetic + recorded
   transcripts; recovery never fires on a clean all-success transcript
   (C4 negative); a skip-then-stumble turn self-corrects via re-plan.

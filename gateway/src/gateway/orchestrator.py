@@ -26,8 +26,10 @@ Recovery (task 14) is wired in after the execute pass: a ground-truth
 trouble signal (:mod:`gateway.trouble`) drives an escalating, bounded
 recovery ladder (:mod:`gateway.recover`) — continue-nudge -> clean-
 context re-plan -> honest stop — always on the same alias (never a
-cloud escalation, property C6). Turn-event emission (task 17) is a
-deliberate later addition. Whether a turn is routed here at all is
+cloud escalation, property C6). A capability-gap reply ("I'd need a
+tool to X") is a terminal honest outcome (task 15, Story 4.4) and is
+delivered as-is, never recovered over. Turn-event emission (task 17)
+is a deliberate later addition. Whether a turn is routed here at all is
 gated per alias by ``Config.is_orchestrated`` (default off) — see the
 chat/cron wiring.
 """
@@ -38,6 +40,7 @@ import dataclasses
 from typing import Any
 
 from .agent_loop import AgentLoopResult, run_agent_loop
+from .capabilities import parse_gap
 from .plan_store import Plan
 from .planner import run_planner_pass
 from .prompt_resolver import PromptResolver
@@ -182,6 +185,15 @@ async def run_orchestrated_turn(
     attempt = 0
     replanned = False
     while True:
+        # Capability gap is a TERMINAL honest outcome (Story 4.4),
+        # distinct from thrash: the model has concluded it lacks a
+        # tool to proceed ("I'd need a tool to X"). Deliver that reply
+        # as-is and never nudge/replan over it — even if a trouble
+        # signal (e.g. a preceding tool error) co-occurs, the gap is
+        # the honest answer, not something to retry. The downstream
+        # `_record_gap` still logs it to the capability-gap backlog.
+        if parse_gap(result.assistant_text) is not None:
+            break
         trouble = detect_trouble(
             status=result.status,
             tool_calls=result.tool_calls_for_memory,

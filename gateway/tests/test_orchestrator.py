@@ -378,3 +378,76 @@ async def test_recovery_honest_stop_when_trouble_persists() -> None:
     assert "stopping" in result.assistant_text.lower()
     assert "empty" in result.assistant_text.lower()  # the observed fact
     assert len(router.aliases) == 7  # planner + exec(2) + nudge(2) + replan(2)
+
+
+# --------------------------------------------------------------- task 15 (capability gap)
+
+
+async def test_capability_gap_is_terminal_not_recovered() -> None:
+    """A capability-gap reply ('I'd need a tool to X') is a terminal
+    honest outcome (Story 4.4): even though the preceding tool call
+    errored (a trouble signal), recovery must NOT fire — the gap reply
+    is delivered as-is."""
+    store = PlanStore()
+    gap_reply = "I'd need a tool to send email to do that. Consider adding send_email."
+    router = _SeqRouter(
+        [
+            _resp(content="no plan"),  # planner elects out
+            _resp(tool_calls=[_noop_call()]),  # executor tries a tool...
+            _resp(content=gap_reply),  # ...then honestly reports a gap
+        ]
+    )
+    result = await _run(store, router, "email my boss")
+    assert result.assistant_text == gap_reply
+    assert result.status == "ok"
+    # No recovery re-run: planner + executor(2) only.
+    assert len(router.aliases) == 3
+
+
+async def test_capability_gap_after_tool_error_not_recovered() -> None:
+    """Same, but the last tool call errored — the trouble detector
+    would see tool_error, yet the gap reply preempts recovery."""
+    store = PlanStore()
+
+    async def _fail(args: Any, ctx: ToolContext) -> ToolResult:
+        return ToolResult.error("nope")
+
+    reg = _registry()
+    reg.register(
+        Tool(
+            name="flaky",
+            description="fails",
+            schema={"type": "object", "properties": {}, "additionalProperties": False},
+            callable=_fail,
+            default_bucket=ApprovalBucket.AUTO,
+        )
+    )
+    gap_reply = "I'd need a tool to query the database here."
+    router = _SeqRouter(
+        [
+            _resp(content="no plan"),
+            _resp(
+                tool_calls=[
+                    {
+                        "id": "f1",
+                        "type": "function",
+                        "function": {"name": "flaky", "arguments": "{}"},
+                    }
+                ]
+            ),
+            _resp(content=gap_reply),
+        ]
+    )
+    result = await run_orchestrated_turn(
+        alias="fitt-local-qwen3",
+        messages=[{"role": "user", "content": "read the db"}],
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=reg,
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+        planner_max_iterations=1,
+    )
+    assert result.assistant_text == gap_reply
+    assert len(router.aliases) == 3  # no recovery despite the tool error
