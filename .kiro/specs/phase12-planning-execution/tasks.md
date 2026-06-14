@@ -36,10 +36,19 @@ references point at `requirements.md`; property refs (Cn) at
   assert on **structure/properties**, never exact strings;
   `temperature=0` + fixed seed for reproducible dev runs; **multi-
   sample** (k runs → pass rate) for behavioral signal.
-- [ ] 3. Record/replay: capture real model responses to cases once and
+- [x] 3. Record/replay: capture real model responses to cases once and
   replay them deterministically so CI exercises the plumbing against
   real output *shapes* without a live model or non-deterministic flake
-  (ref OpenCode `http-recorder` / `recorded-*`).
+  (ref OpenCode `http-recorder` / `recorded-*`). DONE: `record_replay.py`
+  — `RecordingRouter` wraps a real `AliasRouter` and captures each
+  dispatch to a JSON cassette; `ReplayRouter` serves a cassette with no
+  live call (keyed by a volatile-field-stripped request hash, sequential
+  for duplicate keys, loud `CassetteMiss` on an unrecorded request).
+  Drop-in at the `dispatch`/`resolve` seam — no loop/planner/orchestrator
+  change. `test_record_replay.py` proves a full plan -> execute turn
+  records then replays identically with no inner router. Capturing
+  cassettes from a real backend is an operator step (wrap the live
+  router) exercised when the real-model loop runs (12f).
 - [ ] 4. With the real-model loop in place, run the **current flat
   loop** on a multi-step `daily_news_summary` case (real registered
   tools) against a real model and read the actual failure. Not a
@@ -142,9 +151,10 @@ references point at `requirements.md`; property refs (Cn) at
   C4-negative hypothesis property (`test_trouble.py`), and
   skip-then-stumble -> replan self-correction
   (`test_recovery_replan_uses_clean_context` in `test_orchestrator.py`)
-  are all DONE. The **recorded-transcript** leg is blocked on the
-  record/replay harness (task 3, Phase 12a) — closeout deferred until
-  that lands.
+  are all DONE. The **recorded-transcript** leg's harness now exists
+  (task 3 — `record_replay.py`); capturing a real flailing transcript
+  to a cassette still needs a real-model run (12f), so closeout stays
+  deferred until then.
 
 ## Phase 12d — Visibility
 
