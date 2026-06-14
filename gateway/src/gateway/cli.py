@@ -1528,12 +1528,25 @@ def eval_group() -> None:
         "router-mode (X-FITT-Client: coding-agent) work."
     ),
 )
+@click.option(
+    "--record",
+    "record_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Capture every model dispatch this run makes to a replay "
+        "cassette at the given path (Phase 12 record/replay). Run "
+        "against a real backend once; the cassette then drives "
+        "deterministic CI / fast local tests with no live model."
+    ),
+)
 @click.option("--config-file", type=click.Path(path_type=Path), default=None)
 def eval_alias_cmd(
     alias: str,
     timeout_s: float,
     min_pass_rate: float | None,
     suite: str,
+    record_path: Path | None,
     config_file: Path | None,
 ) -> None:
     """Run an eval suite against one alias.
@@ -1560,8 +1573,21 @@ def eval_alias_cmd(
         sys.exit(2)
 
     cases = default_coding_cases() if suite == "coding" else None
-    router = AliasRouter(cfg)
-    report = asyncio.run(run_eval_suite(alias, router, cases=cases, timeout_s=timeout_s))
+    base_router = AliasRouter(cfg)
+    recording: Any = None
+    eval_router: Any = base_router
+    if record_path is not None:
+        from .record_replay import RecordingRouter
+
+        recording = RecordingRouter(base_router)
+        eval_router = recording
+    report = asyncio.run(run_eval_suite(alias, eval_router, cases=cases, timeout_s=timeout_s))
+    if recording is not None:
+        recording.save(record_path)
+        _console.print(
+            f"[cyan]recorded {len(recording.cassette.interactions)} dispatch(es)[/cyan] "
+            f"to {record_path}"
+        )
     ts_path, latest_path = write_report(report, fitt_home(), suite=suite)
 
     colour = "green" if report.passed == report.total else "yellow"

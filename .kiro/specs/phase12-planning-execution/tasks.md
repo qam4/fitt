@@ -47,8 +47,10 @@ references point at `requirements.md`; property refs (Cn) at
   Drop-in at the `dispatch`/`resolve` seam — no loop/planner/orchestrator
   change. `test_record_replay.py` proves a full plan -> execute turn
   records then replays identically with no inner router. Capturing
-  cassettes from a real backend is an operator step (wrap the live
-  router) exercised when the real-model loop runs (12f).
+  cassettes from a real backend is operator-driven via
+  `fitt eval alias <alias> --record <path>` (wraps the live router in a
+  RecordingRouter and saves the cassette), exercised when the
+  real-model loop runs (12f).
 - [ ] 4. With the real-model loop in place, run the **current flat
   loop** on a multi-step `daily_news_summary` case (real registered
   tools) against a real model and read the actual failure. Not a
