@@ -110,6 +110,27 @@ def create_app(config: Config) -> FastAPI:
     # optional ``prompts:`` config block (defaults when absent).
     app.state.prompt_resolver = PromptResolver.from_config(config.prompts)
 
+    # Phase 12 task 3: optional record/replay capture. When
+    # ``FITT_RECORD_CASSETTE`` is set, a single shared RecordingRouter
+    # wraps the live AliasRouter and every model dispatch on the chat
+    # path is captured; the operator flushes it to disk via
+    # ``POST /v1/internal/record-flush``. Inert (both attrs None) when
+    # the env var is unset, so production is untouched. The capture is
+    # faithful by construction — it records the real request path
+    # (same registry, approval policy, prompts), not a re-wired copy.
+    app.state.record_cassette_path = None
+    app.state.recording_router = None
+    _record_cassette = os.environ.get("FITT_RECORD_CASSETTE")
+    if _record_cassette:
+        from pathlib import Path as _Path
+
+        from .record_replay import RecordingRouter
+        from .router import AliasRouter as _AliasRouter
+
+        app.state.record_cassette_path = _Path(_record_cassette)
+        app.state.recording_router = RecordingRouter(_AliasRouter(config))
+        _log.info("record_replay.capture_enabled", path=_record_cassette)
+
     app.state.memory = MemoryStore(
         identity_dir=memory_cfg.identity_dir,
         sessions_dir=memory_cfg.sessions_dir,

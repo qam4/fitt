@@ -1133,7 +1133,11 @@ async def chat_completions(request: Request) -> Response:
     session_registry: SessionRegistry = request.app.state.session_registry
     tool_registry: ToolRegistry = request.app.state.tool_registry
     approval = request.app.state.approval
-    alias_router = AliasRouter(config)
+    # Phase 12 task 3: when record/replay capture is enabled
+    # (FITT_RECORD_CASSETTE), dispatch through the shared
+    # RecordingRouter so the cassette captures the real request path.
+    # Otherwise build a per-request AliasRouter exactly as before.
+    alias_router: Any = getattr(request.app.state, "recording_router", None) or AliasRouter(config)
 
     parsed = await _parse_request(request, config)
     session_id = resolve_session_id(request, session_registry)

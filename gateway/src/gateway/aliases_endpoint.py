@@ -235,3 +235,31 @@ async def context_refresh(request: Request) -> dict[str, Any]:
             }
         )
     return {"refreshed": refreshed}
+
+
+@router.post("/v1/internal/record-flush")
+async def record_flush(request: Request) -> dict[str, Any]:
+    """Write the in-memory record/replay cassette to disk.
+
+    Active only when the gateway was started with
+    ``FITT_RECORD_CASSETTE`` set (Phase 12 task 3 capture). Returns the
+    number of dispatches captured so far and the path written. When
+    capture isn't enabled, returns a ``not_recording`` error rather
+    than 500 so the operator gets a clear message.
+
+    Internal: bearer-gated like the other ``/v1/internal/*`` routes.
+    The operator flow is: start the gateway with the env var set, send
+    one or more real (e.g. orchestrated) turns, POST here to flush, then
+    stop the gateway. The cassette then drives deterministic replay
+    tests with no live model."""
+    recorder = getattr(request.app.state, "recording_router", None)
+    path = getattr(request.app.state, "record_cassette_path", None)
+    if recorder is None or path is None:
+        return {
+            "error": {
+                "type": "not_recording",
+                "message": ("gateway not started with FITT_RECORD_CASSETTE; no cassette to flush"),
+            }
+        }
+    recorder.save(path)
+    return {"saved": str(path), "interactions": len(recorder.cassette.interactions)}

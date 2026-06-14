@@ -48,6 +48,19 @@ replay. When one key was recorded multiple times (e.g. the same body
 dispatched twice in a turn), replay returns the recorded responses in
 order — keyed *and* sequential, so identical-request turns still
 replay faithfully.
+
+Capturing from the live gateway
+-------------------------------
+
+Two operator entry points, both wrapping a *real* router so the
+cassette reflects the actual request path (no re-wired copy):
+
+* ``fitt eval alias <alias> --record <path>`` — captures the eval
+  suite's single-shot dispatches.
+* Start the gateway with ``FITT_RECORD_CASSETTE=<path>`` set, send real
+  (e.g. orchestrated) turns, then ``POST /v1/internal/record-flush`` to
+  write the cassette and stop. This captures full multi-pass turns
+  (planner -> executor -> recovery) exactly as the live path runs them.
 """
 
 from __future__ import annotations
