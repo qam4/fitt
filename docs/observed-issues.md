@@ -33,6 +33,58 @@ doc.
 
 ---
 
+## Thinking-model planner stalls: reasoning_content + no tool call reads as "done"
+
+**First observed:** 2026-06-14 (first live orchestrated turn on EC2).
+**Tag:** Phase 12 planner pass / agent-loop termination / thinking models.
+
+The first end-to-end orchestrated turn on real models
+(`fitt-ec2-hermes`: plan on qwen3:14b via `planner_alias`, execute on
+hermes3:8b) ran clean *mechanically* — routing, planner_alias,
+executor, web_search, capture all worked — but **no plan was ever
+produced**, and the executor ran plan-less (shallow result relay on one
+run, a narrated `web_search` JSON-as-text on the next).
+
+Root cause (from the captured cassette, not a guess): qwen3:14b is a
+**thinking model**. On the planner pass it emitted **empty `content`,
+~1.6k chars of `reasoning_content` (it reasons out the whole plan
+in prose), and NO `todowrite` tool call**. `run_agent_loop` terminates
+on "no `tool_calls` -> natural stop", so a turn that's empty-content +
+reasoning-only + no-tool is indistinguishable from "done": the loop
+breaks after iteration 1. The plan never lands in PlanStore.
+
+**`planner_iterations: 2` does NOT fix it** (tested live, hypothesis
+disproved): the second iteration never runs, because nothing continues
+past a no-tool-call turn. The budget knob only helps a model that
+*does* call a tool and needs more round-trips.
+
+So the gap is harness-level, not config:
+
+1. **Planner-level continue-nudge.** When the planner turn returns no
+   tool call but has nonzero completion tokens / non-empty
+   `reasoning_content` (observable facts, C4-safe), re-prompt once:
+   "you reasoned about a plan — now emit it via `todowrite`." This is
+   the planner-side analogue of the executor's empty-after-tools nudge.
+2. **Possibly carry `reasoning_content` forward** so the model
+   continues from its own thinking instead of starting cold on the
+   nudge.
+
+Note this is distinct from the 2026-06-11 "tool-blindness" entry below:
+that was the planner *refusing on feasibility* (fixed by the
+executor-tool hint); this is the planner *thinking but never acting*
+under the loop's no-tool-call termination. The tool hint is present
+here (the reasoning shows qwen3 correctly planning to use web_search) —
+it just never emits the tool call.
+
+Captured fixtures: `~/.fitt/cassettes/ec2-orchestrated-smoke.json`
+(budget 1) and `ec2-orch-budget2.json` (budget 2) — both show the
+empty-content + reasoning + no-todowrite planner turn. Measured on the
+EC2-over-SSM path; a warm qwen3 emitted a single tool call fine on the
+boot probe, so this is the planner-prompt/loop interaction, not raw
+inability to tool-call.
+
+---
+
 ## Planner tool-blindness: capability hint lifts plan-election ~40% -> ~100% (on a capable planner)
 
 **First observed:** 2026-06-11. **Addressed:** 2026-06-12.

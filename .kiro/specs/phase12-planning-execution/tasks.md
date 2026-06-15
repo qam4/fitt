@@ -139,6 +139,22 @@ references point at `requirements.md`; property refs (Cn) at
   tests (clean turn = no recovery, nudge recovers empty-after-tools,
   replan uses clean context, honest stop on persistent trouble). Full
   suite 1574 passed.
+- [x] 14b. Planner-level continue-nudge for thinking models
+  (follow-on from live validation 2026-06-14; see
+  `docs/observed-issues.md` "Thinking-model planner stalls"). A
+  thinking model (qwen3:14b) emits its plan as `reasoning_content`
+  with empty `content` and no `todowrite`; `run_agent_loop` reads the
+  no-tool-call turn as a natural stop, so the plan never lands and the
+  executor runs plan-less. DONE: `run_planner_pass` detects the stall
+  (empty content, no tool call, but output produced — facts only, C4)
+  and re-prompts once, feeding the model its own `reasoning_content`
+  back and asking it to emit `todowrite`. Gated by `nudge_on_stall`
+  (default on); won't fire on a genuine elect-out (non-empty content).
+  **Validated live on EC2 qwen3:** stall -> nudge -> qwen3 emits a
+  3-step plan -> executor produces a substantive answer (vs shallow
+  relay / narrated-JSON in the plan-less runs). `planner_iterations: 2`
+  does NOT fix it (confirmed; second iteration never runs past a
+  no-tool-call turn). 4 new tests in `test_planner.py`.
 - [x] 15. Capability-gap ("I'd need a tool to X") is a terminal
   honest outcome, distinct from thrash; not retried/escalated (Story
   4.4). No path rebinds to a cloud alias (Story 4.3; property C6).

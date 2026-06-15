@@ -45,6 +45,7 @@ def _resp(
     *,
     tool_calls: list[dict[str, Any]] | None = None,
     content: str | None = None,
+    reasoning: str | None = None,
 ) -> dict[str, Any]:
     msg: dict[str, Any] = {"role": "assistant"}
     if tool_calls is not None:
@@ -52,6 +53,8 @@ def _resp(
         msg["content"] = None
     else:
         msg["content"] = content or ""
+    if reasoning is not None:
+        msg["reasoning_content"] = reasoning
     return {
         "id": "r",
         "choices": [
@@ -236,3 +239,107 @@ async def test_planner_no_hint_when_only_todowrite() -> None:
     )
     sys_msg = router.bodies[0]["messages"][0]["content"]
     assert sys_msg == resolver.resolve("plan", "fitt-local-qwen3")
+
+
+# --------------------------------------------------------------- task 14b: thinking-model nudge
+
+
+async def test_planner_nudge_recovers_thinking_stall() -> None:
+    """A thinking model returns empty content + reasoning_content and no
+    todowrite (the loop reads it as done). The planner-level nudge
+    re-prompts once and the model then emits the plan."""
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            # planner pass: thinking stall (reasoned, no tool call)
+            _resp(content="", reasoning="I'll search the web then summarise."),
+            # nudge pass: now emits the plan, then a natural-stop reply
+            _resp(tool_calls=[_todowrite_call([{"text": "search"}, {"text": "summarise"}])]),
+            _resp(content="planned"),
+        ]
+    )
+    result = await run_planner_pass(
+        alias="fitt-ec2-qwen3",
+        user_message="summarise today's news",
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+        max_iterations=1,
+    )
+    assert result.planned is True
+    assert [i.text for i in result.plan.items] == ["search", "summarise"]  # type: ignore[union-attr]
+    # planner pass (1 dispatch) + nudge pass (2 dispatches).
+    assert len(router.bodies) == 3
+    # The nudge dispatch carried the model's own reasoning back + the nudge.
+    nudge_body = router.bodies[1]
+    contents = [m.get("content", "") for m in nudge_body["messages"]]
+    assert any("search the web then summarise" in c for c in contents)  # reasoning fed back
+    assert any("todowrite" in c for c in contents)  # the nudge text
+
+
+async def test_planner_stall_by_tokens_without_reasoning_is_nudged() -> None:
+    """Empty content + no tool call + nonzero completion tokens (no
+    reasoning_content field) still counts as a stall and is nudged."""
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            _resp(content=""),  # empty, no reasoning, but out_tokens>0
+            _resp(tool_calls=[_todowrite_call([{"text": "x"}])]),
+            _resp(content="ok"),
+        ]
+    )
+    result = await run_planner_pass(
+        alias="fitt-ec2-qwen3",
+        user_message="do a multi-step thing",
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+        max_iterations=1,
+    )
+    assert result.planned is True
+    assert len(router.bodies) == 3
+
+
+async def test_planner_elect_out_is_not_nudged() -> None:
+    """A genuine elect-out (non-empty content, no tool call) is NOT a
+    stall — the nudge must not fire."""
+    store = PlanStore()
+    router = _SeqRouter([_resp(content="single step; no plan needed")])
+    result = await run_planner_pass(
+        alias="fitt-ec2-qwen3",
+        user_message="what time is it",
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+        max_iterations=1,
+    )
+    assert result.planned is False
+    assert len(router.bodies) == 1  # no nudge re-run
+
+
+async def test_planner_nudge_can_be_disabled() -> None:
+    store = PlanStore()
+    router = _SeqRouter([_resp(content="", reasoning="thinking but no action")])
+    result = await run_planner_pass(
+        alias="fitt-ec2-qwen3",
+        user_message="do a thing",
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        tool_ctx=_ctx(store),
+        prompt_resolver=PromptResolver(),
+        session_key="main",
+        max_iterations=1,
+        nudge_on_stall=False,
+    )
+    assert result.planned is False
+    assert len(router.bodies) == 1
