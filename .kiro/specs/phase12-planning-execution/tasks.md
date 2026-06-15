@@ -155,6 +155,15 @@ references point at `requirements.md`; property refs (Cn) at
   relay / narrated-JSON in the plan-less runs). `planner_iterations: 2`
   does NOT fix it (confirmed; second iteration never runs past a
   no-tool-call turn). 4 new tests in `test_planner.py`.
+  **CAVEAT (walked back 2026-06-15):** "validated live" was n=1 on
+  qwen3. Testing gemma4:12b-it-qat showed the nudge is a **narrow
+  mitigation for one failure mode**, not a general fix — gemma4 mostly
+  plans fine, and its planner failures are different (it calls an
+  executor tool from the planner pass, a side effect of the
+  executor-tools hint, which the nudge correctly does not fire on).
+  Per-model planner-failure characterisation is task-24 audit work.
+  See `observed-issues.md` "Thinking-model planner stalls" Update
+  2026-06-15.
 - [x] 15. Capability-gap ("I'd need a tool to X") is a terminal
   honest outcome, distinct from thrash; not retried/escalated (Story
   4.4). No path rebinds to a cloud alias (Story 4.3; property C6).

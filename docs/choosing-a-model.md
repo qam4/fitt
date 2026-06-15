@@ -465,20 +465,149 @@ before testing.
 
 ## Where the eval harness fits
 
-The process above is manual and ad-hoc. The hallucinations
-doc proposes building an eval harness (item 6 of the action
-list) that automates Steps 2–4: given an alias, run a curated
-set of prompts, record whether tool_calls were emitted
-correctly, produce a pass/fail report. That harness would:
+The criteria above are the *reasoning*; the eval harness is the
+*tooling* that makes applying them fast. It now exists (it didn't when
+the first draft of this doc was written) — see the operational runbook
+below. Given an alias it runs a curated set of prompts, records whether
+`tool_calls` were emitted correctly, and writes a pass/fail report,
+turning "run three prompts by hand" into `fitt eval alias <name>` and a
+model swap into a minutes-long decision with evidence.
 
-- Replace "run three prompts by hand" with
-  `fitt eval alias fitt-smart`.
-- Make model swaps a one-minute decision with evidence,
-  not a half-day investigation.
-- Catch regressions when a provider changes a model's
-  underlying weights or serving stack.
+## Onboarding a new model — operational runbook
 
-Until that exists, this doc is the process.
+The concrete steps to evaluate and bind a candidate, using the tooling
+that exists today. Worked end-to-end on `gemma4:12b-it-qat` 2026-06-15.
+Layered cheapest-first: each step is a cheap gate before the more
+expensive next one, so a bad candidate fails fast.
+
+**The order matters.** A model that passes the bare suite can still
+fail under FITT's real prompt (the granite trap, Criterion 3) — so the
+realistic step is the actual decision-maker, not the bare one.
+
+### 0. Make the model reachable
+
+- **Local Ollama** (small enough for your GPU): `ollama pull <model>`,
+  endpoint `http://localhost:11434`.
+- **EC2 A10G** (bigger models / no local GPU): pull on the box and
+  reach it over the SSH local-forward tunnel — see
+  `~/.fitt/ec2-runbook.md`. `ssh ec2-instance-1 "ollama pull <model>"`
+  (the pull rides the SSH connection; the `-L 11435:localhost:11434`
+  tunnel is only needed for the *gateway* to reach it). Gotcha: the
+  SSM session drops periodically ("Bad packet length") — restart the
+  tunnel when it does.
+- **Warm it first.** A cold 7–10GB model can blow the 10s boot-probe
+  timeout on its first call. One throwaway `/api/generate` call loads
+  it into VRAM so the probe/eval get clean timings.
+
+### 1. Add the model + alias (config only — Principle 7)
+
+In `~/.fitt/config.yaml`, add a `models:` entry and bind an alias.
+No code change:
+
+```yaml
+aliases:
+  fitt-ec2-gemma4: gemma4-12b-it-qat-ec2
+models:
+  - id: gemma4-12b-it-qat-ec2
+    backend: ollama
+    endpoint: http://localhost:11435   # EC2 via tunnel
+    model: gemma4:12b-it-qat
+```
+
+Check `/api/tags` for the model's declared `capabilities` while you're
+there — `["completion","tools","thinking","vision"]` tells you whether
+it nominally supports tools and whether it's a **thinking model** (see
+step 5).
+
+### 2. Boot probe — the instant canary
+
+Start the gateway; `alias_probe` fires one canary tool-call per alias
+at boot and logs `alias_probe.ok` ("emitted N tool call(s) as
+expected") or a failure. This is the cheapest "can it tool-call at
+all" signal. A `narrated` / no-tool result here means stop — the
+binding is unusable for agent-shaped aliases.
+
+### 3. Bare tool-calling suite
+
+```
+uv run fitt eval alias <alias> --suite default --timeout 120
+```
+
+Five cases: tool-call basics + correct *no-tool* discrimination on
+small talk. Writes a report to `~/.fitt/eval/<alias>-latest.md`.
+Necessary but not sufficient — this is the minimal-prompt check
+(Criterion 1).
+
+### 4. Realistic suite — the degradation diagnostic (the decision-maker)
+
+The same cases plus a live-fact case, run under FITT's **full live
+system prompt** (capability block + identity + skills + lessons). This
+is the granite-incident diagnostic (Criterion 3): a model that's clean
+on the bare suite can lose tool-call discipline at 5K+ prompt tokens.
+
+It needs the running gateway's assembled prompt, so it's HTTP-only
+today (the CLI `--suite` exposes only `default|coding`):
+
+```
+# gateway running on :8421
+curl -s -XPOST "http://localhost:8421/v1/eval/<alias>?suite=realistic" \
+  -H "Authorization: Bearer <token>"
+```
+
+The response header notes the realistic prompt's approximate token
+count. *Known friction:* realistic isn't in the CLI, and there's no
+single "run every suite" command — candidate improvements (see below).
+
+### 5. Orchestration-readiness — plan + follow-through
+
+Only if the alias will be orchestrated (planner or executor). There's
+no dedicated suite yet; run a real multi-step orchestrated turn (enable
+`orchestration` for the alias, send a "search the web for X and
+summarise" turn) and read the captured turn / cassette.
+
+**Thinking models need extra care here.** A reasoning model
+(qwen3:14b, and gemma4 is also `thinking`) plans inside
+`reasoning_content`, returns empty `content` and no `todowrite`, and
+the loop reads that as "done" — no plan lands. The planner
+continue-nudge (`run_planner_pass`, task 14b) is built to catch this;
+confirm it fires for the new model. `planner_iterations: 2` does *not*
+fix it. See `observed-issues.md` "Thinking-model planner stalls."
+
+### 6. Multi-sample, because inference is non-deterministic
+
+A single `5/5` can be `4/5` next run (model connectivity, streaming,
+cold-load, the reasoning channel). For any rate claim, run k samples
+and report the pass rate — don't trust one shot.
+`.scratch/run_planner_multisample.py` does this for plan-election; the
+principle generalises to any of the suites above. Exclude transient
+infra failures (timeouts on the SSM path) from capability rates.
+
+### 7. Record a cassette for regression
+
+With the gateway started under `FITT_RECORD_CASSETTE=<path>`, the
+validated turns are captured to a replay cassette
+(`POST /v1/internal/record-flush`). Commit useful ones as fixtures so
+the behaviour is pinned without needing the live model (see
+`gateway/src/gateway/record_replay.py`).
+
+### 8. Two-week live trial (Principle 9)
+
+Bind it, use FITT normally for two weeks, watch `fitt inbox` and
+`observed-issues.md`. Holds up → it stays; new failure modes → loop
+back with the data.
+
+### Candidate improvements to this workflow (not yet built)
+
+- `fitt eval alias <name> --suite realistic` (CLI parity; needs the
+  CLI to assemble the live prompt without a running app).
+- `fitt eval alias <name> --all` — one command, all suites, one report.
+- A first-class **orchestration-readiness** suite (plan-election +
+  follow-through), feeding the per-dimension capability profile
+  (phase12 task 24). That profile — per-dimension grades that *inform*
+  config rather than a single tier — is the intended "best way" this
+  runbook is the manual stand-in for.
+
+
 
 ## Current recommendations (volatile; updated when we swap)
 

@@ -83,6 +83,30 @@ EC2-over-SSM path; a warm qwen3 emitted a single tool call fine on the
 boot probe, so this is the planner-prompt/loop interaction, not raw
 inability to tool-call.
 
+**Update 2026-06-15 (gemma4:12b-it-qat — the framing was too broad).**
+Testing a second thinking model walked this back. gemma4 *mostly
+plans fine* (~6-8/10 sampled). Its planner failures are
+non-deterministic and not a single "stall":
+- **Calls an executor tool from the planner pass.** Caught live:
+  gemma4 emitted a `web_search` tool_call (a tool listed only in the
+  executor-tools *hint*, not offered in the planner pass) instead of a
+  `todowrite`. With budget 1 the loop exhausts with no plan. The
+  continue-nudge correctly does NOT fire here (there *was* a tool
+  call), so `_is_thinking_stall` returning False is right — but the
+  outcome is still no-plan. This is a **side effect of the
+  executor-tools hint** (added to stop capable planners refusing): a
+  different model reads "here are the execution tools" as "I may call
+  them now."
+- The qwen3-style empty-content + reasoning + no-tool case also occurs
+  occasionally.
+
+Net: the nudge (task 14b) is a **narrow mitigation for one failure
+mode on one model (qwen3, n=1)**, not a general fix — "validated live"
+was overstated. Characterising planner failure modes per model
+belongs in the task-24 capability audit, not ad-hoc onboarding. The
+hint's call-the-tool side effect is its own follow-on (the planner
+pass arguably shouldn't execute tools it didn't offer).
+
 ---
 
 ## Planner tool-blindness: capability hint lifts plan-election ~40% -> ~100% (on a capable planner)
