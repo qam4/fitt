@@ -268,9 +268,21 @@ references point at `requirements.md`; property refs (Cn) at
   harness. The untested lever is a planner_alias split (task 25:
   qwen3 plans explicitly, hermes3 follows). Finding recorded in
   `docs/observed-issues.md`.
-- [ ] 23. Per-alias under-plan detection: does the alias skip planning
+- [x] 23. Per-alias under-plan detection: does the alias skip planning
   on a turn that needed it (Story 7.5)? Feeds per-alias planner-prompt
   tuning (Story 2.4).
+  DONE (2026-06-16): hermes3:8b never self-elects to plan on
+  `daily_news_summary`. The `plan_produced` field (added to
+  `ScenarioSampleResult` / reported by `fitt scenario run`) reads
+  `False` — hermes3 completes the planner pass without calling
+  `todowrite`, so the orchestrator proceeds plan-less and the executor
+  runs essentially like the flat loop. This explains the task-22 null
+  delta: "planned mode" had no plan; the model was executing flat both
+  times. Implication: hermes3:8b needs either (a) a stronger planner
+  prompt (per-alias tuning, Story 2.4) or (b) a `planner_alias` split
+  (task 25: qwen3 plans, hermes3 executes). A `forced` planning mode
+  (design D3 Divergences, deferred) is the structural fallback if
+  prompt tuning can't make hermes3 elect.
 - [ ] 24. Thin capability profile: measure a small set of **per-
   dimension** grades — tool-calling reliability (and at what prompt
   size it degrades), plans-when-nudged, **orchestration-readiness**

@@ -1802,13 +1802,21 @@ def scenario_run_cmd(
         f"pass rate: [bold]{result.passes}/{result.valid}[/bold] = {rate_str}  "
         f"(transient excluded: {result.transient})"
     )
+    election = result.plan_election_rate
+    if election is not None:
+        _console.print(f"plan election: {election * 100:.0f}%")
     _console.print(f"outcomes: {result.outcome_counts}")
     for i, s in enumerate(result.samples, 1):
         seq = " -> ".join(s.tool_sequence) or "(no tool calls)"
         colour = "green" if s.outcome == "completed" else "yellow"
+        plan_tag = ""
+        if s.plan_produced is True:
+            plan_tag = " [green]planned[/green]"
+        elif s.plan_produced is False:
+            plan_tag = " [red]no-plan[/red]"
         _console.print(
             f"  [{i}] [{colour}]{s.outcome}[/{colour}]  status={s.loop_status} "
-            f"iters={s.iterations} tokens={s.in_tokens}/{s.out_tokens}"
+            f"iters={s.iterations} tokens={s.in_tokens}/{s.out_tokens}{plan_tag}"
         )
         _console.print(f"      tools: {seq}")
         if s.assistant_preview:

@@ -68,7 +68,11 @@ class ScenarioSampleResult:
     of every executed call — the fact that tells the operator *what the
     loop actually did* (searched then sent, narrated with no call,
     looped on a failing tool), which is the whole point of the task-4
-    read."""
+    read.
+
+    ``plan_produced`` (planned mode only): whether the planner emitted
+    a plan (called ``todowrite``). Answers task 23 directly: does the
+    alias *elect* to plan when the orchestrator gives it the chance?"""
 
     mode: ScenarioMode
     outcome: ScenarioOutcome
@@ -78,6 +82,7 @@ class ScenarioSampleResult:
     out_tokens: int
     tool_sequence: tuple[str, ...]
     assistant_preview: str
+    plan_produced: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +125,16 @@ class ScenarioMultiResult:
             counts[s.outcome] = counts.get(s.outcome, 0) + 1
         return counts
 
+    @property
+    def plan_election_rate(self) -> float | None:
+        """Fraction of planned-mode samples where the planner actually
+        produced a plan. ``None`` for flat mode or when no samples
+        report plan_produced (pre-task-23 data)."""
+        planned = [s for s in self.samples if s.plan_produced is not None]
+        if not planned:
+            return None
+        return sum(1 for s in planned if s.plan_produced) / len(planned)
+
 
 def _tool_sequence(result: AgentLoopResult) -> tuple[str, ...]:
     return tuple(f"{c.tool_name}:{c.result_status}" for c in result.tool_calls_for_memory)
@@ -129,6 +144,8 @@ def _summarize(
     result: AgentLoopResult,
     mode: ScenarioMode,
     scenario: Scenario,
+    *,
+    plan_produced: bool | None = None,
 ) -> ScenarioSampleResult:
     return ScenarioSampleResult(
         mode=mode,
@@ -139,6 +156,7 @@ def _summarize(
         out_tokens=result.out_tokens,
         tool_sequence=_tool_sequence(result),
         assistant_preview=result.assistant_text.strip()[:_PREVIEW_CHARS],
+        plan_produced=plan_produced,
     )
 
 
@@ -205,7 +223,14 @@ async def run_scenario_once(
             planner_max_iterations=planner_max_iterations,
             executor_max_iterations=executor_max_iterations,
         )
+        # Task 23: check whether the planner actually produced a plan.
+        plan_store = getattr(tool_ctx, "plan_store", None)
+        plan_produced: bool | None = None
+        if plan_store is not None:
+            plan = plan_store.get(key)
+            plan_produced = plan is not None and bool(plan.items)
     else:
+        plan_produced = None
         loop_kwargs: dict[str, Any] = {}
         if flat_max_iterations is not None:
             loop_kwargs["max_iterations"] = flat_max_iterations
@@ -221,7 +246,7 @@ async def run_scenario_once(
             **loop_kwargs,
         )
 
-    return _summarize(result, mode, scenario)
+    return _summarize(result, mode, scenario, plan_produced=plan_produced)
 
 
 async def run_scenario_multi(
