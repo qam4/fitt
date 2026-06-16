@@ -415,6 +415,8 @@ async def run_eval_case(
     *,
     timeout_s: float = 15.0,
     system_prompt: str = "",
+    temperature: float | None = None,
+    seed: int | None = None,
 ) -> CaseResult:
     """Dispatch one :class:`EvalCase` against ``alias`` and
     classify the response.
@@ -426,6 +428,15 @@ async def run_eval_case(
     block + skills + identity + lessons) so the eval reflects
     the prompt-size pressure live chat puts on the model — the
     granite-incident diagnostic.
+
+    ``temperature`` / ``seed`` (Phase 12 task 2): set them for the
+    *reproducible* mode — ``temperature=0`` + a fixed ``seed`` makes a
+    run deterministic, for CI plumbing checks where you want the same
+    output every time. Leave them ``None`` (the default) for the
+    *capability* mode — sampling at the backend's own temperature is
+    what :func:`run_eval_case_multi` relies on to get a real behavioral
+    pass-rate across k runs. (A fixed seed + temp 0 would make
+    multi-sampling pointless — every sample identical.)
 
     Never raises; dispatch failures become classified results
     (the shared Phase 7.6 taxonomy: ``upstream_silent`` /
@@ -443,6 +454,10 @@ async def run_eval_case(
         "stream": False,
         "max_tokens": 512,
     }
+    if temperature is not None:
+        request_body["temperature"] = temperature
+    if seed is not None:
+        request_body["seed"] = seed
     started = perf_counter()
     try:
         dispatch = await asyncio.wait_for(router.dispatch(alias, request_body), timeout=timeout_s)
@@ -668,6 +683,134 @@ async def run_eval_suite(
         finished_at=finished_at,
         cases=results,
     )
+
+
+# --------------------------------------------------------------- multi-sample (Phase 12 task 2)
+
+# Real-model test conventions (the discipline 12f's measurement rests on):
+#
+# 1. Assert on STRUCTURE / properties, never exact strings. An EvalCase
+#    checks "did it emit the expected tool_call" (a fact), not "did the
+#    reply contain phrase X". Model wording varies run to run; tool-call
+#    shape is the stable signal.
+# 2. Two modes, deliberately distinct:
+#    - Reproducible (CI plumbing): temperature=0 + a fixed seed -> the
+#      same output every run. One run suffices; multi-sampling is moot.
+#    - Capability (behavioral signal): sample at the backend's own
+#      temperature and multi-sample (k runs -> pass rate). One run is
+#      weak signal because inference is non-deterministic (cold-load,
+#      streaming, the reasoning channel, connectivity).
+# 3. Exclude transient infra failures from the capability denominator.
+#    A dispatch that timed out / rate-limited / was unreachable
+#    (DISPATCH_FAILURE_STATUSES) is not a model-capability miss; it's
+#    noise on the path. The rate is passes / (samples - transient).
+
+
+@dataclass(frozen=True, slots=True)
+class MultiSampleResult:
+    """Aggregate of running one :class:`EvalCase` ``k`` times.
+
+    ``pass_rate`` is over *valid* samples (transient infra failures
+    excluded), so it reflects model capability, not path flakiness.
+    ``None`` when every sample was a transient failure (no signal)."""
+
+    case_name: str
+    samples: list[CaseResult]
+    passes: int
+    valid: int
+    transient: int
+    status_counts: dict[str, int]
+
+    @property
+    def total(self) -> int:
+        return len(self.samples)
+
+    @property
+    def pass_rate(self) -> float | None:
+        return self.passes / self.valid if self.valid else None
+
+
+def aggregate_samples(case_name: str, samples: list[CaseResult]) -> MultiSampleResult:
+    """Fold per-sample :class:`CaseResult`s into a pass-rate, excluding
+    transient infra failures from the denominator (convention 3)."""
+    transient = sum(1 for s in samples if s.status in DISPATCH_FAILURE_STATUSES)
+    passes = sum(1 for s in samples if s.status == "pass")
+    valid = len(samples) - transient
+    status_counts: dict[str, int] = {}
+    for s in samples:
+        status_counts[s.status] = status_counts.get(s.status, 0) + 1
+    return MultiSampleResult(
+        case_name=case_name,
+        samples=samples,
+        passes=passes,
+        valid=valid,
+        transient=transient,
+        status_counts=status_counts,
+    )
+
+
+async def run_eval_case_multi(
+    case: EvalCase,
+    alias: str,
+    router: AliasRouter,
+    *,
+    samples: int = 5,
+    timeout_s: float = 15.0,
+    system_prompt: str = "",
+    temperature: float | None = None,
+    seed: int | None = None,
+) -> MultiSampleResult:
+    """Run ``case`` ``samples`` times against ``alias`` and aggregate
+    into a :class:`MultiSampleResult` (capability mode).
+
+    Leave ``temperature``/``seed`` ``None`` here — multi-sampling only
+    yields signal when the backend is free to vary. Runs sequentially
+    for the same shared-quota reason as :func:`run_eval_suite`."""
+    results: list[CaseResult] = []
+    for _ in range(samples):
+        results.append(
+            await run_eval_case(
+                case,
+                alias,
+                router,
+                timeout_s=timeout_s,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                seed=seed,
+            )
+        )
+    return aggregate_samples(case.name, results)
+
+
+async def run_eval_suite_multi(
+    alias: str,
+    router: AliasRouter,
+    *,
+    cases: list[EvalCase] | None = None,
+    samples: int = 5,
+    timeout_s: float = 15.0,
+    system_prompt: str = "",
+) -> list[MultiSampleResult]:
+    """Multi-sample every case in ``cases`` (or the default suite)
+    against ``alias`` and return per-case pass-rates.
+
+    This is the capability-mode counterpart to :func:`run_eval_suite`:
+    instead of one pass/fail per case it reports passes/valid over k
+    samples, so a 5/5 that's really a 4/5 doesn't read as solid."""
+    cases = cases if cases is not None else default_cases()
+    out: list[MultiSampleResult] = []
+    for case in cases:
+        out.append(
+            await run_eval_case_multi(
+                case,
+                alias,
+                router,
+                samples=samples,
+                timeout_s=timeout_s,
+                system_prompt=system_prompt,
+            )
+        )
+    return out
 
 
 # --------------------------------------------------------------- report

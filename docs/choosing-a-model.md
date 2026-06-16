@@ -577,10 +577,17 @@ fix it. See `observed-issues.md` "Thinking-model planner stalls."
 
 A single `5/5` can be `4/5` next run (model connectivity, streaming,
 cold-load, the reasoning channel). For any rate claim, run k samples
-and report the pass rate — don't trust one shot.
-`.scratch/run_planner_multisample.py` does this for plan-election; the
-principle generalises to any of the suites above. Exclude transient
-infra failures (timeouts on the SSM path) from capability rates.
+and report the pass rate — don't trust one shot. The harness supports
+this directly: `run_eval_suite_multi` / `run_eval_case_multi`
+(`alias_eval.py`, Phase 12 task 2) run each case k times and report
+`passes / valid` with **transient infra failures excluded from the
+denominator** (a timeout isn't a capability miss). Two modes, by
+design: *reproducible* (`temperature=0` + fixed `seed`, deterministic,
+for CI plumbing) vs *capability* (sample at the backend's temperature,
+multi-sample, for behavioral signal). The conventions live at the top
+of the multi-sample section in `alias_eval.py`.
+`.scratch/run_planner_multisample.py` is the planner-pass-specific
+variant of the same discipline.
 
 ### 7. Record a cassette for regression
 

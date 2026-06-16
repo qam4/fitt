@@ -775,3 +775,102 @@ def test_default_coding_cases_inject_realistic_system_prompt() -> None:
 
 def test_default_eval_dir(tmp_path: Path) -> None:
     assert default_eval_dir(tmp_path) == tmp_path / "eval"
+
+
+# --------------------------------------------------------------- multi-sample (task 2)
+
+
+from gateway.alias_eval import (  # noqa: E402
+    MultiSampleResult,
+    aggregate_samples,
+    run_eval_case_multi,
+)
+
+
+class _SeqRouter:
+    """Returns a fixed sequence of responses across successive
+    dispatches (to simulate non-determinism). Captures bodies."""
+
+    def __init__(self, config: Config, responses: list[Any]) -> None:
+        self._config = config
+        self._responses = list(responses)
+        self.bodies: list[dict[str, Any]] = []
+
+    async def dispatch(self, alias: str, body: dict[str, Any]) -> DispatchResult:
+        self.bodies.append(body)
+        r = self._responses.pop(0)
+        if isinstance(r, BaseException):
+            raise r
+        primary = self._config.resolve_alias(alias)[0]
+        return DispatchResult(response=r, stream=None, model_used=primary, fallback_used=False)
+
+    def resolve(self, alias: str) -> list[ModelConfig]:
+        return self._config.resolve_alias(alias)
+
+
+def _cr(status: str) -> CaseResult:
+    return CaseResult(case_name="c", status=status, detail="", latency_ms=1)  # type: ignore[arg-type]
+
+
+def test_aggregate_samples_math() -> None:
+    agg = aggregate_samples("c", [_cr("pass"), _cr("pass"), _cr("wrong_tool")])
+    assert agg.passes == 2
+    assert agg.valid == 3
+    assert agg.transient == 0
+    assert agg.pass_rate == 2 / 3
+    assert agg.total == 3
+    assert agg.status_counts == {"pass": 2, "wrong_tool": 1}
+
+
+def test_aggregate_excludes_transient_from_denominator() -> None:
+    # A dispatch failure is path noise, not a capability miss.
+    agg = aggregate_samples("c", [_cr("pass"), _cr("upstream_silent"), _cr("pass")])
+    assert agg.passes == 2
+    assert agg.transient == 1
+    assert agg.valid == 2
+    assert agg.pass_rate == 1.0  # 2/2, the timeout doesn't drag it down
+
+
+def test_aggregate_all_transient_rate_is_none() -> None:
+    agg = aggregate_samples("c", [_cr("upstream_silent"), _cr("unreachable")])
+    assert agg.valid == 0
+    assert agg.pass_rate is None  # no signal
+
+
+async def test_run_eval_case_multi_aggregates(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    case = EvalCase(
+        name="t1", prompt="read the file", tools=[_read_file_tool()], expected_tool="read_file"
+    )
+    tc = [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]
+    router = _SeqRouter(
+        cfg,
+        [
+            _make_response(tool_calls=tc),  # pass
+            _make_response(content="I would read the file but here is a long narration instead."),
+            _make_response(tool_calls=tc),  # pass
+        ],
+    )
+    agg = await run_eval_case_multi(case, "fitt-smart", router, samples=3)  # type: ignore[arg-type]
+    assert isinstance(agg, MultiSampleResult)
+    assert agg.total == 3
+    assert agg.passes == 2
+    assert agg.valid == 3
+    assert agg.pass_rate == 2 / 3
+
+
+async def test_temperature_and_seed_threaded_into_body(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    case = EvalCase(
+        name="t1", prompt="read it", tools=[_read_file_tool()], expected_tool="read_file"
+    )
+    tc = [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]
+    router = _SeqRouter(cfg, [_make_response(tool_calls=tc), _make_response(tool_calls=tc)])
+    # Reproducible mode: temperature/seed present.
+    await run_eval_case(case, "fitt-smart", router, temperature=0.0, seed=42)  # type: ignore[arg-type]
+    assert router.bodies[-1]["temperature"] == 0.0
+    assert router.bodies[-1]["seed"] == 42
+    # Capability mode (defaults): neither key present.
+    await run_eval_case(case, "fitt-smart", router)  # type: ignore[arg-type]
+    assert "temperature" not in router.bodies[-1]
+    assert "seed" not in router.bodies[-1]

@@ -32,10 +32,26 @@ references point at `requirements.md`; property refs (Cn) at
   representative weak models (e.g. `qwen3:8b` plus the bound model).
   Model-agnostic — no hardcoded model names; the backend/models are
   config.
-- [ ] 2. Establish real-model test conventions given non-determinism:
+- [x] 2. Establish real-model test conventions given non-determinism:
   assert on **structure/properties**, never exact strings;
   `temperature=0` + fixed seed for reproducible dev runs; **multi-
   sample** (k runs → pass rate) for behavioral signal.
+  DONE: this was the skipped 12a foundation that all of 12f's
+  measurement rests on (the gemma4 onboarding noise was the symptom —
+  n=1 reads of a non-deterministic loop). Implemented in
+  `alias_eval.py`: a conventions comment block codifying the three
+  rules (structure-not-strings; two distinct modes — reproducible
+  `temperature=0`+seed vs capability multi-sample; exclude transient
+  infra failures from the capability denominator). Added
+  `temperature`/`seed` params to `run_eval_case` (threaded into the
+  request body only when not None), plus `MultiSampleResult`,
+  `aggregate_samples()`, `run_eval_case_multi()`, and
+  `run_eval_suite_multi()`. Pass-rate is `passes / (samples -
+  transient)`, `None` when every sample was transient (no signal).
+  5 new tests in `test_alias_eval.py` (aggregate math, transient
+  exclusion, all-transient→None, multi aggregation, temperature/seed
+  threading). `docs/choosing-a-model.md` step 6 references the
+  multi-sample helpers. Full suite green (1606 passed).
 - [x] 3. Record/replay: capture real model responses to cases once and
   replay them deterministically so CI exercises the plumbing against
   real output *shapes* without a live model or non-deterministic flake
