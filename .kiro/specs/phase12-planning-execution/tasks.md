@@ -254,9 +254,20 @@ references point at `requirements.md`; property refs (Cn) at
 
 ## Phase 12f — Eval comparison + capability profile + close-out
 
-- [ ] 22. Flat-loop vs planned comparison on the same alias for the
+- [x] 22. Flat-loop vs planned comparison on the same alias for the
   news case (Story 7.3) — the headline result: did planning beat the
   12a flat-loop read? Multi-sample (pass rate), not single-shot.
+  DONE (2026-06-16): hermes3:8b, 5 samples each mode.
+  **Planning did NOT beat the flat loop on this case.** Both score 5/5
+  `completed` structurally, and reading the replies: both relay raw
+  search results instead of synthesizing — planning added ~2.6
+  iterations and ~1.2K input tokens per sample with no quality delta.
+  The failure is output quality (relay vs synthesize), not sequencing;
+  planning's leverage is sequencing, so it doesn't help here.
+  hermes3:8b may simply be too weak to synthesize regardless of
+  harness. The untested lever is a planner_alias split (task 25:
+  qwen3 plans explicitly, hermes3 follows). Finding recorded in
+  `docs/observed-issues.md`.
 - [ ] 23. Per-alias under-plan detection: does the alias skip planning
   on a turn that needed it (Story 7.5)? Feeds per-alias planner-prompt
   tuning (Story 2.4).

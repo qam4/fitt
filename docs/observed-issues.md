@@ -33,6 +33,53 @@ doc.
 
 ---
 
+## Flat-vs-planned comparison on daily_news_summary: no delta on hermes3:8b
+
+**First observed:** 2026-06-16 (Phase 12 task 22, flat-vs-planned comparison).
+**Tag:** Phase 12 hypothesis test / planning value / model-fit.
+
+Task 22: same `daily_news_summary` scenario, same alias (hermes3:8b on
+EC2), 5 samples flat vs 5 samples planned, via `fitt scenario run
+--mode flat` / `--mode planned`.
+
+Both modes score 5/5 `completed` (searched + substantial reply). But
+reading the replies: **both relay raw search results instead of
+synthesizing.** Planning did not fix the output quality gap.
+
+| Metric | Flat | Planned |
+|--------|------|---------|
+| web_search called | 5/5 | 5/5 |
+| send_message called | 1/5 | 1/5 |
+| Actually summarized | 0/5 | 0/5 |
+| Avg iterations | 2 | ~4.6 |
+| Avg in_tokens | ~8190 | ~9428 |
+
+Planning added overhead (~2.6 extra iterations, ~1.2K more input
+tokens per sample) but the failure mode — "relay links/snippets
+verbatim instead of writing a bullet summary" — persists unchanged.
+One planned sample [5] went off the rails and dumped the `todowrite`
+JSON schema into the user-facing reply.
+
+**Why planning didn't help:**
+
+1. The flat-loop failure here is NOT structural (missed tool
+   calls / wrong sequencing). hermes3 already fetches reliably
+   without a plan. Planning's leverage is multi-step sequencing;
+   when the model sequences fine but writes badly, planning adds
+   cost without moving quality.
+2. hermes3:8b may be too weak to synthesize regardless of
+   harness — the "actually-incapable" possibility task 26 tests.
+3. The untested lever: a `planner_alias` split (qwen3 plans
+   explicitly "summarize results into bullets", hermes3 follows
+   the explicit instruction). That's the task-25 experiment.
+
+**Classifier limitation confirmed:** both modes score identically
+on the structural pass-rate — the task-4-noted limitation
+(length can't tell a summary from a relay) manifested exactly as
+predicted. The comparison requires reading the actual replies.
+
+---
+
 ## Flat-loop baseline on daily_news_summary: fetches but relays raw results instead of summarizing
 
 **First observed:** 2026-06-16 (Phase 12 task 4, the flat-loop baseline read).
