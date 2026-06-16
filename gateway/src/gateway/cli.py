@@ -43,6 +43,7 @@ from .projects import (
     ProjectRegistry,
     UnknownProject,
 )
+from .scenarios import daily_news_summary
 from .sessions import (
     DuplicateSessionId,
     InvalidSessionId,
@@ -1662,6 +1663,156 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
     asyncio.run(_run_all())
     if any_failed:
         sys.exit(1)
+
+
+# --------------------------------------------------------------- scenario
+
+
+@main.group("scenario")
+def scenario_group() -> None:
+    """Run a multi-step scenario through the flat or planned loop.
+
+    Phase 12 tasks 4 + 22: drive a whole multi-step turn (the
+    ``daily_news_summary`` case — fetch live news, then summarize and
+    deliver) against a real model and read the *structural* outcome.
+    ``--mode flat`` runs the current flat loop (the task-4 baseline);
+    ``--mode planned`` runs the plan -> execute orchestrator. Multi-
+    sampled for a capability pass-rate (the task-2 conventions), since
+    one run reads a non-deterministic loop as fact.
+
+    Unlike ``fitt eval`` (single-shot tool-shape checks), this runs the
+    real tool path: the gateway's actual registry, approval policy
+    (auto-approved here so it doesn't block on a Telegram tap), and
+    injected capability prompt."""
+
+
+_SCENARIOS = {"daily_news_summary": daily_news_summary}
+
+
+@scenario_group.command("run")
+@click.argument("alias")
+@click.option(
+    "--mode",
+    type=click.Choice(["flat", "planned"]),
+    default="flat",
+    help="flat = current loop (task-4 baseline); planned = plan->execute.",
+)
+@click.option("--samples", type=int, default=5, help="How many runs to multi-sample (default: 5).")
+@click.option(
+    "--scenario",
+    "scenario_name",
+    type=click.Choice(sorted(_SCENARIOS)),
+    default="daily_news_summary",
+)
+@click.option(
+    "--planner-alias",
+    default="",
+    help="planned mode only: run the plan pass on this alias (defaults to the executor alias).",
+)
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def scenario_run_cmd(
+    alias: str,
+    mode: str,
+    samples: int,
+    scenario_name: str,
+    planner_alias: str,
+    config_file: Path | None,
+) -> None:
+    """Run a scenario against ALIAS and print the per-sample outcomes
+    plus the aggregate pass-rate."""
+    import asyncio
+    import os
+
+    from .app import create_app
+    from .capabilities import build_capability_block
+    from .cron_runner import _AutoApproveWrapper
+    from .router import AliasRouter
+    from .scenario_eval import run_scenario_multi
+    from .tools import ToolContext
+
+    cfg = load_config(config_file or default_config_path(), default_secrets_path())
+    if alias not in cfg.aliases:
+        _console.print(
+            f"[red]unknown alias[/red] {alias!r}. Configured aliases: {sorted(cfg.aliases)}"
+        )
+        sys.exit(2)
+    if planner_alias and planner_alias not in cfg.aliases:
+        _console.print(
+            f"[red]unknown planner alias[/red] {planner_alias!r}. "
+            f"Configured aliases: {sorted(cfg.aliases)}"
+        )
+        sys.exit(2)
+
+    # The news scenario never calls project_shell; skip the ~2s boot
+    # shell probe so the command starts promptly.
+    os.environ.setdefault("FITT_SKIP_SHELL_PROBE", "1")
+    app = create_app(cfg)
+    state = app.state
+    registry = state.tool_registry
+    router = AliasRouter(cfg)
+    # Auto-approve so an ASK-bucket tool (send_message) doesn't block on
+    # a Telegram tap that won't come in this headless run. The deny list
+    # is still enforced.
+    approval = _AutoApproveWrapper(state.approval)
+    system_prompt = build_capability_block(registry) if registry.list_names() else ""
+    scenario = _SCENARIOS[scenario_name]()
+
+    def make_ctx(session_key: str) -> ToolContext:
+        return ToolContext(
+            client="cli",
+            session_key=session_key,
+            projects=state.project_registry,
+            backend=state.execution_backend,
+            policy=registry.policy,
+            audit=state.audit,
+            cron=state.cron,
+            events=state.events,
+            local_shell=state.local_shell,
+            lessons=state.lessons,
+            turns=None,
+            turn_id=None,
+            web_search_backend=cfg.web.search_backend,
+            plan_store=state.plan_store,
+        )
+
+    result = asyncio.run(
+        run_scenario_multi(
+            scenario,
+            alias,
+            mode,  # type: ignore[arg-type]
+            samples=samples,
+            alias_router=router,
+            tool_registry=registry,
+            approval=approval,
+            make_tool_ctx=make_ctx,
+            system_prompt=system_prompt,
+            prompt_resolver=state.prompt_resolver,
+            planner_alias=planner_alias,
+        )
+    )
+
+    rate = result.pass_rate
+    rate_str = f"{rate * 100:.0f}%" if rate is not None else "n/a (all transient)"
+    _console.print(
+        f"\n[bold]{result.scenario_name}[/bold] via [cyan]{mode}[/cyan] "
+        f"on [cyan]{alias}[/cyan]"
+        + (f" (planner=[cyan]{planner_alias}[/cyan])" if planner_alias else "")
+    )
+    _console.print(
+        f"pass rate: [bold]{result.passes}/{result.valid}[/bold] = {rate_str}  "
+        f"(transient excluded: {result.transient})"
+    )
+    _console.print(f"outcomes: {result.outcome_counts}")
+    for i, s in enumerate(result.samples, 1):
+        seq = " -> ".join(s.tool_sequence) or "(no tool calls)"
+        colour = "green" if s.outcome == "completed" else "yellow"
+        _console.print(
+            f"  [{i}] [{colour}]{s.outcome}[/{colour}]  status={s.loop_status} "
+            f"iters={s.iterations} tokens={s.in_tokens}/{s.out_tokens}"
+        )
+        _console.print(f"      tools: {seq}")
+        if s.assistant_preview:
+            _console.print(f"      reply: {s.assistant_preview!r}")
 
 
 # --------------------------------------------------------------- fitt watch

@@ -33,6 +33,62 @@ doc.
 
 ---
 
+## Flat-loop baseline on daily_news_summary: fetches but relays raw results instead of summarizing
+
+**First observed:** 2026-06-16 (Phase 12 task 4, the flat-loop baseline read).
+**Tag:** Phase 12 flat-loop baseline / model-fit / eval classification.
+
+The task-4 read: ran the *current flat loop* (no planning) on the
+`daily_news_summary` scenario — "search the web for today's headlines,
+then give me a 3-4 bullet summary; push it if you can" — against
+hermes3:8b on EC2, 5 samples, via the new `fitt scenario run
+fitt-ec2-hermes --mode flat`.
+
+What we saw:
+
+- **5/5 called `web_search` successfully.** No "I can't access
+  real-time data" refusal, no answering from stale training data. The
+  *fetch* step is solid on hermes3 — the failure is not where the
+  spec's running example assumed ("doesn't fetch").
+- **0/5 actually summarized.** Every reply relays the raw search
+  output — "here are the search results: 1. Fox News — URL: ... Snippet:
+  ..." — instead of the requested bullet summary. The capability
+  prompt explicitly says "don't just relay a list of links"; hermes3
+  ignores it. **This is the real flat-loop failure on this case:
+  fetch-then-relay, not fetch-then-synthesize.**
+- **`send_message` is unreliable: 1/5 called it** (the prompt said "if
+  you can"), and the dev box has no push channel
+  (`send_message.no_push_channel`), so even that delivered to a no-op.
+- **1/5 went off the rails:** `web_search:ok -> send_message:ok ->
+  read_file:error` — after delivering, it made a spurious `read_file`
+  call with an unknown project, errored, and narrated the tool error
+  back to the user as if answering them.
+
+**Classifier limitation (a finding in itself):**
+`scenarios.classify_news_outcome` scored all 5 as `completed` because
+the replies clear the 200-char "substantive reply" bar — but they're
+link dumps, not summaries. **Reply length cannot distinguish a grounded
+summary from a raw-results relay.** Every cheap structural fix (counting
+`URL:` / `Snippet:` tokens) is exactly the fragile string-matching the
+task-2 conventions say to avoid, so we deliberately did NOT add one.
+`completed` therefore means "searched + produced a substantial reply",
+NOT "produced a good summary". **Task 22 must read the actual replies,
+not just trust the pass rate** — if flat and planned both score
+`completed` by length, only reading the text shows whether planning made
+it synthesize.
+
+Implication for the planner prompt (Stories 7.1/7.2/7.4): the thing
+planning has to fix is the missing *synthesis* step, not the fetch. The
+task-22 test is whether an elected plan with an explicit "summarize the
+results into bullets" step makes hermes3 actually synthesize rather than
+relay.
+
+Tooling: produced by `gateway/scenario_eval.py` + `fitt scenario run`
+(the headless multi-sample scenario runner), reusable as-is for the
+task-22 flat-vs-planned comparison.
+
+---
+
 ## Thinking-model planner stalls: reasoning_content + no tool call reads as "done"
 
 **First observed:** 2026-06-14 (first live orchestrated turn on EC2).

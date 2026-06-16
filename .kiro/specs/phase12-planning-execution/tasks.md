@@ -70,11 +70,29 @@ references point at `requirements.md`; property refs (Cn) at
   `POST /v1/internal/record-flush` to capture full multi-pass
   orchestrated turns as the live chat path runs them. Exercised when
   the real-model loop runs (12f).
-- [ ] 4. With the real-model loop in place, run the **current flat
+- [x] 4. With the real-model loop in place, run the **current flat
   loop** on a multi-step `daily_news_summary` case (real registered
   tools) against a real model and read the actual failure. Not a
   ceremonial baseline — the real-output read that informs the planner
   prompt (Story 7.1, 7.2, 7.4).
+  DONE (2026-06-16): built the headless scenario runner to do this
+  faithfully — `scenarios.py` (the shared `daily_news_summary` case +
+  structural `classify_news_outcome`, also used by 21/22),
+  `scenario_eval.py` (`run_scenario_once`/`_multi` over the real
+  registry, flat or planned), and `fitt scenario run` (wires the real
+  registry/approval/capability-prompt via `create_app`, auto-approved
+  so it doesn't block on a Telegram tap). Read: hermes3:8b on EC2, 5
+  flat samples. **5/5 fetched (`web_search:ok`); 0/5 synthesized** —
+  every reply relays raw search results (titles/URLs/snippets) instead
+  of the requested bullet summary, ignoring the capability prompt's
+  "don't just relay a list of links". `send_message` fired on 1/5 (no
+  push channel on dev anyway); 1/5 went off the rails with a spurious
+  `read_file` after delivering. So the flat-loop failure is
+  **fetch-then-relay, not fetch-then-synthesize** — the synthesis step
+  is what planning (task 22) has to fix. Finding + the classifier
+  limitation (length can't tell a summary from a link dump; `completed`
+  means "searched + substantial reply", so task 22 must read the
+  replies) recorded in `docs/observed-issues.md`.
 
 ## Phase 12b — Plan artifact + prompt resolution (the spine)
 
