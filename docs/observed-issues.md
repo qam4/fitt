@@ -33,6 +33,51 @@ doc.
 
 ---
 
+## Planner_alias split (qwen3 plans, hermes3 executes): fixes election, not execution
+
+**First observed:** 2026-06-16 (Phase 12 task 25, "concentrate intelligence in planning").
+**Tag:** Phase 12 planner_alias / planning value / model-fit.
+
+Task 25: the "concentrate intelligence in planning" experiment —
+planner on qwen3:14b (capable, thinking), executor on hermes3:8b —
+on `daily_news_summary`, 3 samples, via `fitt scenario run
+fitt-ec2-hermes --mode planned --planner-alias fitt-ec2-qwen3`.
+
+| Metric | hermes plans (task 23) | qwen3 plans (task 25) |
+|--------|------------------------|-----------------------|
+| plan election | 0% | **100%** |
+| actually synthesized | 0/5 | 0/3 |
+| pass rate | n/a (no plan) | 2/3 |
+
+**The capable planner fixes the planning step, not execution.**
+qwen3 produced a plan every time (election 0% -> 100%), and the
+orchestrator re-injected it into hermes3's executor context. But
+hermes3 still relayed raw search results instead of synthesizing
+(2/3), and one run degenerated entirely (`no_search`): hermes3
+emitted no tool calls and dumped pydantic JSON schemas of tools it
+"will make" into the user-facing reply — 7 iterations, 21K tokens,
+no actual search.
+
+So "concentrate intelligence in planning" doesn't rescue a weak
+executor on this task. The plan was present and correct; hermes3
+just isn't capable enough to follow it through to a synthesized
+answer. **The lever for this failure (execution output quality) is
+a more capable executor, not a better plan** — planning's leverage
+is sequencing/election, which wasn't the bottleneck here.
+
+This refines the Phase 12 hypothesis ("elected planning makes a weak
+model competent on multi-step turns"): planning helps when the
+failure is *sequencing* (does it plan, does it call tools in order);
+it does not help when the failure is *execution output quality*
+(does the model write a good answer from tool results). The
+daily_news_summary failure is the latter.
+
+Caveat (n=1 discipline): 3 samples, one task, one model pair. A
+clear, consistent signal (100% election, 0% synthesis), not a law.
+The systematic per-dimension read is task 24.
+
+---
+
 ## Flat-vs-planned comparison on daily_news_summary: no delta on hermes3:8b
 
 **First observed:** 2026-06-16 (Phase 12 task 22, flat-vs-planned comparison).

@@ -189,6 +189,7 @@ async def run_scenario_once(
     already supplied a ``tools`` key via the request extras — they
     don't here, so we always inject from ``tool_registry``."""
     from .agent_loop import run_agent_loop
+    from .errors import NoBackendAvailable
 
     key = session_key or f"scenario-{scenario.name}-{uuid.uuid4().hex[:8]}"
 
@@ -204,46 +205,68 @@ async def run_scenario_once(
 
     tool_ctx = make_tool_ctx(key)
 
-    if mode == "planned":
-        if prompt_resolver is None:
-            raise ValueError("planned mode requires a prompt_resolver")
-        from .orchestrator import run_orchestrated_turn
+    try:
+        if mode == "planned":
+            if prompt_resolver is None:
+                raise ValueError("planned mode requires a prompt_resolver")
+            from .orchestrator import run_orchestrated_turn
 
-        result = await run_orchestrated_turn(
-            alias=alias,
-            messages=messages,
-            request_body_extras=extras,
-            alias_router=alias_router,
-            tool_registry=tool_registry,
-            approval=approval,
-            tool_ctx=tool_ctx,
-            prompt_resolver=prompt_resolver,
-            session_key=key,
-            planner_alias=planner_alias,
-            planner_max_iterations=planner_max_iterations,
-            executor_max_iterations=executor_max_iterations,
-        )
-        # Task 23: check whether the planner actually produced a plan.
-        plan_store = getattr(tool_ctx, "plan_store", None)
-        plan_produced: bool | None = None
-        if plan_store is not None:
-            plan = plan_store.get(key)
-            plan_produced = plan is not None and bool(plan.items)
-    else:
-        plan_produced = None
-        loop_kwargs: dict[str, Any] = {}
-        if flat_max_iterations is not None:
-            loop_kwargs["max_iterations"] = flat_max_iterations
-        result = await run_agent_loop(
-            alias=alias,
-            messages=messages,
-            request_body_extras=extras,
-            alias_router=alias_router,
-            tool_registry=tool_registry,
-            approval=approval,
-            tool_ctx=tool_ctx,
-            session_key=key,
-            **loop_kwargs,
+            result = await run_orchestrated_turn(
+                alias=alias,
+                messages=messages,
+                request_body_extras=extras,
+                alias_router=alias_router,
+                tool_registry=tool_registry,
+                approval=approval,
+                tool_ctx=tool_ctx,
+                prompt_resolver=prompt_resolver,
+                session_key=key,
+                planner_alias=planner_alias,
+                planner_max_iterations=planner_max_iterations,
+                executor_max_iterations=executor_max_iterations,
+            )
+            # Task 23: check whether the planner actually produced a plan.
+            plan_store = getattr(tool_ctx, "plan_store", None)
+            plan_produced: bool | None = None
+            if plan_store is not None:
+                plan = plan_store.get(key)
+                plan_produced = plan is not None and bool(plan.items)
+        else:
+            plan_produced = None
+            loop_kwargs: dict[str, Any] = {}
+            if flat_max_iterations is not None:
+                loop_kwargs["max_iterations"] = flat_max_iterations
+            result = await run_agent_loop(
+                alias=alias,
+                messages=messages,
+                request_body_extras=extras,
+                alias_router=alias_router,
+                tool_registry=tool_registry,
+                approval=approval,
+                tool_ctx=tool_ctx,
+                session_key=key,
+                **loop_kwargs,
+            )
+    except NoBackendAvailable as exc:
+        # A dropped backend mid-run (e.g. the EC2-over-SSM tunnel
+        # blipping) is transient infra, not a capability miss.
+        # run_agent_loop re-raises NoBackendAvailable as a hard error
+        # (right for the chat path, which maps it to HTTP 502); here we
+        # record it as an `upstream_error` sample so multi-sampling
+        # excludes it from the denominator (convention 3) and the
+        # remaining samples still run, instead of one blip nuking the
+        # whole sweep. UnknownAlias is NOT caught — that's a real config
+        # error and stays fail-loud (P11).
+        return ScenarioSampleResult(
+            mode=mode,
+            outcome="upstream_error",
+            loop_status="upstream_error",
+            iterations=0,
+            in_tokens=0,
+            out_tokens=0,
+            tool_sequence=(),
+            assistant_preview=f"NoBackendAvailable: {exc}"[:_PREVIEW_CHARS],
+            plan_produced=None,
         )
 
     return _summarize(result, mode, scenario, plan_produced=plan_produced)

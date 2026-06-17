@@ -211,3 +211,40 @@ async def test_multi_uses_unique_session_keys(monkeypatch: Any) -> None:
     assert res.passes == 4
     # Each sample got its own session_key (PlanStore independence).
     assert len(set(keys)) == 4
+
+
+async def test_dropped_backend_becomes_transient_not_a_crash(monkeypatch: Any) -> None:
+    """A NoBackendAvailable mid-run (e.g. the EC2 tunnel blipping) is
+    recorded as a transient `upstream_error` sample and the sweep
+    continues — one blip must not nuke the whole multi-sample run."""
+    from gateway.errors import NoBackendAvailable
+
+    calls = {"n": 0}
+
+    async def flaky_loop(**kwargs: Any) -> AgentLoopResult:
+        calls["n"] += 1
+        # Second sample's dispatch drops; the others succeed.
+        if calls["n"] == 2:
+            raise NoBackendAvailable("fitt-ec2-hermes", ["hermes3-8b-ec2"])
+        return _loop_result(calls=[_call("web_search")], assistant_text="x" * 300)
+
+    monkeypatch.setattr("gateway.agent_loop.run_agent_loop", flaky_loop)
+
+    res = await run_scenario_multi(
+        daily_news_summary(),
+        "fitt-ec2-hermes",
+        "flat",
+        samples=3,
+        alias_router=object(),
+        tool_registry=_FakeRegistry(["web_search"]),
+        approval=object(),
+        make_tool_ctx=lambda key: {"session_key": key},
+    )
+    # All 3 samples ran (no crash); one is transient.
+    assert res.total == 3
+    assert res.transient == 1
+    assert res.passes == 2
+    # Transient excluded from the denominator: 2/2 = 1.0.
+    assert res.valid == 2
+    assert res.pass_rate == 1.0
+    assert res.outcome_counts["upstream_error"] == 1

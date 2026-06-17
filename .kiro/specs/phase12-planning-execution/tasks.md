@@ -309,10 +309,30 @@ references point at `requirements.md`; property refs (Cn) at
   block; memory/skills off) — hermes3:8b held 6/6 bare and realistic —
   so a true degradation read still needs a full production-size
   prompt.
-- [ ] 25. Run the planner-on-`qwen3:14b` / executor-on-`hermes3:8b`
+- [x] 25. Run the planner-on-`qwen3:14b` / executor-on-`hermes3:8b`
   experiment ("concentrate intelligence in planning") and record the
   delta — a concrete test that the harness, not the model, is the
   lever.
+  DONE (2026-06-16): planner_alias=fitt-ec2-qwen3, executor=hermes3:8b,
+  3 samples. **The capable planner fixes the planning step but not
+  execution.** Plan election jumped 0% (hermes-as-planner, task 23) ->
+  100% (qwen3 plans every time). But hermes3 as executor still relayed
+  raw results instead of synthesizing (2/3 completed by the lenient
+  length classifier, both relays), and one run degenerated to
+  `no_search` (dumped pydantic tool schemas into the reply, no actual
+  search). So "concentrate intelligence in planning" doesn't rescue a
+  weak executor: the plan was re-injected and correct; hermes3 just
+  isn't capable enough to follow it to a synthesized answer. The lever
+  for this failure (execution output quality) is a more capable
+  executor, not a better plan — planning's leverage is
+  sequencing/election, which wasn't the bottleneck. Refines the Phase
+  12 hypothesis (planning helps sequencing failures, not output-quality
+  failures). Caveat: n=3, one task, one pair — signal not law. Finding
+  in `docs/observed-issues.md`. Also hardened `scenario_eval.py`: a
+  dropped backend mid-run (the EC2-over-SSM tunnel blipped during this
+  task) is now caught per-sample as a transient `upstream_error`
+  (excluded from the denominator, convention 3) instead of crashing the
+  whole multi-sample sweep.
 - [ ] 26. Live-validation pass on the hub; record outcomes in
   `docs/observed-issues.md` (including whether the
   under-harnessed-not-incapable hypothesis held).
