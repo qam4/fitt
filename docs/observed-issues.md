@@ -33,6 +33,71 @@ doc.
 
 ---
 
+## Phase 12 verdict on daily_news_summary: the failure is the prompt, not the harness or the model
+
+**First observed:** 2026-06-16 (Phase 12 task 26, live-validation close-out).
+**Tag:** Phase 12 hypothesis verdict / planning value / prompt design.
+
+Task 26 closes the Phase 12 measurement sweep with a verdict on the
+guiding hypothesis — *"a weak model is under-harnessed, not incapable;
+elected planning makes it competent on a multi-step turn."* Five live
+experiments on `daily_news_summary` (fetch today's news, then summarize)
+across hermes3:8b and qwen3:14b on EC2 (mirroring the hub's lineup):
+
+| Experiment | Config | Result |
+|-----------|--------|--------|
+| Task 4 | hermes3 flat | 5/5 fetched, 0/5 synthesized (relay) |
+| Task 22 | hermes3 planned | no delta vs flat |
+| Task 23 | hermes3 as planner | plan election 0% |
+| Task 25 | qwen3 plans, hermes3 executes | election 0->100%, execution still relay |
+| Task 26 | qwen3 flat | marginally better, still mostly relay |
+
+**The hypothesis did NOT hold cleanly for this case.** Walking the
+levers:
+
+- **Better harness (planning) didn't help** (22). hermes3 doesn't even
+  elect to plan (23); when a capable planner forces a correct,
+  re-injected plan (25), hermes3 still relays — so the bottleneck
+  isn't sequencing/election, which is what planning's leverage is.
+- **A more capable executor helped only at the margin** (26). qwen3:14b
+  pulled some real headlines ("Trump says agreement with Iran is not
+  final") and recovered from a failed search, where hermes3 never did
+  — but 2/3 of its runs still relayed source listings/snippets.
+
+The one factor invariant across every model and every harness is the
+**relay-vs-synthesize tendency**: `web_search` returns titles + URLs +
+snippets, and the models default to reformatting that structure rather
+than reading it and writing original prose. That points at the
+**execute-step prompt** (and the tool-result shape), not a capability
+cliff or a harness gap.
+
+**Verdict: for this case the framing should be "under-PROMPTED", not
+"under-harnessed".** The lever is the execute-step prompt (Story 2.4
+per-step tuning) — explicitly demand "read these results and write a
+summary in your own words; do not list sources" — not planning and not
+a model swap. Capability does matter at the margin (qwen3 > hermes3),
+so the task-24 capability profile is still worth building; but it is
+not the lever for *this* failure.
+
+**Scope / honesty caveat (the n=1 discipline, applied):** this is ONE
+multi-step task, n=3-5 per config, EC2-over-SSM (which dropped tunnels
+mid-sweep — the runner now records those as transient and excludes
+them). It is a clear, consistent signal, NOT a phase-wide law. A
+sequencing-heavy task (where the failure IS step ordering, not prose
+quality) would likely show planning earning its keep — that direction
+is untested here and is exactly what a broader task-24 case set should
+cover. The classifier limitation compounds the caveat: `completed` is
+length-based and scores relay as pass, so this verdict rests on
+reading the replies, not the pass rate.
+
+**Actionable follow-ons (not this phase):**
+1. Tune the execute-step prompt to demand synthesis over relay; re-run
+   the sweep — the cheapest test of the "under-prompted" verdict.
+2. task 24: per-dimension capability profile, including a sequencing-
+   heavy case so planning's value is measured where it should appear.
+
+---
+
 ## Planner_alias split (qwen3 plans, hermes3 executes): fixes election, not execution
 
 **First observed:** 2026-06-16 (Phase 12 task 25, "concentrate intelligence in planning").

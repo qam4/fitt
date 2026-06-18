@@ -333,9 +333,27 @@ references point at `requirements.md`; property refs (Cn) at
   task) is now caught per-sample as a transient `upstream_error`
   (excluded from the denominator, convention 3) instead of crashing the
   whole multi-sample sweep.
-- [ ] 26. Live-validation pass on the hub; record outcomes in
+- [x] 26. Live-validation pass on the hub; record outcomes in
   `docs/observed-issues.md` (including whether the
   under-harnessed-not-incapable hypothesis held).
+  DONE (2026-06-16): live-validated on EC2 (mirrors the hub's
+  hermes3:8b + qwen3:14b lineup). **Verdict: the hypothesis did NOT
+  hold cleanly for `daily_news_summary`.** Across five experiments
+  (tasks 4/22/23/25 + a qwen3-flat read here): better harness
+  (planning) didn't help (hermes3 doesn't elect to plan, and a forced
+  correct plan didn't change execution); a more capable executor
+  (qwen3:14b) helped only at the margin (pulled some real headlines +
+  recovered a failed search, but 2/3 still relayed). The one factor
+  invariant across every model and harness is the relay-vs-synthesize
+  tendency, which points at the **execute-step prompt + web_search
+  result shape**, not a capability cliff or a harness gap. So for this
+  case the framing is **"under-prompted", not "under-harnessed"**: the
+  lever is execute-step prompt tuning (Story 2.4), not planning or a
+  model swap. Caveat: one task, n=3-5, EC2-over-SSM (flaky tunnel ->
+  some transient samples, now excluded by the hardened runner); a
+  sequencing-heavy task (where planning *should* earn its keep) is
+  untested and belongs in task 24's case set. Full verdict +
+  actionable follow-ons in `docs/observed-issues.md`.
 
 ## Deferred / successor work (not this phase)
 
