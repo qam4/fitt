@@ -365,4 +365,21 @@ references point at `requirements.md`; property refs (Cn) at
   Divergences).
 - Full capability profiler / model-bucketing platform — grows from
   the thin profile in task 24 when it earns its keep.
+- **Capability-profile dimensions beyond v1** (task 24 ships declared
+  facts + tool-calling + coding). The data model is a list-of-dimensions,
+  so each of these is an append + a measurement wiring, not a redesign:
+  - **VRAM resident usage** + cold-load time (`ollama ps` / nvidia-smi;
+    `ResourceUsage` fields already exist). The gate on a small-VRAM host.
+  - **Token cost per outcome** (avg in/out tokens per valid sample;
+    `MeasuredGrade` fields already exist). The cost axis for paid models
+    and a pressure toward good context summarization (Phase 8).
+  - **Output-format / JSON validity** — well-formed tool-call args,
+    distinct from picking the right tool. Feeds the recovery/repair path.
+  - **Refusal / over-caution rate** — the capability-false-negative
+    (`live_fact_web_search` case already exists).
+  - **Run-to-run variance** — std-dev of pass across samples; a
+    flip-flopping model is riskier than a steady one.
+  - **Context-degradation curve** — measured operating-point pass-rate
+    at escalating prompt sizes (needs a production-size prompt; see the
+    task-24 NOTE).
 - Speculative-parallel latency optimisation (Non-Goals).
