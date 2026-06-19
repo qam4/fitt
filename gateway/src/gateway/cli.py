@@ -1823,6 +1823,158 @@ def scenario_run_cmd(
             _console.print(f"      reply: {s.assistant_preview!r}")
 
 
+# --------------------------------------------------------------- profile
+
+
+@main.group("profile")
+def profile_group() -> None:
+    """Build a per-alias capability profile (Phase 12 task 24).
+
+    Runs the existing eval suites + reads declared model metadata into a
+    per-dimension profile (declared facts + measured grades carrying
+    capability AND cost), writes it to
+    ``$FITT_HOME/eval/<alias>-profile.md``, and diffs against the stored
+    baseline — the regression-catcher for a model swap.
+
+    Declared facts (context window, thinking/vision/tools, size) come free
+    from Ollama ``/api/tags``; measured grades come from the realistic
+    (tool-calling) and coding suites. VRAM / token cost are backlogged
+    (the data model has the fields; the probes aren't wired)."""
+
+
+@profile_group.command("alias")
+@click.argument("alias")
+@click.option("--samples", type=int, default=5, help="Multi-sample count per case (default: 5).")
+@click.option(
+    "--timeout",
+    "timeout_s",
+    type=float,
+    default=30.0,
+    help="Per-case dispatch timeout in seconds (default: 30).",
+)
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def profile_alias_cmd(
+    alias: str,
+    samples: int,
+    timeout_s: float,
+    config_file: Path | None,
+) -> None:
+    """Profile ALIAS: declared facts + measured tool-calling/coding grades,
+    written + diffed against the stored baseline."""
+    import asyncio
+    import os
+    from datetime import UTC, datetime
+
+    import httpx as _httpx
+
+    from .alias_eval import realistic_cases, run_eval_suite_multi
+    from .alias_eval_coding import default_coding_cases
+    from .app import create_app
+    from .capabilities import build_capability_block
+    from .capability_profile import (
+        CapabilityProfile,
+        declared_from_ollama_tags,
+        grade_from_samples,
+        load_baseline,
+        render_diff_markdown,
+        render_profile_markdown,
+        write_profile,
+    )
+    from .config import fitt_home
+    from .router import AliasRouter
+
+    cfg = load_config(config_file or default_config_path(), default_secrets_path())
+    if alias not in cfg.aliases:
+        _console.print(
+            f"[red]unknown alias[/red] {alias!r}. Configured aliases: {sorted(cfg.aliases)}"
+        )
+        sys.exit(2)
+
+    os.environ.setdefault("FITT_SKIP_SHELL_PROBE", "1")
+    app = create_app(cfg)
+    registry = app.state.tool_registry
+    router = AliasRouter(cfg)
+    primary = router.resolve(alias)[0]
+    system_prompt = build_capability_block(registry) if registry.list_names() else ""
+
+    # Declared facts: free + static, Ollama backends only. A non-Ollama
+    # backend (no /api/tags) just carries no declared block.
+    declared: list[Any] = []
+    resource: Any = None
+    if primary.backend == "ollama":
+        try:
+            resp = _httpx.get(f"{primary.endpoint}/api/tags", timeout=10.0)
+            resp.raise_for_status()
+            declared, resource = declared_from_ollama_tags(resp.json(), primary.model)
+        except Exception as exc:
+            _console.print(f"[yellow]could not read declared metadata:[/yellow] {exc}")
+
+    _console.print(
+        f"[cyan]profiling[/cyan] {alias} (model=`{primary.id}`), "
+        f"{samples} samples/case — this runs the suites live, give it a minute..."
+    )
+
+    async def _measure() -> tuple[list[Any], list[Any]]:
+        tool = await run_eval_suite_multi(
+            alias,
+            router,
+            cases=realistic_cases(),
+            samples=samples,
+            timeout_s=timeout_s,
+            system_prompt=system_prompt,
+        )
+        # Coding cases embed their own realistic system prompt in the
+        # prompt text, so no separate system_prompt here.
+        coding = await run_eval_suite_multi(
+            alias,
+            router,
+            cases=default_coding_cases(),
+            samples=samples,
+            timeout_s=timeout_s,
+        )
+        return tool, coding
+
+    tool_results, coding_results = asyncio.run(_measure())
+
+    def _suite_grade(name: str, results: list[Any]) -> Any:
+        passes = sum(r.passes for r in results)
+        valid = sum(r.valid for r in results)
+        total = sum(r.total for r in results)
+        latencies = [s.latency_ms for r in results for s in r.samples]
+        return grade_from_samples(
+            name,
+            passes=passes,
+            valid=valid,
+            samples=total,
+            latencies_ms=latencies,
+        )
+
+    profile = CapabilityProfile(
+        alias=alias,
+        model_id=primary.id,
+        captured_at=datetime.now(UTC),
+        declared=declared,
+        measured=[
+            _suite_grade("tool-calling", tool_results),
+            _suite_grade("coding", coding_results),
+        ],
+        resource=resource,
+    )
+
+    # Load the baseline BEFORE writing (write overwrites it for next time).
+    baseline = load_baseline(alias, fitt_home())
+    md_path, _json_path = write_profile(profile, fitt_home())
+
+    _console.print("")
+    _console.print(render_profile_markdown(profile))
+    if baseline is not None:
+        _console.print("")
+        _console.print(render_diff_markdown(profile.diff(baseline)))
+    else:
+        _console.print("\n[dim](no baseline yet — this run becomes the baseline)[/dim]")
+    _console.print(f"\n[cyan]profile written[/cyan] {md_path}")
+
+
 # --------------------------------------------------------------- fitt watch
 
 

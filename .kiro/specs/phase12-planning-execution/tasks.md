@@ -283,7 +283,7 @@ references point at `requirements.md`; property refs (Cn) at
   (task 25: qwen3 plans, hermes3 executes). A `forced` planning mode
   (design D3 Divergences, deferred) is the structural fallback if
   prompt tuning can't make hermes3 elect.
-- [ ] 24. Thin capability profile: measure a small set of **per-
+- [x] 24. Thin capability profile: measure a small set of **per-
   dimension** grades — tool-calling reliability (and at what prompt
   size it degrades), plans-when-nudged, **orchestration-readiness**
   (plans AND follows through on multi-step execution, not just chats —
@@ -309,6 +309,25 @@ references point at `requirements.md`; property refs (Cn) at
   block; memory/skills off) — hermes3:8b held 6/6 bare and realistic —
   so a true degradation read still needs a full production-size
   prompt.
+  DONE (2026-06-18): shipped the thin profiler. Pure layer
+  (`capability_profile.py`): `CapabilityProfile` = lists of
+  `DeclaredFact` + `MeasuredGrade` + `ResourceUsage` (extensible by
+  append, not a fixed schema), with capability and cost as SEPARATE
+  fields (pass-rate AND latency AND tokens — never blended), declared
+  vs measured kept structurally separate (different trust), and
+  `diff(baseline)` as the regression-catcher (>10pt flag). Producer
+  (`fitt profile alias`): reads declared facts from Ollama `/api/tags`
+  (context window, thinking/vision/tools, size), runs the realistic
+  (tool-calling) + coding suites multi-sample for measured grades,
+  writes `<alias>-profile.{md,json}` and diffs vs the stored baseline.
+  Validated live on fitt-ec2-hermes: tool-calling 100% (18/18), coding
+  80% (12/15), declared context 131072 / tools=true / thinking=false.
+  v1 dimensions: declared facts + tool-calling + coding. **Deferred to
+  backlog** (data model ready, just needs wiring): VRAM, token-cost,
+  JSON-validity, refusal-rate, run-to-run variance, context-degradation
+  curve, and **orchestration-readiness** (task 26 showed it's not
+  cleanly measurable on the news case — needs a discriminating
+  sequencing task first). 27 tests; full suite green (1645 passed).
 - [x] 25. Run the planner-on-`qwen3:14b` / executor-on-`hermes3:8b`
   experiment ("concentrate intelligence in planning") and record the
   delta — a concrete test that the harness, not the model, is the

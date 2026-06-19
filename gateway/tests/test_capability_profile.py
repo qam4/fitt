@@ -208,3 +208,100 @@ def test_render_diff_flags_regression() -> None:
     md = render_diff_markdown(fresh.diff(baseline))
     assert "Regression" in md
     assert "tool-calling" in md
+
+
+# --------------------------------------------------------------- declared facts
+
+
+def test_declared_from_ollama_tags() -> None:
+    from gateway.capability_profile import declared_from_ollama_tags
+
+    payload = {
+        "models": [
+            {
+                "name": "hermes3:8b",
+                "size": 4_661_227_243,
+                "details": {
+                    "parameter_size": "8.0B",
+                    "quantization_level": "Q4_0",
+                    "context_length": 131072,
+                },
+                "capabilities": ["completion", "tools"],
+            },
+            {"name": "qwen3:14b", "size": 1, "details": {}, "capabilities": ["thinking"]},
+        ]
+    }
+    facts, resource = declared_from_ollama_tags(payload, "hermes3:8b")
+    by_name = {f.name: f.value for f in facts}
+    assert by_name["context_window"] == "131072"
+    assert by_name["parameter_size"] == "8.0B"
+    assert by_name["quantization"] == "Q4_0"
+    # Capability flags surfaced as true/false (so a diff catches a swap
+    # that drops tool support — the granite case).
+    assert by_name["tools"] == "true"
+    assert by_name["thinking"] == "false"
+    assert by_name["vision"] == "false"
+    assert resource.declared_size_bytes == 4_661_227_243
+
+
+def test_declared_from_ollama_tags_model_not_found() -> None:
+    from gateway.capability_profile import declared_from_ollama_tags
+
+    facts, resource = declared_from_ollama_tags({"models": []}, "nope:1b")
+    assert facts == []
+    assert resource.declared_size_bytes is None
+
+
+# --------------------------------------------------------------- persistence
+
+
+def _full_profile() -> CapabilityProfile:
+    return CapabilityProfile(
+        alias="fitt-ec2-hermes",
+        model_id="hermes3:8b",
+        captured_at=_ts(),
+        declared=[DeclaredFact("context_window", "131072"), DeclaredFact("tools", "true")],
+        measured=[
+            MeasuredGrade("tool-calling", 0.9, 27, 30, 30, p50_latency_s=3.1, p95_latency_s=4.0),
+            MeasuredGrade("coding", 0.7, 7, 10, 10, p50_latency_s=5.2, avg_in_tokens=8000.0),
+        ],
+        resource=ResourceUsage(declared_size_bytes=4_661_227_243),
+    )
+
+
+def test_profile_dict_round_trip() -> None:
+    from gateway.capability_profile import profile_from_dict, profile_to_dict
+
+    p = _full_profile()
+    assert profile_from_dict(profile_to_dict(p)) == p
+
+
+def test_write_and_load_baseline_round_trip(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from gateway.capability_profile import load_baseline, write_profile
+
+    p = _full_profile()
+    md_path, json_path = write_profile(p, tmp_path)
+    assert md_path.exists()
+    assert json_path.exists()
+    assert md_path.name == "fitt-ec2-hermes-profile.md"
+    assert json_path.name == "fitt-ec2-hermes-profile.json"
+    loaded = load_baseline("fitt-ec2-hermes", tmp_path)
+    assert loaded == p
+
+
+def test_load_baseline_missing_is_none(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from gateway.capability_profile import load_baseline
+
+    assert load_baseline("never-profiled", tmp_path) is None
+
+
+def test_round_trip_then_diff_is_clean(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """A profile written and reloaded must diff clean against itself —
+    serialization must not perturb values enough to fabricate a delta."""
+    from gateway.capability_profile import load_baseline, write_profile
+
+    p = _full_profile()
+    write_profile(p, tmp_path)
+    baseline = load_baseline("fitt-ec2-hermes", tmp_path)
+    assert baseline is not None
+    assert not p.diff(baseline).has_changes

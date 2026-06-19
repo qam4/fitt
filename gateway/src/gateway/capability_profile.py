@@ -72,7 +72,8 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
 DimensionKind = Literal["declared", "measured", "resource"]
 
@@ -414,3 +415,175 @@ def render_diff_markdown(diff: ProfileDiff) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------- declared facts
+
+
+def declared_from_ollama_tags(
+    tags_payload: dict[str, Any],
+    model: str,
+) -> tuple[list[DeclaredFact], ResourceUsage]:
+    """Parse Ollama ``/api/tags`` into declared facts + resource hints.
+
+    ``tags_payload`` is the parsed JSON from ``GET {endpoint}/api/tags``;
+    ``model`` is the concrete model name to match (e.g. ``hermes3:8b``).
+    Returns the free, static catalog facts — context window, declared
+    capabilities (thinking/vision/tools), parameter size — plus a
+    :class:`ResourceUsage` carrying the declared on-disk size. Measured
+    VRAM / cold-load stay ``None`` (separate probe, backlogged).
+
+    Returns empty facts + an empty ResourceUsage when the model isn't
+    found (e.g. a non-Ollama backend that has no ``/api/tags``) — the
+    profile just carries no declared block, rather than failing."""
+    models = tags_payload.get("models")
+    entry: dict[str, Any] | None = None
+    if isinstance(models, list):
+        for m in models:
+            if isinstance(m, dict) and m.get("name") == model:
+                entry = m
+                break
+    if entry is None:
+        return [], ResourceUsage()
+
+    facts: list[DeclaredFact] = []
+    details = entry.get("details")
+    if isinstance(details, dict):
+        ctx = details.get("context_length")
+        if ctx is not None:
+            facts.append(DeclaredFact("context_window", str(ctx)))
+        psize = details.get("parameter_size")
+        if psize is not None:
+            facts.append(DeclaredFact("parameter_size", str(psize)))
+        quant = details.get("quantization_level")
+        if quant is not None:
+            facts.append(DeclaredFact("quantization", str(quant)))
+
+    caps = entry.get("capabilities")
+    if isinstance(caps, list):
+        # Surface the behaviour-relevant capability flags as individual
+        # facts so a diff catches "this model lost tool support after a
+        # swap". thinking matters for the planner-stall handling; tools
+        # is the one the granite case showed declared != measured.
+        for flag in ("tools", "thinking", "vision"):
+            facts.append(DeclaredFact(flag, "true" if flag in caps else "false"))
+
+    size = entry.get("size")
+    resource = ResourceUsage(
+        declared_size_bytes=int(size) if isinstance(size, int) else None,
+    )
+    return facts, resource
+
+
+# --------------------------------------------------------------- persistence
+
+
+def profile_to_dict(profile: CapabilityProfile) -> dict[str, Any]:
+    """Serialise to a JSON-safe dict (the diff baseline format)."""
+    return {
+        "alias": profile.alias,
+        "model_id": profile.model_id,
+        "captured_at": profile.captured_at.isoformat(),
+        "declared": [
+            {"name": f.name, "value": f.value, "source": f.source} for f in profile.declared
+        ],
+        "measured": [
+            {
+                "name": g.name,
+                "pass_rate": g.pass_rate,
+                "passes": g.passes,
+                "valid": g.valid,
+                "samples": g.samples,
+                "p50_latency_s": g.p50_latency_s,
+                "p95_latency_s": g.p95_latency_s,
+                "avg_in_tokens": g.avg_in_tokens,
+                "avg_out_tokens": g.avg_out_tokens,
+                "notes": g.notes,
+            }
+            for g in profile.measured
+        ],
+        "resource": (
+            None
+            if profile.resource is None
+            else {
+                "resident_vram_mb": profile.resource.resident_vram_mb,
+                "cold_load_s": profile.resource.cold_load_s,
+                "declared_size_bytes": profile.resource.declared_size_bytes,
+            }
+        ),
+    }
+
+
+def profile_from_dict(raw: dict[str, Any]) -> CapabilityProfile:
+    """Inverse of :func:`profile_to_dict`. Tolerates missing optional
+    fields so an older baseline still loads."""
+    resource_raw = raw.get("resource")
+    return CapabilityProfile(
+        alias=raw["alias"],
+        model_id=raw.get("model_id"),
+        captured_at=datetime.fromisoformat(raw["captured_at"]),
+        declared=[
+            DeclaredFact(name=f["name"], value=f["value"], source=f.get("source", "ollama"))
+            for f in raw.get("declared", [])
+        ],
+        measured=[
+            MeasuredGrade(
+                name=g["name"],
+                pass_rate=g.get("pass_rate"),
+                passes=g.get("passes", 0),
+                valid=g.get("valid", 0),
+                samples=g.get("samples", 0),
+                p50_latency_s=g.get("p50_latency_s"),
+                p95_latency_s=g.get("p95_latency_s"),
+                avg_in_tokens=g.get("avg_in_tokens"),
+                avg_out_tokens=g.get("avg_out_tokens"),
+                notes=g.get("notes", ""),
+            )
+            for g in raw.get("measured", [])
+        ],
+        resource=(
+            None
+            if not isinstance(resource_raw, dict)
+            else ResourceUsage(
+                resident_vram_mb=resource_raw.get("resident_vram_mb"),
+                cold_load_s=resource_raw.get("cold_load_s"),
+                declared_size_bytes=resource_raw.get("declared_size_bytes"),
+            )
+        ),
+    )
+
+
+def default_profile_dir(fitt_home: Path) -> Path:
+    return fitt_home / "eval"
+
+
+def write_profile(profile: CapabilityProfile, fitt_home: Path) -> tuple[Path, Path]:
+    """Write the human-readable markdown + the JSON baseline.
+
+    The JSON at ``<alias>-profile.json`` is the diff baseline (overwritten
+    each run, so the *next* run diffs against this one); the markdown at
+    ``<alias>-profile.md`` is the operator's read. Returns (md, json)."""
+    import json as _json
+
+    out_dir = default_profile_dir(fitt_home)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    md_path = out_dir / f"{profile.alias}-profile.md"
+    json_path = out_dir / f"{profile.alias}-profile.json"
+    md_path.write_text(render_profile_markdown(profile), encoding="utf-8")
+    json_path.write_text(_json.dumps(profile_to_dict(profile), indent=2), encoding="utf-8")
+    return md_path, json_path
+
+
+def load_baseline(alias: str, fitt_home: Path) -> CapabilityProfile | None:
+    """Load the stored baseline profile for ``alias``, or ``None`` if this
+    is the first run (no baseline to diff against yet). Never raises on a
+    malformed/old file — a bad baseline just means "no baseline"."""
+    import json as _json
+
+    json_path = default_profile_dir(fitt_home) / f"{alias}-profile.json"
+    if not json_path.exists():
+        return None
+    try:
+        return profile_from_dict(_json.loads(json_path.read_text(encoding="utf-8")))
+    except (OSError, ValueError, KeyError):
+        return None
