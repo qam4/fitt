@@ -146,6 +146,7 @@ def _summarize(
     scenario: Scenario,
     *,
     plan_produced: bool | None = None,
+    preview_chars: int = _PREVIEW_CHARS,
 ) -> ScenarioSampleResult:
     return ScenarioSampleResult(
         mode=mode,
@@ -155,7 +156,7 @@ def _summarize(
         in_tokens=result.in_tokens,
         out_tokens=result.out_tokens,
         tool_sequence=_tool_sequence(result),
-        assistant_preview=result.assistant_text.strip()[:_PREVIEW_CHARS],
+        assistant_preview=result.assistant_text.strip()[:preview_chars],
         plan_produced=plan_produced,
     )
 
@@ -176,6 +177,7 @@ async def run_scenario_once(
     executor_max_iterations: int | None = None,
     flat_max_iterations: int | None = None,
     session_key: str | None = None,
+    preview_chars: int = _PREVIEW_CHARS,
 ) -> ScenarioSampleResult:
     """Run ``scenario`` once in ``mode`` and classify the outcome.
 
@@ -265,11 +267,13 @@ async def run_scenario_once(
             in_tokens=0,
             out_tokens=0,
             tool_sequence=(),
-            assistant_preview=f"NoBackendAvailable: {exc}"[:_PREVIEW_CHARS],
+            assistant_preview=f"NoBackendAvailable: {exc}"[:preview_chars],
             plan_produced=None,
         )
 
-    return _summarize(result, mode, scenario, plan_produced=plan_produced)
+    return _summarize(
+        result, mode, scenario, plan_produced=plan_produced, preview_chars=preview_chars
+    )
 
 
 async def run_scenario_multi(

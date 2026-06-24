@@ -1709,6 +1709,12 @@ _SCENARIOS = {"daily_news_summary": daily_news_summary}
     default="",
     help="planned mode only: run the plan pass on this alias (defaults to the executor alias).",
 )
+@click.option(
+    "--preview-chars",
+    type=int,
+    default=200,
+    help="How many chars of each reply to print (default: 200; raise to read full replies and judge synthesis vs relay).",
+)
 @click.option("--config-file", type=click.Path(path_type=Path), default=None)
 def scenario_run_cmd(
     alias: str,
@@ -1716,6 +1722,7 @@ def scenario_run_cmd(
     samples: int,
     scenario_name: str,
     planner_alias: str,
+    preview_chars: int,
     config_file: Path | None,
 ) -> None:
     """Run a scenario against ALIAS and print the per-sample outcomes
@@ -1788,6 +1795,7 @@ def scenario_run_cmd(
             system_prompt=system_prompt,
             prompt_resolver=state.prompt_resolver,
             planner_alias=planner_alias,
+            preview_chars=preview_chars,
         )
     )
 

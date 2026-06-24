@@ -33,6 +33,69 @@ doc.
 
 ---
 
+## Synthesis-over-relay capability-block tuning didn't help hermes3:8b (reverted)
+
+**First observed:** 2026-06-23 (test of the task-26 "under-prompted" verdict).
+**Tag:** Phase 12 follow-on / capability-prompt tuning / web_search quality.
+
+Task 26 concluded the daily_news_summary failure was "under-prompted"
+and pointed at strengthening the synthesis instruction. Tested it.
+Note: orchestration is off by default, so the live flat-loop lever is
+the capability block (`capabilities.py`, the [Using tools for current
+facts] section), NOT the execute-step prompt resolver (which only
+fires in planned/orchestrated mode). Strengthened that block: read the
+snippets and SYNTHESIZE in your own words, do not paste/number/list
+titles/URLs/'Snippet:' lines, and if the results don't contain the
+answer say so + suggest a better query.
+
+A/B on fitt-ec2-hermes (hermes3:8b), flat, 3 samples each, same day,
+reading the actual replies (the length classifier scores all as
+`completed`):
+
+- Baseline (old block): 0/3 synthesized - one send_message-schema
+  derail, one verbatim relay, one meta-relay.
+- Treatment (new block): 0/3 synthesized, arguably worse - all 3
+  abandoned the news task to narrate tool schemas (todowrite /
+  project_shell / learn_remove).
+
+**Verdict: the "under-prompted" hypothesis is NOT supported on
+hermes3:8b.** A stronger synthesis prompt didn't help and plausibly
+hurt - consistent with the documented "longer prompt degrades
+hermes3:8b" effect (see the planner tool-blindness entry) and the
+broader Phase 12 conclusion that the 8b is the bottleneck, not the
+harness. **The capability-block change was reverted.**
+
+Two confounds keep this from being a clean test:
+
+1. **Search quality.** ddgs returned news-site HOMEPAGES (Google
+   News / NBC / CBS / NYT) with boilerplate snippets, not actual
+   headlines (task 26 days earlier got real headlines like "Trump
+   says agreement with Iran is not final"). With no real content
+   there is nothing to synthesize, so relay-vs-synthesize can't be
+   judged. A prerequisite to fix before retesting.
+2. **Model weakness / prompt load.** hermes3:8b's tool-schema-
+   narration degeneracy dominates at n=3.
+
+**A clean retest needs both:** a capable executor (qwen3:14b) that can
+actually obey "synthesize, or honestly report thin results", AND a
+search query/backend that returns real headlines. Until then the
+prompt change stays out of the tree.
+
+**Kept:** the harness change that made this readable - a
+`--preview-chars` option on `fitt scenario run` (default 200) so the
+operator can read full replies, since only the text (not the
+length-based pass rate) reveals synthesis vs relay (the task-4
+mandate, "read the actual replies").
+
+**Caveat:** n=3, one model, one task, garbage search input,
+EC2-over-SSM (flaky). A clear signal, not a law.
+
+**Urgency:** low. Negative result logged so it isn't blindly re-run;
+the real follow-on is execute-step prompt tuning measured on a model
+that can follow it, with working search.
+
+---
+
 ## Open WebUI model picker went empty: PersistentConfig pinned the stale gateway port
 
 **First observed:** 2026-06-23 (operator: "can't select a model in
