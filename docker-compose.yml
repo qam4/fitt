@@ -126,15 +126,30 @@ services:
       # compose via .env as FITT_BEARER_TOKEN.
       OPENAI_API_BASE_URL: http://gateway:${FITT_PORT:-8421}/v1
       OPENAI_API_KEY: ${FITT_BEARER_TOKEN:?set FITT_BEARER_TOKEN in .env}
-      # ENABLE_SIGNUP is a PersistentConfig variable in Open WebUI:
-      # its initial value seeds the database on first boot and is
-      # read from there on subsequent boots. Open WebUI also treats
-      # the first account that signs up as the admin. Together that
-      # means the bootstrap has to start with signup enabled so the
-      # admin can actually be created; after first login you turn it
-      # off from Admin Panel -> Settings -> General. See quickstart
-      # step 16 for the one-time steps.
-      ENABLE_SIGNUP: "true"
+      # Make THIS file authoritative for Open WebUI config. By
+      # default Open WebUI treats many settings (the OpenAI
+      # connection URL/key, ENABLE_SIGNUP, ...) as "PersistentConfig":
+      # the env value only SEEDS the database on first boot, and after
+      # that the DB value wins and the env is ignored. That bit us
+      # once - the gateway moved off port 8080 (QNAP's admin UI) to
+      # 8421, but Open WebUI kept dialing gateway:8080 from its DB and
+      # the model picker went empty. ENABLE_PERSISTENT_CONFIG=false
+      # makes Open WebUI re-read these env vars on EVERY boot, so
+      # config-as-code holds and the gateway port can never silently
+      # drift again.
+      #
+      # Trade-off: settings changed in the Admin UI no longer survive
+      # a restart - they revert to the values here. That is the
+      # intended posture for a config-as-code hub: configure via this
+      # file, not the UI. (User accounts and chat history are normal
+      # DB tables, NOT PersistentConfig, so they are unaffected.)
+      ENABLE_PERSISTENT_CONFIG: "false"
+      # Signup is now env-authoritative (PersistentConfig is off). The
+      # first account to sign up becomes the admin. Default is closed
+      # (fail-secure); to bootstrap a fresh install set
+      # WEBUI_ENABLE_SIGNUP=true in .env, recreate, create the admin,
+      # then set it back to false and recreate. See quickstart step 16.
+      ENABLE_SIGNUP: ${WEBUI_ENABLE_SIGNUP:-false}
       ENABLE_COMMUNITY_SHARING: "false"
       ENABLE_OLLAMA_API: "false"
       WEBUI_AUTH: "true"

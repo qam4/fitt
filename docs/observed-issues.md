@@ -33,6 +33,71 @@ doc.
 
 ---
 
+## Open WebUI model picker went empty: PersistentConfig pinned the stale gateway port
+
+**First observed:** 2026-06-23 (operator: "can't select a model in
+Open WebUI anymore").
+**Tag:** deployment / Open WebUI / PersistentConfig / config-as-code.
+
+The Open WebUI model dropdown went empty. The gateway was healthy
+and `GET /v1/models` returned the alias list correctly end to end -
+proved by curling it from *inside* the open-webui container
+(`docker exec fitt-open-webui curl -s http://gateway:8421/v1/models`
+-> full JSON). The OWUI logs told the real story:
+
+    ERROR [open_webui.apps.openai.main] Connection error:
+    Cannot connect to host gateway:8080 ... Connect call failed
+
+Open WebUI was dialing **`gateway:8080`** - the gateway's *old*
+port - while the gateway now listens on 8421. Root cause:
+`OPENAI_API_BASE_URL` is a **PersistentConfig** variable in Open
+WebUI. The compose env (`http://gateway:8421/v1`) only SEEDS the
+OWUI database on first boot; after that OWUI reads the value from
+its own DB and ignores the env. The gateway had moved off port 8080
+(it collides with QNAP's QTS admin UI - the exact collision
+`.env.example` warns about) to 8421, but OWUI's DB kept
+`gateway:8080`. Env said 8421, DB said 8080, DB won.
+
+Red herring along the way: `curl http://nas-qnap:8080/v1/models`
+returns a 302 to `https://nas-qnap:443/...` - that's QTS's admin UI
+answering on 8080, not the gateway, and unrelated. The gateway is on
+8421 and OWUI reaches it over the compose network, never the host
+port.
+
+**Cost:** a long debug. Every symptom pointed at the gateway
+(healthy, yet an "empty" external curl) when the gateway was fine -
+the failure was hidden state in OWUI's DB that no config file
+revealed.
+
+**Immediate fix:** edit the connection URL in OWUI Admin -> Settings
+-> Connections to `http://gateway:8421/v1`. Works, but it's
+click-ops living in the DB - it silently breaks again on the next
+port change, volume reset, or fresh hub.
+
+**Durable fix (shipped):** set `ENABLE_PERSISTENT_CONFIG=false` on
+the open-webui service so OWUI re-reads its env on every boot and
+the compose file is authoritative again. The compose env already
+points at `gateway:${FITT_PORT}/v1`, so the connection self-corrects
+and can't drift. Ripple: `ENABLE_SIGNUP` is also PersistentConfig,
+so its UI toggle stops persisting - moved it to a declarative
+`WEBUI_ENABLE_SIGNUP` .env knob (default false, fail-secure) with a
+two-phase bootstrap, and rewrote quickstart step 16 to match. Trade:
+Admin-UI config changes no longer survive a restart (intended for a
+config-as-code hub; accounts and chats are unaffected - they are not
+PersistentConfig).
+
+**Lesson:** any Open WebUI setting exposed as an env var is
+PersistentConfig by default - the env is decorative after first boot
+unless `ENABLE_PERSISTENT_CONFIG=false`. Treat OWUI as config-as-code
+from the start, or moving any of those values later silently no-ops.
+
+**Urgency:** resolved (durable fix shipped). Confirm the flag is
+honored on the pinned image after the next
+`docker compose up -d open-webui` (v0.3.35; PersistentConfig shipped
+in 0.3.0, so it is).
+
+---
+
 ## Phase 12 verdict on daily_news_summary: the failure is the prompt, not the harness or the model
 
 **First observed:** 2026-06-16 (Phase 12 task 26, live-validation close-out).

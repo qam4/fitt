@@ -958,22 +958,31 @@ http://<hub-tailscale-ip>:3000/
 
 **Bootstrap steps (once per fresh install):**
 
-1. First visit shows the signup form. Fill it in - the first
-   account becomes the admin automatically.
-2. After signing in, go to **Admin Panel -> Settings -> General**
-   and turn **Enable Signup** off. Save.
+Open WebUI runs with `ENABLE_PERSISTENT_CONFIG=false` (see the
+compose file), so its config comes from the environment on every
+boot, not from the UI/database. Signup is therefore driven by
+`WEBUI_ENABLE_SIGNUP` in `.env`, which defaults to `false`
+(closed). To create the first admin:
 
-The door is now closed: other tailnet members can't self-register,
-but you stay logged in.
+1. In `.env`, set `WEBUI_ENABLE_SIGNUP=true`, then recreate:
+   `docker compose up -d open-webui`.
+2. Open the UI and fill in the signup form - the first account
+   becomes the admin automatically.
+3. Back in `.env`, set `WEBUI_ENABLE_SIGNUP=false` and recreate
+   again: `docker compose up -d open-webui`.
 
-**Why the manual step?** `ENABLE_SIGNUP` is a *PersistentConfig*
-variable in Open WebUI — its first-boot value seeds the database,
-and changes made after that come from the Admin UI (or a database
-edit). The compose file defaults it to `true` so the admin can
-actually be created on first boot. If the first account couldn't
-sign up, the instance would be unreachable with no way in short
-of deleting the volume. See the troubleshooting section below if
-you ended up stuck that way.
+The door is now closed declaratively: other tailnet members can't
+self-register, the setting lives in `.env` (not hidden DB state),
+and it can't silently flip back on a restart.
+
+**Why env, not the UI toggle?** Open WebUI normally treats
+`ENABLE_SIGNUP` (and the OpenAI connection URL/key, and more) as
+*PersistentConfig*: the env value only seeds the database on first
+boot, and after that the stored value wins. The compose file sets
+`ENABLE_PERSISTENT_CONFIG=false` so the env stays authoritative -
+the same setting that stops the gateway URL from silently drifting
+(see observed-issues). The cost: Admin-UI config changes don't
+survive a restart, so configure via `.env`, not the UI.
 
 In Open WebUI, pick any of the FITT aliases (`fitt-default`,
 `fitt-smart`, ...) from the model dropdown. Responses flow
@@ -982,32 +991,18 @@ your Telegram traffic.
 
 ### Troubleshooting: locked out of Open WebUI
 
-Symptom: you set `ENABLE_SIGNUP=false` in the compose override
-before creating the first admin, so the signup form is gone and
-no user exists to log in with. Open WebUI stores this value in
-its SQLite DB on first boot; flipping it in `docker-compose.yml`
-has no effect on subsequent starts.
+Symptom: no admin account exists and the signup form is gone (you
+ran with `WEBUI_ENABLE_SIGNUP=false` before creating the first
+admin).
 
-Fastest recovery (wipes Open WebUI accounts and chats; safe on a
-fresh install — this directory only holds Open WebUI state, not
-the FITT gateway's):
-
-```bash
-docker compose stop open-webui
-rm -rf "$FITT_HOME/open-webui"
-docker compose up -d open-webui
-```
-
-Or edit the value in place without losing data:
-
-```bash
-docker exec -it fitt-open-webui \
-  sqlite3 /app/backend/data/webui.db \
-  "UPDATE config SET data = json_set(data, '\$.ENABLE_SIGNUP', json('true'));"
-docker compose restart open-webui
-```
-
-Then redo the two bootstrap steps above.
+Because `ENABLE_PERSISTENT_CONFIG=false` makes the environment
+authoritative, recovery is just the bootstrap - no database
+surgery or volume wipe: set `WEBUI_ENABLE_SIGNUP=true` in `.env`,
+run `docker compose up -d open-webui`, create the admin, then set
+it back to `false` and recreate. (The old fix - sqlite-editing
+`ENABLE_SIGNUP` in `webui.db`, or deleting `$FITT_HOME/open-webui`
+- was only needed back when the value was pinned in Open WebUI's
+database.)
 
 ## Step 16.5 - Operator dashboard
 
