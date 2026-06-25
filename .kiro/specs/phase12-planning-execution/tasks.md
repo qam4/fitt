@@ -413,6 +413,11 @@ references point at `requirements.md`; property refs (Cn) at
   invisible in the UI — the single "what can this model do" view.
   Surfaces/recommends, never auto-drives (the task-24 operator-in-the-
   loop commitment).
+  **DONE 2026-06-25 (partial):** shipped the Capability card
+  (`_build_profile_view` in `dashboard/views.py` + a card in
+  `alias_page.html`) rendering declared facts + measured grades
+  (capability + cost) + resources. The baseline diff / regressions view
+  is NOT yet rendered — a small follow-on (see BACKLOG).
 - **Consolidate the measurement sinks (profile as source of truth).**
   Today probe -> in-memory `app.state`, eval -> `<alias>-<suite>-latest.md`,
   profile -> `<alias>-profile.{md,json}`: three disconnected sinks, and

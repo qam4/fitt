@@ -825,6 +825,73 @@ def _shares_endpoint_with(config: Any, alias: str) -> tuple[str, list[str]]:
     return primary.endpoint or "(no endpoint)", others
 
 
+def _build_profile_view(alias: str) -> dict[str, Any] | None:
+    """Shape the stored capability profile (``<alias>-profile.json``) for
+    the alias page's Capability card.
+
+    Returns ``None`` when no profile has been captured yet (the operator
+    hasn't run ``fitt profile alias``), so the template shows an empty
+    hint. Declared facts and measured grades are kept in separate lists
+    (different trust levels), and capability (pass-rate) sits beside cost
+    (latency, tokens) rather than blended - mirroring the profile's own
+    design and its markdown render."""
+    from ..capability_profile import load_baseline
+
+    profile = load_baseline(alias, _fitt_home())
+    if profile is None:
+        return None
+
+    def _rate(r: float | None) -> str:
+        return f"{r * 100:.0f}%" if r is not None else "n/a"
+
+    def _lat(s: float | None) -> str:
+        return f"{s:.1f}s" if s is not None else "—"
+
+    def _tok(t: float | None) -> str:
+        return f"{t:.0f}" if t is not None else "—"
+
+    measured: list[dict[str, Any]] = []
+    for g in profile.measured:
+        samples = f"{g.passes}/{g.valid}"
+        if g.samples != g.valid:
+            samples += f" (+{g.samples - g.valid} transient)"
+        measured.append(
+            {
+                "name": g.name,
+                "pass_rate": _rate(g.pass_rate),
+                "samples": samples,
+                "p50": _lat(g.p50_latency_s),
+                "p95": _lat(g.p95_latency_s),
+                "in_tok": _tok(g.avg_in_tokens),
+                "out_tok": _tok(g.avg_out_tokens),
+                "notes": g.notes,
+            }
+        )
+
+    resource: dict[str, str | None] | None = None
+    if profile.resource is not None:
+        r = profile.resource
+        resource = {
+            "size": (
+                f"{r.declared_size_bytes / 1_048_576:.0f} MB"
+                if r.declared_size_bytes is not None
+                else None
+            ),
+            "vram": f"{r.resident_vram_mb} MB" if r.resident_vram_mb is not None else None,
+            "cold_load": f"{r.cold_load_s:.1f}s" if r.cold_load_s is not None else None,
+        }
+
+    return {
+        "model_id": profile.model_id,
+        "captured_at": profile.captured_at.strftime("%Y-%m-%d %H:%M UTC"),
+        "declared": [
+            {"name": f.name, "value": f.value, "source": f.source} for f in profile.declared
+        ],
+        "measured": measured,
+        "resource": resource,
+    }
+
+
 def _build_alias_page_context(request: Request, *, alias: str) -> dict[str, Any]:
     """Assemble the unified per-alias page (Phase 7.6 Decision 6).
 
@@ -915,6 +982,7 @@ def _build_alias_page_context(request: Request, *, alias: str) -> dict[str, Any]
         "probe_ran_at_human": probe_ran_at_human,
         "suites": eval_ctx["suites"],
         "dispatched_24h": dispatch_counts.get(alias, 0),
+        "profile": _build_profile_view(alias),
         "csrf_token": csrf_token,
         "client": getattr(request.state, "client", "webui"),
     }

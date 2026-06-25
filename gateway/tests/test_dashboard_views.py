@@ -3436,3 +3436,71 @@ def test_cost_view_aggregates_completion_events(tmp_path: Path) -> None:
 def test_cost_view_redirects_without_auth(client: TestClient) -> None:
     r = client.get("/dashboard/cost")
     assert r.status_code == 302
+
+
+def test_build_profile_view_shapes_stored_profile(tmp_path, monkeypatch) -> None:
+    """The Capability-card helper loads <alias>-profile.json and shapes
+    declared facts + measured grades (capability beside cost)."""
+    from datetime import UTC, datetime
+
+    from gateway.capability_profile import (
+        CapabilityProfile,
+        DeclaredFact,
+        MeasuredGrade,
+        ResourceUsage,
+        write_profile,
+    )
+    from gateway.dashboard.views import _build_profile_view
+
+    monkeypatch.setenv("FITT_HOME", str(tmp_path))
+    profile = CapabilityProfile(
+        alias="fitt-ec2-hermes",
+        model_id="hermes3-8b-ec2",
+        captured_at=datetime(2026, 6, 18, 12, 0, tzinfo=UTC),
+        declared=[
+            DeclaredFact("context_window", "131072"),
+            DeclaredFact("tools", "true"),
+        ],
+        measured=[
+            MeasuredGrade(
+                name="tool-calling",
+                pass_rate=1.0,
+                passes=18,
+                valid=18,
+                samples=18,
+                p50_latency_s=1.2,
+                p95_latency_s=2.0,
+            ),
+            MeasuredGrade(
+                name="coding",
+                pass_rate=0.8,
+                passes=12,
+                valid=15,
+                samples=15,
+                p50_latency_s=3.4,
+                p95_latency_s=5.0,
+            ),
+        ],
+        resource=ResourceUsage(declared_size_bytes=4_661_227_243),
+    )
+    write_profile(profile, tmp_path)
+
+    view = _build_profile_view("fitt-ec2-hermes")
+    assert view is not None
+    assert view["model_id"] == "hermes3-8b-ec2"
+    assert {"name": "context_window", "value": "131072", "source": "ollama"} in view["declared"]
+    tool = next(g for g in view["measured"] if g["name"] == "tool-calling")
+    assert tool["pass_rate"] == "100%"
+    assert tool["p50"] == "1.2s"
+    assert tool["samples"] == "18/18"
+    coding = next(g for g in view["measured"] if g["name"] == "coding")
+    assert coding["pass_rate"] == "80%"
+    assert coding["samples"] == "12/15"
+    assert view["resource"]["size"] == "4445 MB"
+
+
+def test_build_profile_view_none_when_absent(tmp_path, monkeypatch) -> None:
+    from gateway.dashboard.views import _build_profile_view
+
+    monkeypatch.setenv("FITT_HOME", str(tmp_path))
+    assert _build_profile_view("no-such-alias") is None

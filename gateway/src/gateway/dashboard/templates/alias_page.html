@@ -64,6 +64,76 @@
 </div>
 {% endif %}
 
+{# ---------------------------------------------------------- capability profile #}
+<div class="card">
+  <h3>Capability profile</h3>
+  {% if profile %}
+  <p class="dim" style="font-size: 12px;">
+    model <code>{{ profile.model_id or "?" }}</code> · captured {{ profile.captured_at }}
+    · informs config, does not auto-drive
+  </p>
+  {% if profile.declared %}
+  <h4 style="margin-top: 12px;">Declared
+    <span class="dim" style="font-size: 11px;">(catalog — informs, doesn't certify)</span>
+  </h4>
+  <table>
+    <tbody>
+      {% for f in profile.declared %}
+      <tr>
+        <th class="right">{{ f.name }}</th>
+        <td class="mono">{{ f.value }}
+          <span class="dim" style="font-size: 11px;">({{ f.source }})</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if profile.measured %}
+  <h4 style="margin-top: 12px;">Measured
+    <span class="dim" style="font-size: 11px;">(capability + cost, kept separate)</span>
+  </h4>
+  <table>
+    <thead>
+      <tr><th>dimension</th><th>pass</th><th>samples</th><th>p50</th><th>p95</th><th>in tok</th><th>out tok</th></tr>
+    </thead>
+    <tbody>
+      {% for g in profile.measured %}
+      <tr>
+        <td class="mono">{{ g.name }}</td>
+        <td class="mono">{{ g.pass_rate }}</td>
+        <td class="mono dim">{{ g.samples }}</td>
+        <td class="mono dim">{{ g.p50 }}</td>
+        <td class="mono dim">{{ g.p95 }}</td>
+        <td class="mono dim">{{ g.in_tok }}</td>
+        <td class="mono dim">{{ g.out_tok }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if profile.resource and (profile.resource.size or profile.resource.vram or profile.resource.cold_load) %}
+  <h4 style="margin-top: 12px;">Resources</h4>
+  <table>
+    <tbody>
+      {% if profile.resource.size %}<tr><th class="right">declared size</th><td class="mono">{{ profile.resource.size }}</td></tr>{% endif %}
+      {% if profile.resource.vram %}<tr><th class="right">resident VRAM</th><td class="mono">{{ profile.resource.vram }}</td></tr>{% endif %}
+      {% if profile.resource.cold_load %}<tr><th class="right">cold-load</th><td class="mono">{{ profile.resource.cold_load }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+  {% endif %}
+  <p class="dim" style="font-size: 11px; margin-top: 8px;">
+    captured by <code>fitt profile alias {{ alias }}</code>
+  </p>
+  {% else %}
+  <div class="empty">
+    No capability profile on disk. Run
+    <code>fitt profile alias {{ alias }}</code> to capture declared
+    facts + measured tool-calling / coding grades.
+  </div>
+  {% endif %}
+</div>
+
 {# ---------------------------------------------------------- probe #}
 <div class="card">
   <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">

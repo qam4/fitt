@@ -29,7 +29,7 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Render the capability profile in the dashboard.
+- _(open - pull the top of Next)_
 
 **Next**
 - ddgs search-quality investigation (small; unblocks the synthesis retest).
@@ -46,10 +46,10 @@ The curated ordering - the judgment call a tool can't make for you.
 
 ## Capability, eval & observability
 
-- **Render the capability profile in the dashboard** - a per-alias
-  "Capability" card reading the existing `<alias>-profile.json`
-  (declared facts + measured grades with capability/cost + last baseline
-  diff). The profile is CLI-only and invisible in the UI today.
+- **Render the profile baseline-diff in the Capability card** - the
+  card now shows declared facts + measured grades + resources from
+  `<alias>-profile.json` (shipped 2026-06-25); the remaining piece is
+  rendering the last baseline diff / regressions alongside it.
   _(detail: [phase12 deferred](.kiro/specs/phase12-planning-execution/tasks.md))_
 - **Consolidate the measurement sinks** - probe = liveness pip, eval
   suites = measurement engine, profile = aggregation + the rendered
