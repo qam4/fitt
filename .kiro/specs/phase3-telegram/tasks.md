@@ -1,5 +1,7 @@
 # Tasks: FITT Phase 3 — Telegram + Browser Interface
 
+**Status:** shipped
+
 ## Phase 3a — Telegram bot scaffold
 
 - [ ] 1. Create `telegram-bot/` with its own `pyproject.toml`,

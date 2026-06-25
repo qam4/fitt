@@ -1,5 +1,7 @@
 # Tasks: FITT Phase 2 — Memory v0
 
+**Status:** shipped
+
 ## Phase 2a — Scaffold
 
 - [ ] 1. Add `memory:` section to the Pydantic config in

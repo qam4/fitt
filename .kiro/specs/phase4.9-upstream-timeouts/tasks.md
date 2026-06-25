@@ -1,5 +1,7 @@
 # Phase 4.9 — Upstream Timeouts and Honest Surfacing: Tasks
 
+**Status:** shipped
+
 ## Scope
 
 Three commits, ~6 hours total. Sets up the right

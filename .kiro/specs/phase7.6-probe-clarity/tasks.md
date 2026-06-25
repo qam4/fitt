@@ -1,5 +1,7 @@
 # Implementation Plan: FITT Phase 7.6 — Probe Clarity
 
+**Status:** shipped
+
 ## Overview
 
 Make the alias probe and eval classify failures honestly, tell

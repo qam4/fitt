@@ -1,5 +1,7 @@
 # Phase 4.10 — Skills-as-Markdown Loader: Tasks
 
+**Status:** shipped
+
 ## Scope
 
 Three commits, ~half-day total. Sets up the

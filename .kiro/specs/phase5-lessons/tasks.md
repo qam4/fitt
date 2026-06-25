@@ -1,5 +1,7 @@
 # Phase 5 — Lessons + Decaying History: Tasks
 
+**Status:** shipped
+
 Status legend: `[x]` done, `[ ]` not yet.
 
 ## 1. Spec promotion

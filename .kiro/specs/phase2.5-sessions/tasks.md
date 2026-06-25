@@ -1,5 +1,7 @@
 # Tasks: FITT Phase 2.5 — Sessions
 
+**Status:** shipped
+
 ## Phase 2.5a — SessionRegistry
 
 - [ ] 1. Replace `VALID_SESSION_IDS_V0` + module-level

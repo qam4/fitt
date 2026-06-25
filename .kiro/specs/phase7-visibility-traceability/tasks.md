@@ -1,5 +1,7 @@
 # Phase 7 — Visibility & Traceability: Tasks
 
+**Status:** shipped
+
 Implementation order keeps the tree green at every commit.
 Each top-level group is a reviewable commit. Slices ship
 independently; ordering across slices is data-flow only

@@ -1,5 +1,7 @@
 # Phase 4.6 — E2E test harness: Tasks
 
+**Status:** shipped
+
 Status legend: `[x]` done, `[ ]` not yet.
 
 ## 1. Spec promotion

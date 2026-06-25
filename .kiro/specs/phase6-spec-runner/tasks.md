@@ -1,5 +1,7 @@
 # Phase 6 — Spec-Runner: Tasks
 
+**Status:** shelved
+
 Status legend: `[x]` done, `[ ]` not yet.
 
 ## 1. `tasks.md` parser

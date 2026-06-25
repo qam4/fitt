@@ -1,5 +1,7 @@
 # Phase 4.5 — Cron + Proactive Notifications: Tasks
 
+**Status:** shipped
+
 Status legend: `[x]` done, `[ ]` not yet.
 
 ## 1. Event log primitive

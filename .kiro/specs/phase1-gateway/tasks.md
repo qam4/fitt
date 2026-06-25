@@ -1,5 +1,7 @@
 # Tasks: FITT Phase 1 — Gateway v0
 
+**Status:** shipped
+
 ## Phase 1a — Repo and Scaffold
 
 - [x] 1. Create private GitHub repo `home-ai-cluster`. On the desktop,

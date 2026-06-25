@@ -1,5 +1,7 @@
 # Phase 4 — Agentic Tools: Tasks
 
+**Status:** shipped
+
 Implementation order keeps the tree green at every commit. Each
 top-level group is a reviewable commit.
 

@@ -1,5 +1,7 @@
 # Phase 4.8 — Visibility Proxies: Tasks
 
+**Status:** shipped
+
 Five sub-phases. 4.8a is the dependency for everything else,
 and 4.8c (HTTP endpoints including turns SSE stream) is a
 dependency for 4.8b (Telegram renderer). The bot consumes the

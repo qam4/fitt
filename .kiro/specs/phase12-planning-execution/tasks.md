@@ -1,5 +1,7 @@
 # Tasks: FITT Phase 12 — Planning & Execution
 
+**Status:** blocked
+
 Sequencing principles:
 - **Get a real model in the loop first (12a).** The model-sensitive
   parts — the planner prompt, recovery nudges, capability profiling —
@@ -401,4 +403,26 @@ references point at `requirements.md`; property refs (Cn) at
   - **Context-degradation curve** — measured operating-point pass-rate
     at escalating prompt sizes (needs a production-size prompt; see the
     task-24 NOTE).
+- **Render the capability profile in the dashboard.** A per-alias
+  "Capability" card on `/dashboard/alias/<id>` that reads the existing
+  `<alias>-profile.json` (the structured sink nothing currently
+  consumes): declared facts (context window, tools/thinking/vision,
+  size), measured grades with capability AND cost side by side
+  (pass-rate + p50/p95 latency + tokens), and the last baseline diff /
+  regressions. Closes the gap that the profile is CLI-only and
+  invisible in the UI — the single "what can this model do" view.
+  Surfaces/recommends, never auto-drives (the task-24 operator-in-the-
+  loop commitment).
+- **Consolidate the measurement sinks (profile as source of truth).**
+  Today probe -> in-memory `app.state`, eval -> `<alias>-<suite>-latest.md`,
+  profile -> `<alias>-profile.{md,json}`: three disconnected sinks, and
+  the dashboard regex-parses the eval markdown *header* to recover a
+  pass-rate the profiler already computes in JSON. Re-frame the ladder:
+  probe = boot liveness pip, eval suites = the measurement engine,
+  profile = aggregation + declared facts + diff + the rendered surface.
+  Switch the dashboard's eval cell to read structured JSON, killing the
+  render-to-md-then-parse-md round-trip and the two-files-of-pass-rates
+  drift (the profiler re-runs the same realistic+coding suites eval
+  already ran). No conflict today, but the overlap rots without one
+  source of truth.
 - Speculative-parallel latency optimisation (Non-Goals).

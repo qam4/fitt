@@ -1,5 +1,7 @@
 # Phase 4.7 — `project_shell`: Tasks
 
+**Status:** shipped
+
 Status legend: `[x]` done, `[ ]` not yet.
 
 ## 1. Spec promotion

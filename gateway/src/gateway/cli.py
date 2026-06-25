@@ -2006,6 +2006,97 @@ def watch_cmd(session_id: str, config_file: Path | None) -> None:
     sys.exit(run_watch(session_id, cfg.memory.sessions_dir))
 
 
+# --------------------------------------------------------------- fitt tasks
+
+
+@main.command("tasks")
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Also list at-home/manual, deferred, and done tasks (not just ready open work).",
+)
+@click.option(
+    "--specs-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to .kiro/specs (default: found by walking up from the cwd).",
+)
+def tasks_cmd(show_all: bool, specs_dir: Path | None) -> None:
+    """Cross-phase rollup of the spec task lists - what's open everywhere.
+
+    Reads .kiro/specs/<phase>/tasks.md (the single source of truth) and
+    prints the genuinely-open `[ ]` tasks grouped by phase. At-home /
+    manual runtime steps and deferred/reshaped items are counted but not
+    listed (they aren't pickable dev work); pass --all to see them too.
+
+    Run it from anywhere in the repo. This is a derived view - it never
+    edits the specs, so it can't drift out of sync with them."""
+    from .task_rollup import collect_statuses, collect_tasks, find_specs_dir, roll_up
+
+    base = Path(specs_dir) if specs_dir else find_specs_dir(Path.cwd())
+    if base is None or not base.is_dir():
+        _console.print(
+            "[red]could not find .kiro/specs[/red] - run from inside the repo, or pass --specs-dir."
+        )
+        sys.exit(2)
+
+    tasks = collect_tasks(base)
+    statuses = collect_statuses(base)
+    rollups = roll_up(tasks, statuses)
+    by_phase: dict[str, list[Any]] = {}
+    for t in tasks:
+        by_phase.setdefault(t.phase, []).append(t)
+
+    actionable = sum(r.actionable_open for r in rollups)
+    phases_actionable = sum(1 for r in rollups if r.actionable_open)
+    collapsed = sum(1 for r in rollups if r.collapsed)
+
+    _console.print(
+        f"\n[bold]{actionable} open[/bold] in {phases_actionable} active/blocked "
+        f"phase(s)  [dim]({collapsed} shipped/shelved phase(s) collapsed)[/dim]\n"
+    )
+
+    for r in rollups:
+        if r.collapsed:
+            if show_all:
+                _console.print(
+                    f"[dim]{r.phase} [{r.status}] - {r.done} done, "
+                    f"{len(r.open_tasks)} unticked box(es) (historical)[/dim]"
+                )
+            continue
+        # active / blocked: enumerate the open work.
+        flag = " [yellow](blocked)[/yellow]" if r.status == "blocked" else ""
+        extras: list[str] = []
+        if r.done:
+            extras.append(f"{r.done} done")
+        if r.at_home:
+            extras.append(f"{r.at_home} at-home")
+        if r.deferred:
+            extras.append(f"{r.deferred} deferred")
+        extra_str = f"  [dim]({', '.join(extras)})[/dim]" if extras else ""
+        _console.print(f"[cyan]{r.phase}[/cyan]{flag} - {len(r.open_tasks)} open{extra_str}")
+        for t in r.open_tasks:
+            title = t.title if len(t.title) <= 88 else t.title[:85] + "..."
+            _console.print(f"    [ ] {t.id}. {title}")
+        if show_all:
+            for t in by_phase.get(r.phase, []):
+                if t.kind == "open":
+                    continue
+                title = t.title if len(t.title) <= 80 else t.title[:77] + "..."
+                box = "[x]" if t.kind == "done" else "[ ]"
+                tag = "" if t.kind == "done" else f" [dim]({t.kind.replace('_', '-')})[/dim]"
+                _console.print(f"    [dim]{box} {t.id}. {title}[/dim]{tag}")
+        _console.print("")
+
+    if actionable == 0 and not show_all:
+        _console.print(
+            "[dim]No actionable open tasks in active/blocked phases. Run with "
+            "--all to see shipped/shelved phases, or see BACKLOG.md for "
+            "cross-cutting work.[/dim]\n"
+        )
+
+
 # --------------------------------------------------------------- fitt context
 
 

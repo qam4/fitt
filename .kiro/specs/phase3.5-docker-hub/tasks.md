@@ -1,5 +1,7 @@
 # Phase 3.5 — Docker-first Hub: Tasks
 
+**Status:** shipped
+
 Implementation order picked to keep the tree green at every
 commit. Each top-level task is a reviewable commit.
 

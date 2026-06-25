@@ -1,5 +1,7 @@
 # Phase 4.11 — Web Search Tool: Tasks
 
+**Status:** shipped
+
 ## Scope
 
 Two commits, ~half-day total. Ships the `web_search` tool with
