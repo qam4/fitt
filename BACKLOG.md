@@ -29,16 +29,15 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- _(open - pull the top of Next)_
+- Consolidate the eval/profile/probe measurement sinks (natural
+  follow-on to the new dashboard profile card).
 
 **Next**
-- Operator-facing timeout error messages (~1 hr).
-
-**Later**
-- Consolidate the eval/profile/probe measurement sinks.
 - Re-test synthesis vs relay on a capable model (qwen3:14b), using a
   SPECIFIC-topic query (per the 2026-06-26 ddgs finding) so there's
   real content to synthesize - removing the thin-search confound.
+
+**Later**
 - Eval harness over the real registry -> then the message/text and
   edit_file ergonomics fixes.
 
@@ -95,10 +94,6 @@ The curated ordering - the judgment call a tool can't make for you.
 
 ## Opportunistic upgrades (OpenClaw-inspired)
 
-- **Operator-facing timeout error messages** - name the specific config
-  key and explain the provider-vs-agent timeout layering, OpenClaw-style.
-  ~1 hour.
-  _(source: project-overview steering)_
 - **Setup recipes the agent can drive** - "help me set up X" docs written
   *for* the agent (numbered steps, exact commands, fallbacks). ~half a
   day per recipe.
