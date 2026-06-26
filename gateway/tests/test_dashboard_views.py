@@ -3504,3 +3504,62 @@ def test_build_profile_view_none_when_absent(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setenv("FITT_HOME", str(tmp_path))
     assert _build_profile_view("no-such-alias") is None
+
+
+def test_parse_eval_report_full_reads_json_sidecar(tmp_path) -> None:
+    """The dashboard prefers the structured JSON sidecar over
+    regex-parsing the markdown (a deliberately-stale .md is ignored)."""
+    import json
+
+    from gateway.dashboard.views import _parse_eval_report_full
+
+    md = tmp_path / "fitt-default-latest.md"
+    md.write_text("# stale markdown that must be ignored\n", encoding="utf-8")
+    (tmp_path / "fitt-default-latest.json").write_text(
+        json.dumps(
+            {
+                "passed": 4,
+                "total": 5,
+                "pass_rate": 0.8,
+                "finished_at": "2026-01-01T00:00:02+00:00",
+                "model_id": "qwen3:8b",
+                "duration_ms": 2000,
+                "cases": [
+                    {
+                        "name": "c1",
+                        "status": "pass",
+                        "detail": "ok",
+                        "latency_ms": 12,
+                        "tool_called": None,
+                        "finish_reason": None,
+                        "reply_preview": "hi",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rep = _parse_eval_report_full(md)
+    assert rep is not None
+    assert rep["passed"] == 4
+    assert rep["total"] == 5
+    assert rep["finished_iso"] == "2026-01-01T00:00:02+00:00"
+    assert rep["model_id"] == "qwen3:8b"
+    assert rep["cases"][0]["reply_preview"] == "hi"
+
+
+def test_parse_eval_report_falls_back_to_markdown(tmp_path) -> None:
+    """With no JSON sidecar, the legacy markdown header parse still
+    works (reports written before the sidecar existed)."""
+    from gateway.dashboard.views import _parse_eval_report
+
+    md = tmp_path / "fitt-default-latest.md"
+    md.write_text(
+        "# Eval report\n\n- Result: **3/4 passed** (75%)\n- Finished: 2026-01-01T00:00:02\n",
+        encoding="utf-8",
+    )
+    rep = _parse_eval_report(md)
+    assert rep is not None
+    assert rep["passed"] == 3
+    assert rep["total"] == 4
+    assert rep["finished_iso"] == "2026-01-01T00:00:02"

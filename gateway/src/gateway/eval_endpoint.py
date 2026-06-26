@@ -44,6 +44,7 @@ from .alias_eval import (
     default_cases,
     realistic_cases,
     render_report_markdown,
+    report_to_dict,
     run_eval_suite,
     write_report,
 )
@@ -131,29 +132,12 @@ def _summarise_report(report: EvalReport) -> dict[str, Any]:
     detail without needing to parse the markdown report. The
     markdown stays the canonical operator-readable form on
     disk; this shape is what HTTP clients consume.
+
+    Delegates to :func:`gateway.alias_eval.report_to_dict` - the one
+    canonical serializer, shared with the on-disk JSON sidecar so the
+    wire shape and the disk shape can't drift.
     """
-    return {
-        "alias": report.alias,
-        "model_id": report.model_id,
-        "started_at": report.started_at.isoformat(),
-        "finished_at": report.finished_at.isoformat(),
-        "duration_ms": int((report.finished_at - report.started_at).total_seconds() * 1000),
-        "passed": report.passed,
-        "failed": report.failed,
-        "total": report.total,
-        "pass_rate": report.pass_rate,
-        "cases": [
-            {
-                "name": c.case_name,
-                "status": c.status,
-                "detail": c.detail,
-                "latency_ms": c.latency_ms,
-                "tool_called": c.tool_called,
-                "finish_reason": c.finish_reason,
-            }
-            for c in report.cases
-        ],
-    }
+    return report_to_dict(report)
 
 
 @router.post("/v1/eval/{alias}")

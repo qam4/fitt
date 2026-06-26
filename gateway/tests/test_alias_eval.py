@@ -874,3 +874,63 @@ async def test_temperature_and_seed_threaded_into_body(tmp_path: Path) -> None:
     await run_eval_case(case, "fitt-smart", router)  # type: ignore[arg-type]
     assert "temperature" not in router.bodies[-1]
     assert "seed" not in router.bodies[-1]
+
+
+def test_report_to_dict_includes_reply_preview() -> None:
+    """The canonical serializer carries every user-visible case field,
+    including reply_preview (the markdown has it, so the dashboard's
+    JSON read must too)."""
+    from datetime import UTC, datetime
+
+    from gateway.alias_eval import CaseResult, EvalReport, report_to_dict
+
+    report = EvalReport(
+        alias="fitt-default",
+        model_id="qwen3:8b",
+        started_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+        cases=[
+            CaseResult(
+                case_name="c1",
+                status="pass",
+                detail="ok",
+                latency_ms=12,
+                reply_preview="hi there",
+            )
+        ],
+    )
+    d = report_to_dict(report)
+    assert d["passed"] == 1
+    assert d["total"] == 1
+    assert d["duration_ms"] == 2000
+    assert d["pass_rate"] == 1.0
+    assert d["cases"][0]["name"] == "c1"
+    assert d["cases"][0]["reply_preview"] == "hi there"
+
+
+def test_write_report_writes_json_sidecar(tmp_path: Any) -> None:
+    """write_report drops a structured <alias>[-suite]-latest.json next
+    to the rolling markdown (the dashboard's structured source)."""
+    import json as _json
+    from datetime import UTC, datetime
+
+    from gateway.alias_eval import CaseResult, EvalReport, write_report
+
+    report = EvalReport(
+        alias="fitt-default",
+        model_id="qwen3:8b",
+        started_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+        cases=[CaseResult(case_name="c1", status="pass", detail="ok", latency_ms=12)],
+    )
+    write_report(report, tmp_path, suite="default")
+    sidecar = tmp_path / "eval" / "fitt-default-latest.json"
+    assert sidecar.exists()
+    data = _json.loads(sidecar.read_text(encoding="utf-8"))
+    assert data["passed"] == 1
+    assert data["total"] == 1
+    assert data["cases"][0]["name"] == "c1"
+
+    # Coding suite namespaces its sidecar.
+    write_report(report, tmp_path, suite="coding")
+    assert (tmp_path / "eval" / "fitt-default-coding-latest.json").exists()

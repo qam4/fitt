@@ -24,6 +24,7 @@ health, gaps) in this same module.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from datetime import UTC, datetime
@@ -274,12 +275,55 @@ _EVAL_RESULT_RE = re.compile(
 _EVAL_FINISHED_RE = re.compile(r"^-\s+Finished:\s+(?P<iso>\S+)")
 
 
+def _read_eval_json(md_path: Path) -> dict[str, Any] | None:
+    """Read the structured JSON sidecar (``<...>-latest.json``) that
+    :func:`gateway.alias_eval.write_report` writes beside the markdown.
+
+    Returns the dashboard-shaped dict (mapping the report's
+    ``finished_at`` to the template's ``finished_iso``), or ``None`` when
+    the sidecar is absent or unparseable - so the caller falls back to
+    regex-parsing the markdown (legacy reports written before the JSON
+    sidecar existed). The structured read replaces the brittle
+    render-to-markdown-then-parse-it-back round-trip."""
+    json_path = md_path.with_suffix(".json")
+    if not json_path.exists():
+        return None
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "passed" not in data or "total" not in data:
+        return None
+    total = data["total"]
+    cases = data.get("cases")
+    return {
+        "passed": data["passed"],
+        "total": total,
+        "pass_rate": data.get("pass_rate", (data["passed"] / total if total else 0.0)),
+        "finished_iso": data.get("finished_at"),
+        "model_id": data.get("model_id"),
+        "duration_ms": data.get("duration_ms"),
+        "cases": cases if isinstance(cases, list) else [],
+    }
+
+
 def _parse_eval_report(path: Path) -> dict[str, Any] | None:
     """Read the rolling per-alias eval report header. Returns the
     summary dict or ``None`` when the file's missing / unparseable.
     Same parser the ``/v1/aliases`` endpoint uses; duplicated
     locally to avoid the cross-module import for the dashboard's
-    hot path."""
+    hot path.
+
+    Prefers the structured JSON sidecar; falls back to parsing the
+    markdown header for legacy reports written before it."""
+    j = _read_eval_json(path)
+    if j is not None:
+        return {
+            "passed": j["passed"],
+            "total": j["total"],
+            "pass_rate": j["pass_rate"],
+            "finished_iso": j["finished_iso"],
+        }
     if not path.exists():
         return None
     try:
@@ -411,7 +455,13 @@ def _parse_eval_report_full(path: Path) -> dict[str, Any] | None:
     same forgiving posture as :func:`_parse_eval_report`. If a
     section header lands without any subsequent fields parsing
     cleanly, the case is still emitted with whatever did parse
-    so the operator gets partial detail rather than a 500."""
+    so the operator gets partial detail rather than a 500.
+
+    Prefers the structured JSON sidecar; falls back to parsing the
+    markdown for legacy reports written before it."""
+    j = _read_eval_json(path)
+    if j is not None:
+        return j
     if not path.exists():
         return None
     try:

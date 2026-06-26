@@ -80,6 +80,7 @@ and inspect the :class:`EvalReport`.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -879,6 +880,41 @@ def default_eval_dir(fitt_home: Path) -> Path:
     return fitt_home / "eval"
 
 
+def report_to_dict(report: EvalReport) -> dict[str, Any]:
+    """Canonical structured serialization of an :class:`EvalReport`.
+
+    The single source of truth for "the eval report as data" - consumed
+    by the JSON sidecar :func:`write_report` persists (which the
+    dashboard reads instead of regex-parsing the markdown), and by the
+    ``/v1/eval`` HTTP summary. Carrying it in one place keeps the disk
+    shape and the wire shape from drifting. Includes ``reply_preview``
+    (the markdown carries it, so the dashboard's JSON read must too)."""
+    duration_ms = int((report.finished_at - report.started_at).total_seconds() * 1000)
+    return {
+        "alias": report.alias,
+        "model_id": report.model_id,
+        "started_at": report.started_at.isoformat(),
+        "finished_at": report.finished_at.isoformat(),
+        "duration_ms": duration_ms,
+        "passed": report.passed,
+        "failed": report.failed,
+        "total": report.total,
+        "pass_rate": report.pass_rate,
+        "cases": [
+            {
+                "name": c.case_name,
+                "status": c.status,
+                "detail": c.detail,
+                "latency_ms": c.latency_ms,
+                "tool_called": c.tool_called,
+                "finish_reason": c.finish_reason,
+                "reply_preview": c.reply_preview,
+            }
+            for c in report.cases
+        ],
+    }
+
+
 def write_report(
     report: EvalReport,
     fitt_home: Path,
@@ -918,6 +954,12 @@ def write_report(
     rolling = eval_dir / f"{report.alias}{suffix}-latest.md"
     timestamped.write_text(body, encoding="utf-8")
     rolling.write_text(body, encoding="utf-8")
+    # Structured sidecar next to the rolling markdown: the dashboard
+    # reads this instead of regex-parsing the .md header (the markdown
+    # stays the human-readable audit form). One canonical serializer
+    # (report_to_dict) so the two can't drift.
+    rolling_json = eval_dir / f"{report.alias}{suffix}-latest.json"
+    rolling_json.write_text(json.dumps(report_to_dict(report), indent=2), encoding="utf-8")
     return timestamped, rolling
 
 
