@@ -128,6 +128,34 @@ def daily_news_summary() -> Scenario:
     )
 
 
+def topic_brief() -> Scenario:
+    """Specific-topic variant of :func:`daily_news_summary`.
+
+    The 2026-06-26 ddgs finding showed ``web_search`` returns site
+    homepages for a generic "today's news" query but content-rich
+    results for a *specific* topic. This scenario asks about a concrete,
+    well-covered subject so the fetch step returns real material -
+    isolating the synthesis-vs-relay question from the thin-search
+    confound. Run on a capable model (qwen3:14b) to test the task-26
+    verdict refinement: is the relay tendency model weakness or prompt?
+
+    Same two-step shape as :func:`daily_news_summary` (fetch then
+    summarize), so :func:`classify_news_outcome` applies unchanged."""
+    return Scenario(
+        name="topic_brief",
+        user_message=(
+            "Search the web for recent discoveries from the James Webb Space "
+            "Telescope, then give me a short summary as three or four bullet "
+            "points. If you can push it to me as a message, do that too."
+        ),
+        description=(
+            "Specific-topic fetch-then-summarize: the concrete query returns "
+            "content-rich results (not homepages), isolating synthesis vs "
+            "relay from the thin-search confound."
+        ),
+    )
+
+
 def _ok_calls(result: AgentLoopResult, tool_name: str) -> int:
     """Count successful calls to ``tool_name`` in the turn."""
     return sum(

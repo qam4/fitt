@@ -43,7 +43,7 @@ from .projects import (
     ProjectRegistry,
     UnknownProject,
 )
-from .scenarios import daily_news_summary
+from .scenarios import daily_news_summary, topic_brief
 from .sessions import (
     DuplicateSessionId,
     InvalidSessionId,
@@ -1686,7 +1686,7 @@ def scenario_group() -> None:
     injected capability prompt."""
 
 
-_SCENARIOS = {"daily_news_summary": daily_news_summary}
+_SCENARIOS = {"daily_news_summary": daily_news_summary, "topic_brief": topic_brief}
 
 
 @scenario_group.command("run")

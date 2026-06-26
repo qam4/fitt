@@ -33,6 +33,55 @@ doc.
 
 ---
 
+## Capable model (qwen3:14b) synthesizes from real search content - relay was model weakness, not prompt
+
+**First observed:** 2026-06-26 (synthesis-vs-relay retest; BACKLOG follow-on
+to the task-26 verdict).
+**Tag:** Phase 12 / synthesis vs relay / model-fit / web_search.
+
+Retested the task-26 relay-vs-synthesize question on a *capable* model with
+*real* content. Added a `topic_brief` scenario - a specific query ("recent
+discoveries from the James Webb Space Telescope") concrete enough that ddgs
+returns content-rich results (per the ddgs finding above), removing the
+thin-search confound that muddied the hermes3 runs. fitt-ec2-qwen3
+(qwen3:14b), flat, 3 samples.
+
+Result: 2/3 `completed`; the deciding signal is reading the replies -
+**both content-bearing samples SYNTHESIZED.** Clean 3-5 bullet summaries in
+qwen3's own words with inline source attribution (Carnegie Science /
+GLASS-JWST, NASA NIRSpec / comet 3I/ATLAS, ESA Butterfly Nebula,
+ScienceDaily early galaxies, ...) - NOT a relay of raw title/URL/snippet
+lines. The opposite of hermes3:8b's relay. Sample 2 also *retried* a failed
+search (`web_search:error -> web_search:ok`) - agentic recovery hermes3
+never showed.
+
+**Verdict: the relay-vs-synthesize failure is MODEL CAPABILITY, not the
+prompt.** A capable model synthesizes given real content under the *existing*
+capability-block guidance; hermes3:8b relays because it's too weak, not
+because the prompt is wrong. This confirms the task-26 caveat and refines
+the Phase 12 conclusion: the lever for output quality is a capable executor,
+not harness/prompt tuning. (It also retroactively justifies reverting the
+"synthesize, don't relay" capability-block change - it wasn't needed; the
+prompt was already adequate.)
+
+Caveats / observed oddities:
+
+- **ddgs flakiness recurred**: `web_search` returned `provider_failed` on the
+  first call in 2 of 3 samples (rate-limiting). qwen3 recovered by retrying
+  (sample 2); sample 1 never got results.
+- **Off-topic hallucination on total search failure (sample 1):** with the
+  search fully failed, qwen3 acknowledged "the web search failed" but then
+  pivoted to an unrelated **cake recipe** instead of staying on JWST or
+  honestly stopping. A bizarre n=1 oddity - when it has no data it should say
+  so, not generate unrelated content. Worth watching.
+- n=3, one topic, one model. A clear signal (2/2 content-bearing samples
+  synthesized), not a law.
+
+Tooling: added the reusable `topic_brief` scenario
+(`fitt scenario run <alias> --scenario topic_brief`).
+
+---
+
 ## ddgs returns homepages for generic news queries: query shaping, not the backend
 
 **First observed:** 2026-06-23 (Phase 12 synthesis experiment).

@@ -29,18 +29,15 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Re-test synthesis vs relay on a capable model (qwen3:14b), using a
-  SPECIFIC-topic query (per the 2026-06-26 ddgs finding) so there's
-  real content to synthesize - removing the thin-search confound.
-
-**Next**
 - Eval harness over the real registry -> then the message/text and
   edit_file ergonomics fixes.
 
+**Next**
+- Render the profile baseline-diff in the dashboard Capability card.
+
 **Later**
 - Further capability-profile dimensions (VRAM, token-cost, JSON-
-  validity, refusal rate, variance, context-degradation); render the
-  profile baseline-diff in the dashboard Capability card.
+  validity, refusal rate, variance, context-degradation).
 
 ---
 
@@ -62,12 +59,6 @@ The curated ordering - the judgment call a tool can't make for you.
   variance, context-degradation curve. Data model already supports each
   as an append.
   _(detail: [phase12 deferred](.kiro/specs/phase12-planning-execution/tasks.md))_
-- **Re-test synthesis vs relay on a capable model** - the
-  execute-step/capability-prompt tuning the task-26 verdict points
-  at, measured on qwen3:14b (not hermes3:8b) using a specific-topic
-  query (per the 2026-06-26 ddgs finding) so the search returns real
-  content to synthesize, not homepages.
-  _(source: [observed-issues 2026-06-23](docs/observed-issues.md))_
 - **Better news search backend** - investigated 2026-06-26: ddgs
   `.text()` returns homepages for generic "today's news" queries but
   rich results for specific ones, and ddgs `.news()` is broken (Yahoo

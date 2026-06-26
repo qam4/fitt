@@ -248,3 +248,15 @@ async def test_dropped_backend_becomes_transient_not_a_crash(monkeypatch: Any) -
     assert res.valid == 2
     assert res.pass_rate == 1.0
     assert res.outcome_counts["upstream_error"] == 1
+
+
+def test_topic_brief_scenario_shape() -> None:
+    """topic_brief is a specific-topic fetch-then-summarize case (so
+    web_search returns real content, not homepages) reusing the news
+    classifier."""
+    from gateway.scenarios import topic_brief
+
+    s = topic_brief()
+    assert s.name == "topic_brief"
+    assert "Webb" in s.user_message  # the concrete topic
+    assert s.min_searches == 1
