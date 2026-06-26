@@ -329,7 +329,12 @@ def _upstream_silent_response(
                 "request_id": request_id,
                 "message": (
                     f"Upstream {alias!r} went silent after {int(timeout_secs)}s "
-                    "— likely queued or overloaded."
+                    "— no response within the gateway's `upstream_timeout_secs`. "
+                    "If the model is genuinely slow (a thinking model, or "
+                    "cold-loading on a shared GPU), raise `upstream_timeout_secs` "
+                    "in config.yaml — and keep any client stream timeout (e.g. "
+                    "the Telegram bot's) above it. Otherwise it's likely queued "
+                    "or overloaded: retry or use a faster alias."
                 ),
             }
         },

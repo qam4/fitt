@@ -625,9 +625,10 @@ class GatewayClient:
             n = int(timeout_secs) if isinstance(timeout_secs, int | float) else "?"
             who = silent_alias or alias
             yield (
-                f"⏱️ Upstream `{who}` went silent after {n}s — "
-                f"likely queued. Try again, or pick a different "
-                f"alias. {rid}"
+                f"⏱️ Upstream `{who}` went silent after {n}s (gateway "
+                f"`upstream_timeout_secs`). If it's just slow — a thinking "
+                f"model or cold-loading — raise that in config.yaml; otherwise "
+                f"it's likely queued, so retry or pick a different alias. {rid}"
             )
         elif error_type == "no_backend_available":
             yield (
