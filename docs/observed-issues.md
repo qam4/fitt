@@ -33,6 +33,56 @@ doc.
 
 ---
 
+## ddgs returns homepages for generic news queries: query shaping, not the backend
+
+**First observed:** 2026-06-23 (Phase 12 synthesis experiment).
+**Investigated:** 2026-06-26.
+**Tag:** web_search / ddgs / query shaping.
+
+The daily_news_summary experiment saw `web_search` return news-site
+homepages (Google News / NBC / CBS / NYT) instead of headlines.
+Investigated by probing ddgs directly (the search runs on the gateway
+host - no model involved), four queries:
+
+1. `text("today top news headlines")` -> HOMEPAGES (Google News, AP,
+   WaPo, NBC, CNN) with boilerplate snippets. Reproduces the problem.
+   Caveat: a couple snippets *did* carry a real headline (AP/Google's
+   "Venezuela earthquakes kill at least 235"), so a model that reads
+   snippets could extract *some* news - the weak model relaying the
+   raw list is a compounding factor.
+2. `news("top news today")` -> ERROR. ddgs's news endpoint routes via
+   Yahoo (`news.search.yahoo.com`) and returned a DNS "Query Refused".
+   The dedicated news endpoint - the right tool for headlines - is
+   broken in the current ddgs.
+3. `text("world news", timelimit="d")` -> a single Wikipedia "World
+   news" concept page. timelimit doesn't help.
+4. `text("Iran nuclear agreement news")` (SPECIFIC) -> relevant,
+   content-rich results (Wikipedia 2025-26 Iran-US negotiations, CFR,
+   a Jun-2026 video, ICAN). A specific query returns useful results.
+
+**Diagnosis: the homepage problem is QUERY SHAPING, not a backend
+limitation.** ddgs `.text()` returns rich, on-topic results for
+specific queries and homepages for generic "today's news" ones. The
+`.news()` endpoint that would fix the generic-headlines case is broken
+(Yahoo DNS refused); `timelimit` is no help.
+
+**Implications:**
+
+- Not a small provider code fix. Levers: (a) get the model to issue a
+  *specific* query - hard for the inherently-broad "summarize today's
+  news"; or (b) a working news backend (DDG news is broken here; a real
+  news API or a different provider would be needed - the provider plugin
+  layer makes that a config + one-file add).
+- For the synthesis-vs-relay retest (the other open item): use a
+  SPECIFIC-topic query so there's real content to synthesize. That
+  removes the thin-search confound and makes it a clean test of
+  synthesis vs relay, decoupled from this ddgs limitation.
+
+**Tooling:** probed with a throwaway `ddgs_probe.py` against the venv's
+ddgs (deleted after).
+
+---
+
 ## Synthesis-over-relay capability-block tuning didn't help hermes3:8b (reverted)
 
 **First observed:** 2026-06-23 (test of the task-26 "under-prompted" verdict).

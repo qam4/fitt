@@ -32,13 +32,13 @@ The curated ordering - the judgment call a tool can't make for you.
 - _(open - pull the top of Next)_
 
 **Next**
-- ddgs search-quality investigation (small; unblocks the synthesis retest).
 - Operator-facing timeout error messages (~1 hr).
 
 **Later**
 - Consolidate the eval/profile/probe measurement sinks.
-- Re-test synthesis vs relay on a capable model + working search (after
-  the ddgs fix).
+- Re-test synthesis vs relay on a capable model (qwen3:14b), using a
+  SPECIFIC-topic query (per the 2026-06-26 ddgs finding) so there's
+  real content to synthesize - removing the thin-search confound.
 - Eval harness over the real registry -> then the message/text and
   edit_file ergonomics fixes.
 
@@ -61,15 +61,19 @@ The curated ordering - the judgment call a tool can't make for you.
   variance, context-degradation curve. Data model already supports each
   as an append.
   _(detail: [phase12 deferred](.kiro/specs/phase12-planning-execution/tasks.md))_
-- **Re-test synthesis vs relay on a capable model + working search** -
-  the execute-step/capability-prompt tuning the task-26 verdict points
-  at, measured on qwen3:14b (not hermes3:8b) with a search query/backend
-  that returns real headlines, not homepages.
+- **Re-test synthesis vs relay on a capable model** - the
+  execute-step/capability-prompt tuning the task-26 verdict points
+  at, measured on qwen3:14b (not hermes3:8b) using a specific-topic
+  query (per the 2026-06-26 ddgs finding) so the search returns real
+  content to synthesize, not homepages.
   _(source: [observed-issues 2026-06-23](docs/observed-issues.md))_
-- **ddgs search quality** - `web_search` returns news-site homepages with
-  boilerplate snippets instead of actual headlines; investigate query
-  shaping vs backend choice.
-  _(source: [observed-issues 2026-06-23](docs/observed-issues.md))_
+- **Better news search backend** - investigated 2026-06-26: ddgs
+  `.text()` returns homepages for generic "today's news" queries but
+  rich results for specific ones, and ddgs `.news()` is broken (Yahoo
+  DNS refused). Not a small provider fix - a working news backend is a
+  new provider file + config; query shaping is model-side. Low priority
+  unless the news use case matters.
+  _(detail: [observed-issues 2026-06-26](docs/observed-issues.md))_
 
 ## Tool ergonomics & coverage
 
