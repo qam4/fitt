@@ -29,17 +29,18 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Consolidate the eval/profile/probe measurement sinks (natural
-  follow-on to the new dashboard profile card).
-
-**Next**
 - Re-test synthesis vs relay on a capable model (qwen3:14b), using a
   SPECIFIC-topic query (per the 2026-06-26 ddgs finding) so there's
   real content to synthesize - removing the thin-search confound.
 
-**Later**
+**Next**
 - Eval harness over the real registry -> then the message/text and
   edit_file ergonomics fixes.
+
+**Later**
+- Further capability-profile dimensions (VRAM, token-cost, JSON-
+  validity, refusal rate, variance, context-degradation); render the
+  profile baseline-diff in the dashboard Capability card.
 
 ---
 
@@ -50,10 +51,11 @@ The curated ordering - the judgment call a tool can't make for you.
   `<alias>-profile.json` (shipped 2026-06-25); the remaining piece is
   rendering the last baseline diff / regressions alongside it.
   _(detail: [phase12 deferred](.kiro/specs/phase12-planning-execution/tasks.md))_
-- **Consolidate the measurement sinks** - probe = liveness pip, eval
-  suites = measurement engine, profile = aggregation + the rendered
-  surface; switch the dashboard's eval cell to read structured JSON
-  instead of regex-parsing the markdown header.
+- **Profile as single source of truth for capability** - the eval-report
+  JSON sidecar + dashboard structured read shipped 2026-06-26 (the
+  markdown round-trip is gone). What remains is the broader reframe:
+  probe = liveness pip, profile = aggregation, fold the scenario result
+  in as a dimension. Lower priority - the painful part is done.
   _(detail: [phase12 deferred](.kiro/specs/phase12-planning-execution/tasks.md))_
 - **Capability-profile dimensions beyond v1** - VRAM/cold-load,
   token-cost-per-outcome, JSON-validity, refusal rate, run-to-run

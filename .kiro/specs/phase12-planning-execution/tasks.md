@@ -430,4 +430,10 @@ references point at `requirements.md`; property refs (Cn) at
   drift (the profiler re-runs the same realistic+coding suites eval
   already ran). No conflict today, but the overlap rots without one
   source of truth.
+  **DONE 2026-06-26 (partial):** eval reports now write a
+  `<alias>[-suite]-latest.json` sidecar via one canonical
+  `report_to_dict` (shared with the `/v1/eval` summary), and the
+  dashboard reads it (markdown fallback for legacy). The
+  markdown-round-trip is gone. Remaining: the broader reframe (probe =
+  liveness pip, profile = single source of truth, fold scenario in).
 - Speculative-parallel latency optimisation (Non-Goals).
