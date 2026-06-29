@@ -29,13 +29,17 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
+- Plan-election profile dimension + Capability-card row - the first
+  slice of the feature<->capability reconciler; makes "can this model
+  plan?" visible per alias. IN PROGRESS 2026-06-27.
+
+**Next**
+- The feature<->capability reconciler (fitt doctor / Feature readiness).
 - Eval harness over the real registry -> then the message/text and
   edit_file ergonomics fixes.
 
-**Next**
-- Render the profile baseline-diff in the dashboard Capability card.
-
 **Later**
+- Render the profile baseline-diff in the dashboard Capability card.
 - Further capability-profile dimensions (VRAM, token-cost, JSON-
   validity, refusal rate, variance, context-degradation).
 
@@ -83,6 +87,19 @@ The curated ordering - the judgment call a tool can't make for you.
   _(source: this session's "how does benchmarking inform config" thread;
   related: the three capability-profile items below are sub-parts /
   data it consumes.)_
+
+- **Plan-election profile dimension + Capability-card row** (Stage 1 of
+  the reconciler above; IN PROGRESS 2026-06-27) - have `fitt profile
+  alias` measure plan-election (run the planner pass k times, report the
+  % that emit a plan) and append it as a measured grade. The Capability
+  card renders it automatically - `_build_profile_view` iterates
+  `profile.measured`, so a new grade shows as a new row with no view/
+  template change. Makes "can this model plan?" visible per alias
+  (qwen3:14b ~100% vs hermes3:8b 0%) - a *fact*, not yet the
+  enable/disable recommendation (that join is the reconciler). The clean
+  subset of phase12's deferred "orchestration-readiness" dimension:
+  election alone is cheaply measurable; plan-AND-follow-through is not
+  (task 26).
 
 - **Render the profile baseline-diff in the Capability card** - the
   card now shows declared facts + measured grades + resources from
