@@ -75,7 +75,11 @@ The curated ordering - the judgment call a tool can't make for you.
   measure exactly what some enabled feature needs, in priority order,
   instead of building all of them speculatively. Spec-worthy when
   started; the doc-fix half (flagging model-dependent plan election in
-  the config example) shipped 2026-06-27.
+  the config example) shipped 2026-06-27. This is FITT's missing "detect
+  optimal settings" layer - the recommendation engine that turns the
+  facts-only capability profile into "enable these features for this
+  model", per roadmap Principle 12 (adapt the feature set to the model
+  you can run).
   _(source: this session's "how does benchmarking inform config" thread;
   related: the three capability-profile items below are sub-parts /
   data it consumes.)_
