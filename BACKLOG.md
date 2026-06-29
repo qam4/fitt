@@ -43,6 +43,43 @@ The curated ordering - the judgment call a tool can't make for you.
 
 ## Capability, eval & observability
 
+- **Reconcile features <-> model capability (`fitt doctor` / a dashboard
+  "Feature readiness" view)** - surfaced 2026-06-27. FITT has feature
+  switches (orchestration/planning, memory, skills, web search) and a
+  per-alias capability profile, but *nothing joins them*. An operator
+  can set `orchestration.enabled: true` on a model that elects to plan
+  0% of the time (hermes3:8b) and get a silently dead feature - the
+  config example documents the knob but not which bound model can
+  actually drive it. The fix is the missing middle layer:
+  1. A small, model-agnostic **feature -> required-capability map**
+     (planning needs plan-election on the alias or its `planner_alias`;
+     a good web_search answer needs synthesis; long history needs
+     context tolerance; etc.), keyed on profile *dimensions*, never
+     model names.
+  2. A pure **reconciler**: per alias, given its enabled features +
+     its profile, report each feature as satisfied / unsatisfied (loud,
+     Principle 11) / unknown (needs `fitt profile alias`). Three-state;
+     "unknown" is first-class.
+  3. **Surfaces**, reusing what exists: a boot warning (same shape as
+     `check_missing_api_keys`, warn-don't-refuse), a dashboard "Feature
+     readiness" card next to the Capability card, and optionally a
+     `fitt doctor` CLI (the shareable "is my setup sane" check).
+  Surfaces/warns, **never auto-disables** (the task-24 operator-in-the-
+  loop commitment; measurements are sample-noisy). Declared facts first
+  (free bounds from `/api/tags`), measured grades only where declared
+  can't answer. Generalises the boot probe (which already checks one
+  capability - tool-calling - loudly at boot) to "check the capabilities
+  the enabled features require." Payoff: defining feature requirements
+  is what makes the deferred profile dimensions (synthesis,
+  orchestration-readiness, context-degradation) *earn their keep* - you
+  measure exactly what some enabled feature needs, in priority order,
+  instead of building all of them speculatively. Spec-worthy when
+  started; the doc-fix half (flagging model-dependent plan election in
+  the config example) shipped 2026-06-27.
+  _(source: this session's "how does benchmarking inform config" thread;
+  related: the three capability-profile items below are sub-parts /
+  data it consumes.)_
+
 - **Render the profile baseline-diff in the Capability card** - the
   card now shows declared facts + measured grades + resources from
   `<alias>-profile.json` (shipped 2026-06-25); the remaining piece is

@@ -265,6 +265,19 @@ web:
 # pass then works the plan with the full toolset. See
 # .kiro/specs/phase12-planning-execution/ for the design.
 #
+# IMPORTANT - plan election is model-dependent, not automatic. Whether
+# a bound model actually emits a plan when handed the planner prompt
+# varies a lot by model, and a weak model can elect 0% of the time -
+# in which case enabling orchestration on it produces NO plans and the
+# turn silently runs like the flat loop (the feature is "on" but does
+# nothing). Measured on the reference roster: qwen3:14b elects ~100%
+# (a capable, if slow, planner); hermes3:8b elects 0% (never plans).
+# So: if your executor is a small/weak model, do NOT just flip
+# `enabled: true` on it - point `planner_alias` (below) at a capable
+# model so the plan pass runs there. Check a candidate's plan-election
+# before binding: see docs/choosing-a-model.md and the "plan-election"
+# finding in docs/observed-issues.md.
+#
 # Fail-loud (Principle 11): an entry for an alias that isn't in
 # `aliases:` above - or a `planner_alias` that isn't a configured
 # alias - refuses to boot.
