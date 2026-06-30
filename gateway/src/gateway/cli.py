@@ -1889,7 +1889,11 @@ def profile_alias_cmd(
         write_profile,
     )
     from .config import fitt_home
+    from .cron_runner import _AutoApproveWrapper
+    from .planner import measure_plan_election
     from .router import AliasRouter
+    from .scenarios import daily_news_summary
+    from .tools import ToolContext
 
     cfg = load_config(config_file or default_config_path(), default_secrets_path())
     if alias not in cfg.aliases:
@@ -1900,10 +1904,34 @@ def profile_alias_cmd(
 
     os.environ.setdefault("FITT_SKIP_SHELL_PROBE", "1")
     app = create_app(cfg)
-    registry = app.state.tool_registry
+    state = app.state
+    registry = state.tool_registry
     router = AliasRouter(cfg)
     primary = router.resolve(alias)[0]
     system_prompt = build_capability_block(registry) if registry.list_names() else ""
+
+    # Auto-approve so the planner pass's todowrite (and any ask-bucket
+    # tool) doesn't block on an approval tap that won't come in this
+    # headless run. The deny list is still enforced.
+    approval = _AutoApproveWrapper(state.approval)
+
+    def _make_ctx(session_key: str) -> ToolContext:
+        return ToolContext(
+            client="cli",
+            session_key=session_key,
+            projects=state.project_registry,
+            backend=state.execution_backend,
+            policy=registry.policy,
+            audit=state.audit,
+            cron=state.cron,
+            events=state.events,
+            local_shell=state.local_shell,
+            lessons=state.lessons,
+            turns=None,
+            turn_id=None,
+            web_search_backend=cfg.web.search_backend,
+            plan_store=state.plan_store,
+        )
 
     # Declared facts: free + static, Ollama backends only. A non-Ollama
     # backend (no /api/tags) just carries no declared block.
@@ -1919,10 +1947,11 @@ def profile_alias_cmd(
 
     _console.print(
         f"[cyan]profiling[/cyan] {alias} (model=`{primary.id}`), "
-        f"{samples} samples/case — this runs the suites live, give it a minute..."
+        f"{samples} samples/case — this runs the suites + planner pass live, "
+        f"give it a minute..."
     )
 
-    async def _measure() -> tuple[list[Any], list[Any]]:
+    async def _measure() -> tuple[list[Any], list[Any], Any]:
         tool = await run_eval_suite_multi(
             alias,
             router,
@@ -1940,9 +1969,23 @@ def profile_alias_cmd(
             samples=samples,
             timeout_s=timeout_s,
         )
-        return tool, coding
+        # Plan-election: run the planner pass on the canonical multi-step
+        # prompt and record how often the alias emits a plan (the same
+        # election signal tasks 23/25 measured, isolated to the planner
+        # pass). A fact for the reconciler, not yet a recommendation.
+        election = await measure_plan_election(
+            alias=alias,
+            user_message=daily_news_summary().user_message,
+            samples=samples,
+            alias_router=router,
+            tool_registry=registry,
+            approval=approval,
+            make_tool_ctx=_make_ctx,
+            prompt_resolver=state.prompt_resolver,
+        )
+        return tool, coding, election
 
-    tool_results, coding_results = asyncio.run(_measure())
+    tool_results, coding_results, election_result = asyncio.run(_measure())
 
     def _suite_grade(name: str, results: list[Any]) -> Any:
         passes = sum(r.passes for r in results)
@@ -1965,6 +2008,16 @@ def profile_alias_cmd(
         measured=[
             _suite_grade("tool-calling", tool_results),
             _suite_grade("coding", coding_results),
+            grade_from_samples(
+                "plan-election",
+                passes=election_result.passes,
+                valid=election_result.valid,
+                samples=election_result.total,
+                latencies_ms=election_result.latencies_ms,
+                in_tokens=election_result.in_tokens,
+                out_tokens=election_result.out_tokens,
+                notes="share of planner passes on a multi-step prompt that emitted a plan",
+            ),
         ],
         resource=resource,
     )

@@ -10,13 +10,15 @@ sent.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from gateway.config import ModelConfig
+from gateway.errors import NoBackendAvailable
 from gateway.plan_store import PlanStore
-from gateway.planner import run_planner_pass
+from gateway.planner import measure_plan_election, run_planner_pass
 from gateway.projects import ProjectRegistry
 from gateway.prompt_resolver import PromptResolver
 from gateway.router import DispatchResult
@@ -343,3 +345,132 @@ async def test_planner_nudge_can_be_disabled() -> None:
     )
     assert result.planned is False
     assert len(router.bodies) == 1
+
+
+# --------------------------------------------------------------- plan-election measurement
+
+
+def _ctx_factory(store: PlanStore) -> Callable[[str], ToolContext]:
+    """A make_tool_ctx factory mirroring the profiler/scenario wiring:
+    each session_key gets its own ToolContext over a shared PlanStore
+    (the store is session-keyed, so samples stay independent)."""
+
+    def _make(session_key: str) -> ToolContext:
+        return ToolContext(
+            client="cli",
+            session_key=session_key,
+            projects=ProjectRegistry(Path("nonexistent.yaml")),
+            plan_store=store,
+        )
+
+    return _make
+
+
+class _RaisingRouter:
+    """Dispatch always raises NoBackendAvailable (a dropped backend)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def dispatch(self, alias: str, body: dict[str, Any]) -> DispatchResult:
+        self.calls += 1
+        raise NoBackendAvailable("backend dropped mid-run")
+
+    def resolve(self, alias: str) -> list[ModelConfig]:
+        return [_MODEL]
+
+
+async def test_measure_plan_election_counts_elections() -> None:
+    """Three samples (elect, elect, elect-out) give passes=2 over valid=3,
+    with cost lists populated for every valid sample."""
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            # sample 1: emits a plan, then a natural-stop reply
+            _resp(tool_calls=[_todowrite_call([{"text": "search"}])]),
+            _resp(content="planned"),
+            # sample 2: emits a plan, then a reply
+            _resp(tool_calls=[_todowrite_call([{"text": "summarise"}])]),
+            _resp(content="planned"),
+            # sample 3: elects not to plan
+            _resp(content="single step; no plan needed"),
+        ]
+    )
+    result = await measure_plan_election(
+        alias="fitt-ec2-qwen3",
+        user_message="summarise today's news",
+        samples=3,
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        make_tool_ctx=_ctx_factory(store),
+        prompt_resolver=PromptResolver(),
+    )
+    assert result.total == 3
+    assert result.transient == 0
+    assert result.valid == 3
+    assert result.passes == 2
+    # cost lists carry one entry per valid sample (capability + cost).
+    assert len(result.latencies_ms) == 3
+    assert len(result.in_tokens) == 3
+    assert len(result.out_tokens) == 3
+
+
+async def test_measure_plan_election_excludes_transient() -> None:
+    """A dropped backend is recorded transient and excluded from the
+    denominator (multi-sample convention 3): valid=0, no signal."""
+    store = PlanStore()
+    result = await measure_plan_election(
+        alias="fitt-ec2-qwen3",
+        user_message="summarise today's news",
+        samples=2,
+        alias_router=_RaisingRouter(),  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        make_tool_ctx=_ctx_factory(store),
+        prompt_resolver=PromptResolver(),
+    )
+    assert result.total == 2
+    assert result.transient == 2
+    assert result.valid == 0
+    assert result.passes == 0
+    assert result.latencies_ms == []
+    assert result.in_tokens == []
+
+
+async def test_measure_plan_election_feeds_grade() -> None:
+    """The aggregate plugs straight into grade_from_samples to become the
+    profiler's ``plan-election`` MeasuredGrade (pass_rate over valid)."""
+    from gateway.capability_profile import grade_from_samples
+
+    store = PlanStore()
+    router = _SeqRouter(
+        [
+            _resp(tool_calls=[_todowrite_call([{"text": "a"}])]),
+            _resp(content="planned"),
+            _resp(content="no plan needed"),
+        ]
+    )
+    result = await measure_plan_election(
+        alias="fitt-ec2-qwen3",
+        user_message="summarise today's news",
+        samples=2,
+        alias_router=router,  # type: ignore[arg-type]
+        tool_registry=_registry(),
+        approval=_AutoApprove(),
+        make_tool_ctx=_ctx_factory(store),
+        prompt_resolver=PromptResolver(),
+    )
+    grade = grade_from_samples(
+        "plan-election",
+        passes=result.passes,
+        valid=result.valid,
+        samples=result.total,
+        latencies_ms=result.latencies_ms,
+        in_tokens=result.in_tokens,
+        out_tokens=result.out_tokens,
+    )
+    assert grade.name == "plan-election"
+    assert grade.pass_rate == 0.5
+    assert grade.passes == 1
+    assert grade.valid == 2
