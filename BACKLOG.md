@@ -84,6 +84,21 @@ The curated ordering - the judgment call a tool can't make for you.
   unless the news use case matters.
   _(detail: [observed-issues 2026-06-26](docs/observed-issues.md))_
 
+- **Long-running dashboard actions are synchronous (async job + poll)** -
+  validated 2026-06-30: "Measure capability" (and "run eval") hold the
+  HTTP request for the whole run - minutes, because the planner pass is
+  slow. Fine for now (operator-initiated, they expect a wait), but it
+  ties up the connection and offers no progress. The clean fix fits what
+  the dashboard already has: kick off a background run that returns
+  immediately + a status fragment that polls every ~2s via HTMX
+  (`hx-get` + `hx-trigger`) and swaps in the result when done - the
+  job-id + status-poll shape the eval endpoint comment already flagged,
+  and exactly what kiro-monitor models. The profiler's phases
+  (tool-calling -> coding -> plan-election) give natural progress text;
+  no progress-bar framework needed. Applies to `/v1/profile` and
+  `/v1/eval` alike. Graduate when the wait bites.
+  _(source: phase 12.5a live use; see phase12.5 spec deferred)_
+
 ## Tool ergonomics & coverage
 
 - **Eval harness should exercise the REAL registered tools** - today it

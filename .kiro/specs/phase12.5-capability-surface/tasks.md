@@ -144,6 +144,12 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Deferred — see design.md "Future Extensions"
 
+- **Async job + poll for the long-running "measure" / "run eval"
+  actions.** Shipped synchronous in 12.5a (mirrors the eval action);
+  validated 2026-06-30 that the planner pass makes it minutes, holding
+  the request. Upgrade to a background run + HTMX status poll (the
+  job-id + status-poll shape; no progress-bar framework). See BACKLOG
+  "Long-running dashboard actions are synchronous".
 - More profile dimensions (synthesis, context-tolerance, VRAM,
   token-cost, refusal-rate, variance), pulled in by reconciler
   demand.
