@@ -29,77 +29,36 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Plan-election profile dimension + Capability-card row - the first
-  slice of the feature<->capability reconciler; makes "can this model
-  plan?" visible per alias. IN PROGRESS 2026-06-27.
+- Phase 12.5 capability surface (specced 2026-06-30) -> **12.5a: run the
+  profile from the dashboard** (the unblock - no CLI, writes where the
+  dashboard reads). Then 12.5b consolidate the surface (cost-tiered
+  actions), 12.5c the reconciler.
 
 **Next**
-- The feature<->capability reconciler (fitt doctor / Feature readiness).
 - Eval harness over the real registry -> then the message/text and
   edit_file ergonomics fixes.
 
 **Later**
-- Render the profile baseline-diff in the dashboard Capability card.
+- Render the profile baseline-diff in the Capability card (folds into
+  the 12.5b surface).
 - Further capability-profile dimensions (VRAM, token-cost, JSON-
-  validity, refusal rate, variance, context-degradation).
+  validity, refusal rate, variance, context-degradation) - pulled in by
+  12.5c reconciler demand.
 
 ---
 
 ## Capability, eval & observability
 
-- **Reconcile features <-> model capability (`fitt doctor` / a dashboard
-  "Feature readiness" view)** - surfaced 2026-06-27. FITT has feature
-  switches (orchestration/planning, memory, skills, web search) and a
-  per-alias capability profile, but *nothing joins them*. An operator
-  can set `orchestration.enabled: true` on a model that elects to plan
-  0% of the time (hermes3:8b) and get a silently dead feature - the
-  config example documents the knob but not which bound model can
-  actually drive it. The fix is the missing middle layer:
-  1. A small, model-agnostic **feature -> required-capability map**
-     (planning needs plan-election on the alias or its `planner_alias`;
-     a good web_search answer needs synthesis; long history needs
-     context tolerance; etc.), keyed on profile *dimensions*, never
-     model names.
-  2. A pure **reconciler**: per alias, given its enabled features +
-     its profile, report each feature as satisfied / unsatisfied (loud,
-     Principle 11) / unknown (needs `fitt profile alias`). Three-state;
-     "unknown" is first-class.
-  3. **Surfaces**, reusing what exists: a boot warning (same shape as
-     `check_missing_api_keys`, warn-don't-refuse), a dashboard "Feature
-     readiness" card next to the Capability card, and optionally a
-     `fitt doctor` CLI (the shareable "is my setup sane" check).
-  Surfaces/warns, **never auto-disables** (the task-24 operator-in-the-
-  loop commitment; measurements are sample-noisy). Declared facts first
-  (free bounds from `/api/tags`), measured grades only where declared
-  can't answer. Generalises the boot probe (which already checks one
-  capability - tool-calling - loudly at boot) to "check the capabilities
-  the enabled features require." Payoff: defining feature requirements
-  is what makes the deferred profile dimensions (synthesis,
-  orchestration-readiness, context-degradation) *earn their keep* - you
-  measure exactly what some enabled feature needs, in priority order,
-  instead of building all of them speculatively. Spec-worthy when
-  started; the doc-fix half (flagging model-dependent plan election in
-  the config example) shipped 2026-06-27. This is FITT's missing "detect
-  optimal settings" layer - the recommendation engine that turns the
-  facts-only capability profile into "enable these features for this
-  model", per roadmap Principle 12 (adapt the feature set to the model
-  you can run).
-  _(source: this session's "how does benchmarking inform config" thread;
-  related: the three capability-profile items below are sub-parts /
-  data it consumes.)_
-
-- **Plan-election profile dimension + Capability-card row** (Stage 1 of
-  the reconciler above; IN PROGRESS 2026-06-27) - have `fitt profile
-  alias` measure plan-election (run the planner pass k times, report the
-  % that emit a plan) and append it as a measured grade. The Capability
-  card renders it automatically - `_build_profile_view` iterates
-  `profile.measured`, so a new grade shows as a new row with no view/
-  template change. Makes "can this model plan?" visible per alias
-  (qwen3:14b ~100% vs hermes3:8b 0%) - a *fact*, not yet the
-  enable/disable recommendation (that join is the reconciler). The clean
-  subset of phase12's deferred "orchestration-readiness" dimension:
-  election alone is cheaply measurable; plan-AND-follow-through is not
-  (task 26).
+- **Capability surface + feature<->capability reconciler** - PROMOTED
+  TO SPEC 2026-06-30: [`phase12.5-capability-surface`](.kiro/specs/phase12.5-capability-surface/tasks.md).
+  FITT's "detect optimal settings" layer (Principle 12): run the profile
+  from the dashboard (12.5a, the no-CLI unblock), consolidate
+  probe/eval/profile into one cost-tiered Capability surface (12.5b),
+  and add the reconciler - per-feature `satisfied/unsatisfied/unknown`
+  readiness + a boot warning, surfaces never auto-drives (12.5c). Stage
+  1 (the `plan-election` dimension) shipped `3210ee7`. Design + rationale
+  now live in the spec, not here.
+  _(was: this session's "how does benchmarking inform config" thread.)_
 
 - **Render the profile baseline-diff in the Capability card** - the
   card now shows declared facts + measured grades + resources from
