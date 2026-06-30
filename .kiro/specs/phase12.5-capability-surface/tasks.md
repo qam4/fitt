@@ -32,24 +32,26 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 12.5a — Run the profile from the dashboard (the unblock)
 
-- [ ] 1. Extract the profile producer out of `cli.py::profile_alias_cmd`
+- [x] 1. Extract the profile producer out of `cli.py::profile_alias_cmd`
   into a reusable async `run_profile(...)` (in `capability_profile.py`
   or a new `profile_runner.py`) that takes the wired registry/
   router/approval/ctx-factory/prompt-resolver/system-prompt and
   returns a `CapabilityProfile`. CLI becomes a thin wrapper.
   (Req 1.5, 1.6, Property 5)
-- [ ] 2. Add `POST /v1/profile/<alias>` (mirror `/v1/eval/<alias>`
+- [x] 2. Add `POST /v1/profile/<alias>` (mirror `/v1/eval/<alias>`
   and `/v1/probe/<alias>`): bearer-gated, builds wiring from
   `app.state`, runs `run_profile`, writes under the gateway
   `$FITT_HOME/eval/`, returns JSON, 404 typed envelope for an
   unknown alias. (Req 1.1, 1.3, 1.4, Property 2)
-- [ ] 3. Dashboard "measure capability" action on the alias page
+- [x] 3. Dashboard "measure capability" action on the alias page
   that calls the endpoint (async/typed-action pattern, like the
   eval action) and refreshes the Capability card. (Req 1.2)
-- [ ] 4. Tests: `test_profile_runner.py` (producer parity, faked
+- [x] 4. Tests: `test_profile_runner.py` (producer parity, faked
   results), `test_profile_endpoint.py` (shape/auth/404/writes
   under gateway `$FITT_HOME`). (Req 1, 7.3, Properties 2, 5)
-- [ ] 5. ruff/mypy/pytest green (both packages); commit + push.
+- [x] 5. ruff/mypy/pytest green (both packages); commit + push.
+  DONE 2026-06-30: gateway 1669 passed/8 skipped, telegram-bot 199
+  passed; ruff format+check + mypy clean both packages.
 
 ## Phase 12.5b — Consolidate the surface + tier the actions
 

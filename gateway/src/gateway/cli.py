@@ -1871,29 +1871,16 @@ def profile_alias_cmd(
     written + diffed against the stored baseline."""
     import asyncio
     import os
-    from datetime import UTC, datetime
 
-    import httpx as _httpx
-
-    from .alias_eval import realistic_cases, run_eval_suite_multi
-    from .alias_eval_coding import default_coding_cases
     from .app import create_app
-    from .capabilities import build_capability_block
     from .capability_profile import (
-        CapabilityProfile,
-        declared_from_ollama_tags,
-        grade_from_samples,
         load_baseline,
         render_diff_markdown,
         render_profile_markdown,
         write_profile,
     )
     from .config import fitt_home
-    from .cron_runner import _AutoApproveWrapper
-    from .planner import measure_plan_election
-    from .router import AliasRouter
-    from .scenarios import daily_news_summary
-    from .tools import ToolContext
+    from .profile_runner import run_profile
 
     cfg = load_config(config_file or default_config_path(), default_secrets_path())
     if alias not in cfg.aliases:
@@ -1904,126 +1891,17 @@ def profile_alias_cmd(
 
     os.environ.setdefault("FITT_SKIP_SHELL_PROBE", "1")
     app = create_app(cfg)
-    state = app.state
-    registry = state.tool_registry
-    router = AliasRouter(cfg)
-    primary = router.resolve(alias)[0]
-    system_prompt = build_capability_block(registry) if registry.list_names() else ""
-
-    # Auto-approve so the planner pass's todowrite (and any ask-bucket
-    # tool) doesn't block on an approval tap that won't come in this
-    # headless run. The deny list is still enforced.
-    approval = _AutoApproveWrapper(state.approval)
-
-    def _make_ctx(session_key: str) -> ToolContext:
-        return ToolContext(
-            client="cli",
-            session_key=session_key,
-            projects=state.project_registry,
-            backend=state.execution_backend,
-            policy=registry.policy,
-            audit=state.audit,
-            cron=state.cron,
-            events=state.events,
-            local_shell=state.local_shell,
-            lessons=state.lessons,
-            turns=None,
-            turn_id=None,
-            web_search_backend=cfg.web.search_backend,
-            plan_store=state.plan_store,
-        )
-
-    # Declared facts: free + static, Ollama backends only. A non-Ollama
-    # backend (no /api/tags) just carries no declared block.
-    declared: list[Any] = []
-    resource: Any = None
-    if primary.backend == "ollama":
-        try:
-            resp = _httpx.get(f"{primary.endpoint}/api/tags", timeout=10.0)
-            resp.raise_for_status()
-            declared, resource = declared_from_ollama_tags(resp.json(), primary.model)
-        except Exception as exc:
-            _console.print(f"[yellow]could not read declared metadata:[/yellow] {exc}")
 
     _console.print(
-        f"[cyan]profiling[/cyan] {alias} (model=`{primary.id}`), "
-        f"{samples} samples/case — this runs the suites + planner pass live, "
-        f"give it a minute..."
+        f"[cyan]profiling[/cyan] {alias}, {samples} samples/case — this runs the "
+        f"suites + planner pass live, give it a minute..."
     )
 
-    async def _measure() -> tuple[list[Any], list[Any], Any]:
-        tool = await run_eval_suite_multi(
-            alias,
-            router,
-            cases=realistic_cases(),
-            samples=samples,
-            timeout_s=timeout_s,
-            system_prompt=system_prompt,
-        )
-        # Coding cases embed their own realistic system prompt in the
-        # prompt text, so no separate system_prompt here.
-        coding = await run_eval_suite_multi(
-            alias,
-            router,
-            cases=default_coding_cases(),
-            samples=samples,
-            timeout_s=timeout_s,
-        )
-        # Plan-election: run the planner pass on the canonical multi-step
-        # prompt and record how often the alias emits a plan (the same
-        # election signal tasks 23/25 measured, isolated to the planner
-        # pass). A fact for the reconciler, not yet a recommendation.
-        election = await measure_plan_election(
-            alias=alias,
-            user_message=daily_news_summary().user_message,
-            samples=samples,
-            alias_router=router,
-            tool_registry=registry,
-            approval=approval,
-            make_tool_ctx=_make_ctx,
-            prompt_resolver=state.prompt_resolver,
-        )
-        return tool, coding, election
-
-    tool_results, coding_results, election_result = asyncio.run(_measure())
-
-    def _suite_grade(name: str, results: list[Any]) -> Any:
-        passes = sum(r.passes for r in results)
-        valid = sum(r.valid for r in results)
-        total = sum(r.total for r in results)
-        latencies = [s.latency_ms for r in results for s in r.samples]
-        return grade_from_samples(
-            name,
-            passes=passes,
-            valid=valid,
-            samples=total,
-            latencies_ms=latencies,
-        )
-
-    profile = CapabilityProfile(
-        alias=alias,
-        model_id=primary.id,
-        captured_at=datetime.now(UTC),
-        declared=declared,
-        measured=[
-            _suite_grade("tool-calling", tool_results),
-            _suite_grade("coding", coding_results),
-            grade_from_samples(
-                "plan-election",
-                passes=election_result.passes,
-                valid=election_result.valid,
-                samples=election_result.total,
-                latencies_ms=election_result.latencies_ms,
-                in_tokens=election_result.in_tokens,
-                out_tokens=election_result.out_tokens,
-                notes="share of planner passes on a multi-step prompt that emitted a plan",
-            ),
-        ],
-        resource=resource,
-    )
-
-    # Load the baseline BEFORE writing (write overwrites it for next time).
+    # Load the baseline BEFORE the run writes (write overwrites it).
     baseline = load_baseline(alias, fitt_home())
+    profile = asyncio.run(
+        run_profile(alias=alias, cfg=cfg, state=app.state, samples=samples, timeout_s=timeout_s)
+    )
     md_path, _json_path = write_profile(profile, fitt_home())
 
     _console.print("")

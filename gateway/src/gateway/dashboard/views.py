@@ -2275,6 +2275,43 @@ async def _action_run_eval(
     )
 
 
+async def _action_profile_alias(request: Request, *, alias: str) -> tuple[bool, str]:
+    """Build a capability profile for ONE alias from the dashboard
+    — the same producer ``POST /v1/profile/<alias>`` uses. Writes
+    under the gateway's ``$FITT_HOME/eval/`` so the Capability card
+    picks it up (no host-vs-container path mismatch — the gateway
+    runs it).
+
+    Uses a modest sample count to keep the synchronous dashboard run
+    bounded (the planner pass is slow on thinking models); the CLI /
+    endpoint default to more samples for a sharper read."""
+    if not alias:
+        return False, "Missing alias"
+    config = request.app.state.config
+    if alias not in config.aliases:
+        return False, f"Unknown alias {alias!r}"
+    from ..capability_profile import write_profile
+    from ..config import fitt_home as _fh
+    from ..profile_runner import run_profile
+
+    try:
+        profile = await run_profile(
+            alias=alias, cfg=config, state=request.app.state, samples=3, timeout_s=30.0
+        )
+    except Exception as exc:
+        return False, f"Profile failed: {type(exc).__name__}: {exc}"
+    try:
+        write_profile(profile, _fh())
+    except Exception:
+        # Persistence failure shouldn't fail the action; the audit
+        # trail captures the run.
+        pass
+    grades = ", ".join(
+        f"{g.name} {g.pass_rate * 100:.0f}%" for g in profile.measured if g.pass_rate is not None
+    )
+    return True, f"Profiled {alias} — {grades or 'no gradeable signal'}"
+
+
 def _action_redirect(target: str, message: str, *, color: str) -> Response:
     """Redirect to ``target`` with a one-shot banner."""
     from urllib.parse import quote_plus as _quote
@@ -4056,6 +4093,26 @@ def build_views_router() -> APIRouter:
             action_args={"alias": cleaned, "suite": cleaned_suite},
             redirect_target=target,
             run=lambda: _action_run_eval(request, alias=cleaned, suite=cleaned_suite),
+        )
+
+    @router.post("/actions/profile-alias", response_class=HTMLResponse)
+    async def profile_alias_action(
+        request: Request,
+        csrf_token: str = Form(""),
+        alias: str = Form(""),
+    ) -> Response:
+        """Build the capability profile for ONE alias (Phase 12.5a).
+        Redirects back to that alias's page so the operator sees the
+        fresh Capability card in context."""
+        cleaned = alias.strip()
+        target = f"/dashboard/alias/{cleaned}" if cleaned else "/dashboard/aliases"
+        return await _run_typed_action(
+            request,
+            csrf_token=csrf_token,
+            action_name="profile_alias",
+            action_args={"alias": cleaned},
+            redirect_target=target,
+            run=lambda: _action_profile_alias(request, alias=cleaned),
         )
 
     return router

@@ -66,7 +66,16 @@
 
 {# ---------------------------------------------------------- capability profile #}
 <div class="card">
-  <h3>Capability profile</h3>
+  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+    <h3 style="margin: 0; flex-grow: 1;">Capability profile</h3>
+    {% if alias_known %}
+    <form method="post" action="/dashboard/actions/profile-alias" style="display: inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="alias" value="{{ alias }}">
+      <button type="submit" title="Runs the eval suites + planner pass live — minutes on a slow model">Measure capability</button>
+    </form>
+    {% endif %}
+  </div>
   {% if profile %}
   <p class="dim" style="font-size: 12px;">
     model <code>{{ profile.model_id or "?" }}</code> · captured {{ profile.captured_at }}
@@ -127,9 +136,10 @@
   </p>
   {% else %}
   <div class="empty">
-    No capability profile on disk. Run
-    <code>fitt profile alias {{ alias }}</code> to capture declared
-    facts + measured tool-calling / coding grades.
+    No capability profile yet. Click <strong>Measure capability</strong>
+    above (or run <code>fitt profile alias {{ alias }}</code>) to capture
+    declared facts + measured tool-calling / coding / plan-election
+    grades. The run takes a few minutes on a slow model.
   </div>
   {% endif %}
 </div>

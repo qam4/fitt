@@ -723,6 +723,7 @@ def create_app(config: Config) -> FastAPI:
     from .mcp_endpoint import router as mcp_router
     from .models_endpoint import router as models_router
     from .probe_endpoint import router as probe_router
+    from .profile_endpoint import router as profile_router
     from .status_endpoint import router as status_router
     from .turn_capture_endpoint import router as turn_capture_router
 
@@ -736,6 +737,7 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(turn_capture_router)
     app.include_router(eval_router)
     app.include_router(probe_router)
+    app.include_router(profile_router)
 
     # Phase 7 Slice 7.5: dashboard router + static assets. The
     # dashboard handles its own auth (cookie-or-bearer); see
