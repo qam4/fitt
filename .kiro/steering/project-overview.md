@@ -213,6 +213,41 @@ Firewall on the Hub).
     `X-FITT-Client`), use it — don't ask users to declare things
     the system can figure out.
 
+## Model capability: the measurement ladder
+
+A small but recurring slice (Principle 12: adapt the feature set to
+the model you can run). Captured here so it isn't re-derived every
+session. Two subjects — never conflate them:
+
+- **Model** — "what can this model do?" A cost-tiered ladder.
+- **Tools** — "are my tools well-formed / consistent (incl. MCP +
+  skills)?" A cheap offline check that reads whatever's registered.
+  *Not built yet.*
+
+The model ladder, each rung strictly cheaper than the next:
+
+- **ping / reachability** — is the host up? (no inference;
+  `reachability.py`)
+- **probe** — can it emit *one* tool call at all? (one inference;
+  catches "reachable but narrates"; `alias_probe.py`)
+- **eval** — how reliably does it tool-call across representative
+  cases, under prompt pressure? (minutes, k-sampled;
+  default / coding / realistic suites)
+- **profile** — aggregate of declared facts + measured grades + cost
+  vs a baseline (runs the eval engine + plan-election;
+  `capability_profile.py`)
+- **reconciler** — given the profile, which *enabled features* can
+  this model drive? satisfied / unsatisfied / unknown
+  (`capability_reconcile.py`)
+
+"Benchmarking" is the informal umbrella for this whole activity, not
+a specific rung. The rungs use *representatives*, not the full tool
+inventory — the ladder tests the model, not every tool (so it doesn't
+grow with the registry, and MCP/skills tools it can't foresee are the
+tool-check's job, not the eval's). North star: **measure the model →
+recommend features → operator confirms.** Never auto-drive off a
+noisy, sample-limited measurement.
+
 ## Architecture highlights
 
 - **Gateway** (Phase 1): FastAPI daemon on the Hub, runs as a

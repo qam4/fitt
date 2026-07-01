@@ -33,6 +33,46 @@ doc.
 
 ---
 
+## Liveness bullet conflates fresh-shallow reachability with stale-deep probe; nothing auto-refreshes
+
+**First observed:** 2026-07-01 (walking the ping/probe/eval/profile
+vocabulary; see project-overview "measurement ladder").
+**Tag:** Phase 7.6 / probe clarity / dashboard freshness.
+
+Two findings from reading the reachability + probe wiring:
+
+1. **The colored alias bullet shows the probe (a tool call), not
+   reachability.** `_probe_pip(probe.status)` drives it. So "green"
+   means "last tool-call probe was ok", not "host is up right now".
+   The two answer different questions: reachability is cheap and
+   shallow (a granite-shape model is reachable but narrates -> would
+   show green wrongly); the probe is deep but expensive.
+2. **Nothing refreshes either signal on a schedule.** The probe runs
+   at boot (`_run_boot_probe`) and on manual re-probe only - no
+   periodic task (cron/pruners/context-populate are the only loops).
+   Reachability (`reachability.check_reachable`) is recomputed fresh
+   only when `/ready` is hit, and isn't stored on the alias state the
+   dashboard reads. So on a long-lived gateway the bullet reflects a
+   boot-time probe that can be days old - which is exactly why 12.5b
+   added a "stale" flag to the liveness line.
+
+**Cost:** a stale-green bullet can imply an alias is healthy when it
+isn't (or vice versa) - low-frequency but misleading during an
+incident.
+
+**Fix shape:** decide what the at-a-glance bullet is *for*. If it's a
+live "is this up" dot, back it with the cheap signal (reachability)
+and add a small periodic ping so it's actually fresh; show the deeper
+probe verdict as a separate, timestamped line ("tool-call: ok, 2d
+ago"). If it stays probe-backed, surface staleness everywhere (the
+alias page does now; the aliases-table bullet still doesn't). The
+underlying gap is "no background refresh of either signal" - fix that
+before bikeshedding the color. Belongs to the `phase7.6-probe-clarity`
+lineage (owns pip semantics + the amber/green/red rules), not the
+eval-harness thread this surfaced from.
+
+**Urgency:** low. A note, not a fire.
+
 ## Capable model (qwen3:14b) synthesizes from real search content - relay was model weakness, not prompt
 
 **First observed:** 2026-06-26 (synthesis-vs-relay retest; BACKLOG follow-on

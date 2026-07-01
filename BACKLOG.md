@@ -105,6 +105,16 @@ The curated ordering - the judgment call a tool can't make for you.
   tests synthetic re-declared schemas, so schema-ergonomics bugs in the
   shipped registry (the `cron_add` failure) are invisible by
   construction. Prerequisite for the two below.
+  **Framing (see project-overview "measurement ladder"):** two distinct
+  subjects, don't conflate. (a) *Model* - can it tool-call? The eval
+  measures this and a representative handful of cases is enough; feeding
+  it the *real* tool forms (not lookalikes) is the small targeted fix, so
+  the shipped `cron_add`/`edit_file` shapes finally face a model. (b)
+  *Tools* - are the forms consistent/callable? That's a separate, cheap,
+  *offline* check that reads whatever's registered (incl. MCP + skills
+  that no hand-written per-tool case could ever cover). Don't try to
+  live-eval every tool - the ladder tests the model with representatives,
+  not the inventory.
   _(source: [observed-issues](docs/observed-issues.md))_
 - **Normalise "the words" tool-arg naming** - `cron_add` uses `message`,
   `send_message`/`learn_add` use `text`; the inconsistency has already
