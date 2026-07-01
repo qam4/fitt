@@ -722,6 +722,73 @@ async def test_edit_file_rejects_multiple_occurrences(
     assert len(backend.calls) == 1  # no write
 
 
+async def test_edit_file_zero_occurrence_quotes_near_miss(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """A near-miss (here an indentation mismatch: the file uses a tab,
+    old_str uses spaces) quotes the closest on-disk text so the model can
+    reproduce the exact bytes instead of guessing again."""
+    backend = FakeBackend(responses=[_ok(stdout="def f():\n\treturn 1\n")])
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "x.py",
+            "old_str": "    return 1",  # 4 spaces — file has a tab
+            "new_str": "    return 2",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "not found" in result.payload
+    assert "Closest text" in result.payload
+    assert "return 1" in result.payload
+    assert len(backend.calls) == 1  # no write
+
+
+async def test_edit_file_zero_occurrence_silent_when_nothing_close(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """When nothing in the file resembles old_str, we DON'T quote a
+    misleading "closest" region — just the plain not-found error."""
+    backend = FakeBackend(responses=[_ok(stdout="totally unrelated content\n")])
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "x.py",
+            "old_str": "xyzzy_plugh_nothing_alike",
+            "new_str": "z",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "not found" in result.payload
+    assert "Closest text" not in result.payload
+
+
+async def test_edit_file_multiple_occurrence_reports_line_numbers(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """The >1-match error names where the matches start so the model can
+    add disambiguating context at the right spot."""
+    backend = FakeBackend(responses=[_ok(stdout="foo\nfoo\nfoo\n")])
+    tool = tool_registry.lookup("edit_file")
+    result = await tool.callable(
+        {
+            "project": "hub",
+            "path": "x.py",
+            "old_str": "foo",
+            "new_str": "bar",
+        },
+        _ctx(project_registry, backend),
+    )
+    assert result.is_error
+    assert "matches 3 places" in result.payload
+    assert "line 1" in result.payload
+    assert "line 2" in result.payload
+
+
 async def test_edit_file_empty_old_str(
     tool_registry: ToolRegistry, project_registry: ProjectRegistry
 ) -> None:

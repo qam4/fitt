@@ -29,11 +29,11 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- `cron_add` / `cron_update` payload arg renamed `message` -> `text`
-  (DONE 2026-07-01) so the text-payload family agrees; the Lane (b) lint
-  guards it going forward. Remaining ergonomics fix: **improve
-  `edit_file`'s error** - quote the near-miss when `old_str` doesn't
-  match exactly once (the real fumble is the error, not the field count).
+- Tool-ergonomics fixes DONE 2026-07-01: `cron_add`/`cron_update` payload
+  arg renamed `message` -> `text` (family lint guards it); `edit_file`
+  errors now quote the near-miss (closest on-disk text on a zero-match,
+  usually a whitespace mismatch) and the match line numbers on a
+  >1-match. Next up is Lane A.
 
 **Next**
 - Feed the eval the REAL tool forms (Lane A: `run_eval_suite` offers
@@ -138,10 +138,11 @@ The curated ordering - the judgment call a tool can't make for you.
   match `send_message` / `learn_add`; the internal `CronJob.message`
   field is unchanged (no on-disk migration). The Lane (b) family lint
   guards against future drift.
-- **Flatten `edit_file`'s fumble surface** - 4 required fields +
-  match-exactly-once; the real ask is to quote the near-miss in the
-  error when `old_str` doesn't match exactly once (an error-ergonomics
-  fix, not a field-count reduction - the 4 fields are legitimate).
+- **Flatten `edit_file`'s fumble surface** - SHIPPED 2026-07-01: the
+  zero-match error now quotes the closest on-disk text (line-windowed
+  difflib; usually reveals a whitespace/indentation mismatch) and the
+  >1-match error names the line numbers where old_str starts. The 4
+  required fields are kept (legitimate); no field-count change.
 - **Planner pass shouldn't execute tools it didn't offer** - gemma4 calls
   an executor tool from the planner pass (side effect of the
   executor-tools hint).

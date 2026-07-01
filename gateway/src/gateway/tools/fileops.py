@@ -42,6 +42,7 @@ search) is a one-line change with deliberate review.
 
 from __future__ import annotations
 
+import difflib
 from typing import Any
 
 from ._types import ApprovalBucket, Tool, ToolContext, ToolResult
@@ -603,6 +604,63 @@ def _dirname(path: str) -> str:
 # --------------------------------------------------------------- edit_file
 
 
+_NEAR_MISS_MAX_CHARS = 600
+"""Cap on the near-miss snippet quoted back in the error. Enough to show
+the block the model was aiming at without dumping a whole function."""
+
+_NEAR_MISS_MIN_RATIO = 0.6
+"""Below this similarity the "closest" region is noise, not a near-miss —
+quoting it would mislead more than help, so we stay silent."""
+
+
+def _find_near_miss(content: str, old_str: str) -> str | None:
+    """Return the file region most similar to ``old_str`` (or ``None`` when
+    nothing is close enough to be useful).
+
+    The overwhelmingly common ``edit_file`` failure is a whitespace or
+    indentation mismatch: the model's ``old_str`` is *nearly* right but a
+    tab/space or a trimmed line stops the exact match. Quoting the closest
+    on-disk text lets the model see the exact bytes it must reproduce,
+    turning a blind retry into a targeted one. Line-windowed
+    :class:`difflib.SequenceMatcher` over a size-capped file is cheap."""
+    content_lines = content.splitlines()
+    needle_lines = old_str.splitlines() or [old_str]
+    n = len(needle_lines)
+    if not content_lines:
+        return None
+    needle = "\n".join(needle_lines)
+    best_ratio = 0.0
+    best_window: list[str] = []
+    # Slide an n-line window across the file; if old_str has more lines
+    # than the file, compare against the whole file (one window).
+    if n >= len(content_lines):
+        windows = [content_lines]
+    else:
+        windows = [content_lines[i : i + n] for i in range(len(content_lines) - n + 1)]
+    for window in windows:
+        ratio = difflib.SequenceMatcher(None, "\n".join(window), needle).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_window = window
+    if not best_window or best_ratio < _NEAR_MISS_MIN_RATIO:
+        return None
+    snippet = "\n".join(best_window)
+    if len(snippet) > _NEAR_MISS_MAX_CHARS:
+        snippet = snippet[:_NEAR_MISS_MAX_CHARS] + "…"
+    return snippet
+
+
+def _match_line_numbers(content: str, needle: str, *, limit: int = 5) -> list[int]:
+    """1-based line numbers where ``needle`` starts in ``content`` (up to
+    ``limit``). Helps the model disambiguate a >1-match failure."""
+    lines: list[int] = []
+    pos = content.find(needle)
+    while pos != -1 and len(lines) < limit:
+        lines.append(content.count("\n", 0, pos) + 1)
+        pos = content.find(needle, pos + 1)
+    return lines
+
+
 async def _tool_edit_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     """Surgical replacement: find ``old_str`` once, replace with
     ``new_str``.
@@ -648,14 +706,29 @@ async def _tool_edit_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # Validate exactly-one-occurrence.
     count = current.count(old_str)
     if count == 0:
+        near = _find_near_miss(current, old_str)
+        hint = ""
+        if near is not None:
+            hint = (
+                "\n\nClosest text in the file — your old_str must match this "
+                "exactly, including whitespace and indentation:\n"
+                f"----\n{near}\n----"
+            )
         return ToolResult.error(
             f"old_str not found in {safe}. Re-read the file with read_file "
-            "and include enough surrounding context for a unique match."
+            "and include enough surrounding context for a unique match." + hint
         )
     if count > 1:
+        line_nums = _match_line_numbers(current, old_str)
+        where = ""
+        if line_nums:
+            shown = ", ".join(f"line {n}" for n in line_nums)
+            more = " (and more)" if count > len(line_nums) else ""
+            where = f" It starts at {shown}{more}."
         return ToolResult.error(
-            f"old_str matches {count} places in {safe}. Include more "
-            "surrounding context so the match is unique."
+            f"old_str matches {count} places in {safe}.{where} Include more "
+            "surrounding context (e.g. the line above or below) so the match "
+            "is unique."
         )
 
     new_content = current.replace(old_str, new_str, 1)
