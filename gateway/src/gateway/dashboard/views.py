@@ -1615,10 +1615,20 @@ def _build_settings_context(request: Request) -> dict[str, Any]:
                 ssh_pubkey = None
 
     # Run the boot validators a second time so the operator
-    # sees what they'd see on a restart.
+    # sees what they'd see on a restart. This card is the single
+    # "what would boot warn about" surface, so it aggregates every
+    # boot check (they otherwise only reach the logs): missing api
+    # keys, capability-feature mismatches (12.5c), and tool-schema
+    # ergonomics footguns.
+    from ..capability_reconcile import check_unsatisfied_features
     from ..config import check_missing_api_keys
+    from ..tool_consistency import check_tool_consistency
 
-    config_warnings = check_missing_api_keys(config)
+    config_warnings = list(check_missing_api_keys(config))
+    config_warnings.extend(check_unsatisfied_features(config, _fitt_home()))
+    registry = getattr(request.app.state, "tool_registry", None)
+    if registry is not None:
+        config_warnings.extend(check_tool_consistency(registry.list_all()))
 
     return {
         "aliases": config.aliases,

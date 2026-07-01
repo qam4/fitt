@@ -29,16 +29,17 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Eval harness over the REAL registered tools -> the keystone that
-  unblocks the two ergonomics fixes below. Framing settled 2026-07-01
-  (see the entry under "Tool ergonomics"): the eval measures the *model*
-  with representatives; a separate cheap *offline* check covers all
-  tools (incl. MCP/skills). Feed the eval real tool forms; build the
-  offline consistency check as its own thing.
+- Act on the tool-consistency lint (shipped 2026-07-01,
+  `tool_consistency.py`, boot log + Settings "Boot-time warnings"
+  card): **normalise the payload field name** (`cron_add` /
+  `cron_update` `message` -> `text` to match `send_message` /
+  `learn_add`) and **flatten `edit_file`'s required surface**. The lint
+  now flags both and catches regressions, so these are safe to do.
 
 **Next**
-- The message/text and edit_file ergonomics fixes (need the real-registry
-  eval first).
+- Feed the eval the REAL tool forms (Lane A: `run_eval_suite` offers
+  `registry.list_all()` schemas instead of hand-written lookalikes,
+  cases reference tool names) — the model-side half, a bigger refactor.
 
 **Later**
 - Render the profile baseline-diff in the Capability card (folds into
@@ -120,6 +121,14 @@ The curated ordering - the judgment call a tool can't make for you.
   that no hand-written per-tool case could ever cover). Don't try to
   live-eval every tool - the ladder tests the model with representatives,
   not the inventory.
+  **Lane (b) SHIPPED 2026-07-01:** `tool_consistency.py` -
+  `check_tool_consistency(tools)` flags payload-field-name
+  inconsistency, heavy required surfaces, and empty descriptions;
+  logged at boot (`tools.inconsistent_schema`) and surfaced on the
+  Settings "Boot-time warnings" card (which now aggregates all boot
+  checks). **Lane (a) remains:** feed `run_eval_suite` the real
+  `registry.list_all()` schemas (cases reference tool names) - the
+  bigger, model-side refactor (Next).
   _(source: [observed-issues](docs/observed-issues.md))_
 - **Normalise "the words" tool-arg naming** - `cron_add` uses `message`,
   `send_message`/`learn_add` use `text`; the inconsistency has already

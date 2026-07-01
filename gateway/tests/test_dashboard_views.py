@@ -3695,6 +3695,21 @@ def test_alias_page_readiness_unknown_points_at_measure(tmp_path: Path, monkeypa
     assert "unknown" in body
 
 
+def test_settings_surfaces_tool_consistency_warnings(tmp_path: Path) -> None:
+    """The shipped tool schemas disagree on the payload field name
+    (`message` vs `text`), so the Settings "Boot-time warnings" card
+    surfaces it — the lint isn't log-only."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    body = tc.get("/dashboard/settings", headers=_auth()).text
+    assert "Boot-time warnings" in body
+    assert "disagree" in body
+    assert "cron_add" in body
+
+
 def test_parse_eval_report_full_reads_json_sidecar(tmp_path) -> None:
     """The dashboard prefers the structured JSON sidecar over
     regex-parsing the markdown (a deliberately-stale .md is ignored)."""

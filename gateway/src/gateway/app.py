@@ -345,6 +345,19 @@ def create_app(config: Config) -> FastAPI:
         )
     )
     app.state.tool_registry = tool_registry
+
+    # BACKLOG (tool ergonomics): lint the registered tool schemas for
+    # consistency/ergonomics footguns (inconsistent payload-field names,
+    # heavy required surfaces, missing descriptions). Model-independent —
+    # it just reads the schemas. Logged here at boot and re-run live on
+    # the dashboard Settings "Boot-time warnings" card. Covers inline
+    # tools now; MCP tools register during the startup event, so the
+    # Settings re-run (post-startup) picks those up too.
+    from .tool_consistency import check_tool_consistency
+
+    for warning in check_tool_consistency(tool_registry.list_all()):
+        _log.error("tools.inconsistent_schema", extra={"detail": warning})
+
     if tool_policy.approval_timeout_secs is not None:
         app.state.approval = ApprovalMiddleware(
             tool_registry,
