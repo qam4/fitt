@@ -18,16 +18,35 @@ the tool registry comes up with the expected tool names so Task
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import gateway.app as app_module
 from gateway.app import create_app
 from gateway.approval import ApprovalMiddleware
+from gateway.capability_profile import CapabilityProfile, MeasuredGrade, write_profile
+from gateway.config import AliasOrchestrationConfig
 from gateway.projects import ProjectRegistry
 from gateway.tools import ExecutionBackend, ToolRegistry
 
 from ._fixtures import build_test_config
+
+
+def _election_profile(alias: str, rate: float) -> CapabilityProfile:
+    """A profile whose plan-election dimension carries ``rate``."""
+    return CapabilityProfile(
+        alias=alias,
+        model_id="m",
+        captured_at=datetime.now(UTC),
+        measured=[
+            MeasuredGrade(
+                name="plan-election", pass_rate=rate, passes=int(rate * 5), valid=5, samples=5
+            )
+        ],
+    )
 
 
 def test_create_app_attaches_phase4_state(tmp_path: Path) -> None:
@@ -39,6 +58,37 @@ def test_create_app_attaches_phase4_state(tmp_path: Path) -> None:
     assert isinstance(app.state.execution_backend, ExecutionBackend)
     assert isinstance(app.state.tool_registry, ToolRegistry)
     assert isinstance(app.state.approval, ApprovalMiddleware)
+
+
+def test_boot_warns_on_unsatisfied_feature(tmp_path: Path, monkeypatch) -> None:
+    """12.5c task 14: an enabled feature the bound model can't drive
+    (planning on a 0%-election profile) logs an ERROR at boot, mirroring
+    check_missing_api_keys — and create_app still returns (never raises)."""
+    monkeypatch.setenv("FITT_HOME", str(tmp_path))
+    write_profile(_election_profile("fitt-default", 0.0), tmp_path)
+    cfg = build_test_config(tmp_path)
+    cfg.orchestration["fitt-default"] = AliasOrchestrationConfig(enabled=True)
+
+    with patch.object(app_module, "_log") as mock_log:
+        app = create_app(cfg)
+
+    events = [call.args[0] for call in mock_log.error.call_args_list if call.args]
+    assert "capability.feature_unsatisfied" in events
+    assert app is not None  # boot completed despite the warning
+
+
+def test_boot_silent_when_feature_satisfied(tmp_path: Path, monkeypatch) -> None:
+    """A satisfied feature (100% election) logs no capability warning."""
+    monkeypatch.setenv("FITT_HOME", str(tmp_path))
+    write_profile(_election_profile("fitt-default", 1.0), tmp_path)
+    cfg = build_test_config(tmp_path)
+    cfg.orchestration["fitt-default"] = AliasOrchestrationConfig(enabled=True)
+
+    with patch.object(app_module, "_log") as mock_log:
+        create_app(cfg)
+
+    events = [call.args[0] for call in mock_log.error.call_args_list if call.args]
+    assert "capability.feature_unsatisfied" not in events
 
 
 def test_tool_registry_is_preloaded(tmp_path: Path) -> None:

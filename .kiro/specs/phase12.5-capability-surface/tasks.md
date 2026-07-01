@@ -115,24 +115,56 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 12.5c — The reconciler (the recommendation)
 
-- [ ] 12. `capability_reconcile.py` (pure): `FeatureRequirement`,
+- [x] 12. `capability_reconcile.py` (pure): `FeatureRequirement`,
   `FeatureReadiness`, `feature_requirements()` (model-agnostic,
   keyed on dimensions; planning → `plan-election`, with
   planner_alias borrow), `reconcile(enabled_features, profile,
   *, planner_profile) -> list[FeatureReadiness]` returning
   satisfied/unsatisfied/unknown. (Req 5.1, 5.2, 5.6)
-- [ ] 13. Render feature readiness in the Capability surface;
+  DONE: pure core (`FeatureRequirement`, `FeatureReadiness`,
+  `ReadinessStatus`, `feature_requirements()`, `reconcile()`) with no
+  IO / no Config import; `feature_requirements()` maps planning →
+  `plan-election` (allow_planner_alias) plus a forward-looking
+  `web_search_answer` → `synthesis` (unmeasured → always `unknown`,
+  demonstrating the three-state). The planner-alias borrow is an OR
+  (satisfied if the alias OR its planner clears the bar). Thin IO wiring
+  (`enabled_features_for_alias`, `readiness_for_alias`,
+  `check_unsatisfied_features`) sits below the pure core.
+- [x] 13. Render feature readiness in the Capability surface;
   `unknown` points at "measure capability". (Req 5.3)
-- [ ] 14. Boot warning in `app.py` (shape of `check_missing_api_keys`):
+  DONE: `_build_alias_page_context` calls `readiness_for_alias`; the
+  Capability card renders a "Feature readiness" table (satisfied/
+  unsatisfied/unknown badges + detail) with a note that `unknown` means
+  the dimension hasn't been measured — run Measure capability.
+- [x] 14. Boot warning in `app.py` (shape of `check_missing_api_keys`):
   ERROR-log each enabled-but-`unsatisfied` feature per alias;
   never refuse to start. (Req 5.4)
-- [ ] 15. Guarantee surfaces-never-drives: reconciler mutates no
+  DONE: `create_app` iterates `check_unsatisfied_features(config,
+  fitt_home())` and logs `capability.feature_unsatisfied` at ERROR right
+  beside the `config.missing_api_key` loop; `unknown` (un-measured) is
+  silent at boot (surfaced on the dashboard instead), and the check never
+  raises.
+- [x] 15. Guarantee surfaces-never-drives: reconciler mutates no
   config and changes no runtime behavior. (Req 5.5, Property 4)
-- [ ] 16. Tests: `test_capability_reconcile.py` (totality +
+  DONE: `reconcile` reads `enabled_features` + profiles and returns
+  frozen `FeatureReadiness` objects; it touches no config field and no
+  app.state. Its only effects are the rendered view (task 13) and the
+  boot log line (task 14). `test_reconcile_never_mutates_inputs`
+  (Property 4).
+- [x] 16. Tests: `test_capability_reconcile.py` (totality +
   three-state Property 3, unknown-on-missing-dimension,
   planner_alias borrow, never-mutates Property 4, hypothesis
   totality); `test_app.py` boot-warning. ruff/mypy/pytest green;
   commit + push.
+  DONE: `test_capability_reconcile.py` (18 tests: three-state, unknown
+  on missing/None/no-profile, planner borrow, never-mutates, hypothesis
+  totality, + IO wiring). Boot warning covered in `test_app_wiring.py`
+  (`test_boot_warns_on_unsatisfied_feature` /
+  `test_boot_silent_when_feature_satisfied`, via a patched app logger —
+  structlog isn't stdlib-configured in tests). Dashboard readiness
+  rendering in `test_dashboard_views.py` (satisfied/unsatisfied +
+  unknown-points-at-measure). Gateway 1695 passed / 8 skipped;
+  telegram-bot 199 passed; ruff+mypy clean both packages.
 
 ## Verification (manual, on the hub / home box)
 

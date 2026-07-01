@@ -3646,6 +3646,55 @@ def test_alias_page_flags_stale_liveness(tmp_path: Path) -> None:
     assert "stale" not in body_fresh
 
 
+def test_alias_page_renders_feature_readiness(tmp_path: Path, monkeypatch) -> None:
+    """12.5c task 13: the Capability surface renders reconciled feature
+    readiness. An orchestration-enabled alias with a 0%-election profile
+    shows planning as unsatisfied; the reconciler surfaces, never drives."""
+    from datetime import UTC, datetime
+
+    from gateway.capability_profile import CapabilityProfile, MeasuredGrade, write_profile
+    from gateway.config import AliasOrchestrationConfig
+
+    monkeypatch.setenv("FITT_HOME", str(tmp_path))
+    grade = MeasuredGrade(name="plan-election", pass_rate=0.0, passes=0, valid=5, samples=5)
+    write_profile(
+        CapabilityProfile(
+            alias="fitt-default",
+            model_id="m",
+            captured_at=datetime.now(UTC),
+            measured=[grade],
+        ),
+        tmp_path,
+    )
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    cfg.orchestration["fitt-default"] = AliasOrchestrationConfig(enabled=True)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    body = tc.get("/dashboard/alias/fitt-default", headers=_auth()).text
+    assert "Feature readiness" in body
+    assert "planning" in body
+    assert "unsatisfied" in body
+
+
+def test_alias_page_readiness_unknown_points_at_measure(tmp_path: Path, monkeypatch) -> None:
+    """An orchestration-enabled alias with no profile shows planning as
+    unknown, nudging the operator at "Measure capability"."""
+    from gateway.config import AliasOrchestrationConfig
+
+    monkeypatch.setenv("FITT_HOME", str(tmp_path))
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    cfg.orchestration["fitt-default"] = AliasOrchestrationConfig(enabled=True)
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+
+    body = tc.get("/dashboard/alias/fitt-default", headers=_auth()).text
+    assert "Feature readiness" in body
+    assert "unknown" in body
+
+
 def test_parse_eval_report_full_reads_json_sidecar(tmp_path) -> None:
     """The dashboard prefers the structured JSON sidecar over
     regex-parsing the markdown (a deliberately-stale .md is ignored)."""

@@ -1036,6 +1036,15 @@ def _build_alias_page_context(request: Request, *, alias: str) -> dict[str, Any]
     audit = getattr(app.state, "audit", None)
     dispatch_counts = _count_dispatches_last_24h(audit)
 
+    # Feature readiness (12.5c): reconcile enabled features against the
+    # measured profile. Surfaces only — never drives (Principle 12).
+    from ..capability_reconcile import readiness_for_alias
+
+    feature_readiness: list[dict[str, str]] = []
+    if alias_known:
+        for r in readiness_for_alias(config, alias, _fitt_home()):
+            feature_readiness.append({"feature": r.feature, "status": r.status, "detail": r.detail})
+
     auth = app.state.dashboard_auth
     csrf_token = _issue_csrf(request, key=auth.key())
 
@@ -1055,6 +1064,7 @@ def _build_alias_page_context(request: Request, *, alias: str) -> dict[str, Any]
         "suites": eval_ctx["suites"],
         "dispatched_24h": dispatch_counts.get(alias, 0),
         "profile": _build_profile_view(alias),
+        "feature_readiness": feature_readiness,
         "csrf_token": csrf_token,
         "client": getattr(request.state, "client", "webui"),
     }

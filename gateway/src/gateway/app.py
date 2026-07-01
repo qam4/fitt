@@ -77,6 +77,17 @@ def create_app(config: Config) -> FastAPI:
     for warning in check_missing_api_keys(config):
         _log.error("config.missing_api_key", extra={"detail": warning})
 
+    # Phase 12.5c: the same fail-loud posture for feature<->capability
+    # mismatches. For each alias with an enabled feature its bound model
+    # can't drive (measured, below the bar), log an ERROR naming the gap.
+    # Never blocks boot — an unsatisfied feature runs degraded, not fatal
+    # (Req 5.4). `unknown` (un-measured) is silent here; the dashboard
+    # surfaces it with a "Measure capability" nudge instead.
+    from .capability_reconcile import check_unsatisfied_features
+
+    for warning in check_unsatisfied_features(config, fitt_home()):
+        _log.error("capability.feature_unsatisfied", extra={"detail": warning})
+
     # Memory store lives for the lifetime of the app. It reads the
     # identity files fresh on every request, so editing them takes
     # effect without a restart.
