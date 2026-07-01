@@ -1,6 +1,6 @@
 # Implementation Plan: FITT Phase 12.5 — Capability Surface
 
-**Status:** in progress
+**Status:** shipped
 
 ## Overview
 
@@ -168,20 +168,25 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Verification (manual, on the hub / home box)
 
-- [ ] V1. From the dashboard, "measure capability" on a home-box
+Closed by operator 2026-07-01 — accepted as shipped. The individual
+hub runs below weren't logged line-by-line; the code paths are
+unit-covered (12.5a/b/c test suites) and the operator chose to close
+rather than gate on a formal live pass.
+
+- [x] V1. From the dashboard, "measure capability" on a home-box
   alias; confirm the profile appears in the Capability surface
   with no CLI run and no `FITT_HOME` mismatch (the original
   "No capability profile on disk" symptom is gone).
-- [ ] V2. "Check alive" on an alias; confirm it returns in seconds
+- [x] V2. "Check alive" on an alias; confirm it returns in seconds
   and triggers no eval/profile run (watch the event stream).
-- [ ] V3. Profile `fitt-ec2-qwen3` and `fitt-ec2-hermes`; confirm
+- [x] V3. Profile `fitt-ec2-qwen3` and `fitt-ec2-hermes`; confirm
   feature readiness shows planning `satisfied` for qwen3 and
   `unsatisfied` for hermes (election 0%), other features
   `unknown`.
-- [ ] V4. Enable `orchestration` on hermes in config, restart;
+- [x] V4. Enable `orchestration` on hermes in config, restart;
   confirm the boot warning names the unsatisfied planning feature
   and the gateway still starts.
-- [ ] V5. `fitt profile alias` still works (producer parity);
+- [x] V5. `fitt profile alias` still works (producer parity);
   `/v1/eval` and `/v1/probe` unchanged.
 
 ## Definition of done

@@ -29,18 +29,22 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Phase 12.5 capability surface (specced 2026-06-30) -> **12.5a: run the
-  profile from the dashboard** (the unblock - no CLI, writes where the
-  dashboard reads). Then 12.5b consolidate the surface (cost-tiered
-  actions), 12.5c the reconciler.
+- Eval harness over the REAL registered tools -> the keystone that
+  unblocks the two ergonomics fixes below. Framing settled 2026-07-01
+  (see the entry under "Tool ergonomics"): the eval measures the *model*
+  with representatives; a separate cheap *offline* check covers all
+  tools (incl. MCP/skills). Feed the eval real tool forms; build the
+  offline consistency check as its own thing.
 
 **Next**
-- Eval harness over the real registry -> then the message/text and
-  edit_file ergonomics fixes.
+- The message/text and edit_file ergonomics fixes (need the real-registry
+  eval first).
 
 **Later**
 - Render the profile baseline-diff in the Capability card (folds into
   the 12.5b surface).
+- Liveness bullet: fresh-shallow vs stale-deep + no auto-refresh
+  (observed 2026-07-01; belongs to phase7.6-probe-clarity).
 - Further capability-profile dimensions (VRAM, token-cost, JSON-
   validity, refusal rate, variance, context-degradation) - pulled in by
   12.5c reconciler demand.
@@ -49,15 +53,16 @@ The curated ordering - the judgment call a tool can't make for you.
 
 ## Capability, eval & observability
 
-- **Capability surface + feature<->capability reconciler** - PROMOTED
-  TO SPEC 2026-06-30: [`phase12.5-capability-surface`](.kiro/specs/phase12.5-capability-surface/tasks.md).
+- **Capability surface + feature<->capability reconciler** - SHIPPED
+  2026-07-01: [`phase12.5-capability-surface`](.kiro/specs/phase12.5-capability-surface/tasks.md).
   FITT's "detect optimal settings" layer (Principle 12): run the profile
   from the dashboard (12.5a, the no-CLI unblock), consolidate
   probe/eval/profile into one cost-tiered Capability surface (12.5b),
   and add the reconciler - per-feature `satisfied/unsatisfied/unknown`
-  readiness + a boot warning, surfaces never auto-drives (12.5c). Stage
-  1 (the `plan-election` dimension) shipped `3210ee7`. Design + rationale
-  now live in the spec, not here.
+  readiness + a boot warning, surfaces never auto-drives (12.5c). All
+  three sub-phases shipped; V1-V5 hub validation closed by operator.
+  The vocabulary this thread kept re-deriving now lives in
+  project-overview steering ("Model capability: the measurement ladder").
   _(was: this session's "how does benchmarking inform config" thread.)_
 
 - **Render the profile baseline-diff in the Capability card** - the
