@@ -1,9 +1,9 @@
 """Tests for the boot-time tool-schema consistency lint.
 
-Pure checks over synthetic Tools, plus an integration assertion that the
-*real* inline registry trips the payload-naming rule (cron_add uses
-`message`, send_message/learn_add use `text`) — the bug the check
-exists to catch."""
+Pure checks over synthetic Tools — including the git_commit false-positive
+guard (a `message` field outside the text-payload family must NOT be
+flagged) — plus an integration assertion that the *real* inline registry
+is payload-consistent after the 2026-07-01 cron rename."""
 
 from __future__ import annotations
 
@@ -18,12 +18,16 @@ async def _noop(_args: dict[str, Any], _ctx: Any) -> Any:  # pragma: no cover - 
 
 
 def _tool(
-    name: str, *, properties: dict[str, Any], required: list[str], description: str = "d"
+    name: str,
+    *,
+    properties: dict[str, Any],
+    required: list[str] | None = None,
+    description: str = "d",
 ) -> Tool:
     schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
-        "required": required,
+        "required": required or [],
         "additionalProperties": False,
     }
     return Tool(
@@ -42,60 +46,39 @@ def _payload(name: str, field: str) -> Tool:
 # --------------------------------------------------------------- payload naming
 
 
-def test_flags_inconsistent_payload_naming() -> None:
+def test_flags_family_tool_using_off_canonical_name() -> None:
+    """A text-payload-family tool (cron_add) using `message` instead of the
+    canonical `text` is flagged."""
     tools = [_payload("send_message", "text"), _payload("cron_add", "message")]
     warnings = check_tool_consistency(tools)
     joined = " ".join(warnings)
-    assert "disagree" in joined
-    assert "text" in joined and "message" in joined
-    assert "send_message" in joined and "cron_add" in joined
+    assert "cron_add" in joined
+    assert "message" in joined and "text" in joined
 
 
-def test_consistent_payload_naming_no_warning() -> None:
+def test_family_all_canonical_no_warning() -> None:
     tools = [_payload("send_message", "text"), _payload("learn_add", "text")]
     assert check_tool_consistency(tools) == []
 
 
-def test_single_payload_variant_no_warning() -> None:
-    assert check_tool_consistency([_payload("only", "message")]) == []
-
-
-def test_non_payload_fields_ignored() -> None:
-    """Fields outside a synonym group never trip the payload rule."""
-    tools = [
-        _tool("a", properties={"id": {"type": "string"}}, required=["id"]),
-        _tool("b", properties={"path": {"type": "string"}}, required=["path"]),
-    ]
+def test_non_family_message_field_not_flagged() -> None:
+    """The git_commit false-positive guard: a `message` field on a tool
+    OUTSIDE the text-payload family (a commit message — a different
+    concept) must NOT be flagged. This is the exact false positive a
+    blanket synonym scan produces and this rule avoids."""
+    tools = [_payload("send_message", "text"), _payload("git_commit", "message")]
     assert check_tool_consistency(tools) == []
 
 
-# --------------------------------------------------------------- required surface
-
-
-def test_flags_heavy_required_surface() -> None:
-    heavy = _tool(
-        "edit_file",
-        properties={k: {"type": "string"} for k in ("path", "old", "new", "occurrence")},
-        required=["path", "old", "new", "occurrence"],
-    )
-    warnings = check_tool_consistency([heavy])
-    assert any("edit_file" in w and "4 fields" in w for w in warnings)
-
-
-def test_required_at_threshold_is_ok() -> None:
-    ok = _tool(
-        "three",
-        properties={k: {"type": "string"} for k in ("a", "b", "c")},
-        required=["a", "b", "c"],
-    )
-    assert check_tool_consistency([ok]) == []
+def test_family_tool_already_canonical_no_warning() -> None:
+    assert check_tool_consistency([_payload("cron_add", "text")]) == []
 
 
 # --------------------------------------------------------------- descriptions
 
 
 def test_flags_missing_description() -> None:
-    tool = _tool("mystery", properties={"id": {"type": "string"}}, required=[], description="  ")
+    tool = _tool("mystery", properties={"id": {"type": "string"}}, description="  ")
     warnings = check_tool_consistency([tool])
     assert any("mystery" in w and "no description" in w for w in warnings)
 
@@ -105,8 +88,9 @@ def test_flags_missing_description() -> None:
 
 def test_clean_registry_no_warnings() -> None:
     tools = [
-        _tool("a", properties={"text": {"type": "string"}}, required=["text"]),
-        _tool("b", properties={"text": {"type": "string"}}, required=["text"]),
+        _payload("send_message", "text"),
+        _payload("learn_add", "text"),
+        _tool("read_file", properties={"path": {"type": "string"}}, required=["path"]),
     ]
     assert check_tool_consistency(tools) == []
 
@@ -118,9 +102,11 @@ def test_empty_registry_no_warnings() -> None:
 # --------------------------------------------------------------- integration
 
 
-def test_real_inline_registry_flags_payload_inconsistency(tmp_path: Any) -> None:
-    """The shipped inline tools genuinely disagree (`message` vs `text`),
-    so the lint flags it against the real registry — the motivating bug."""
+def test_real_inline_registry_is_payload_consistent(tmp_path: Any) -> None:
+    """Regression guard for the 2026-07-01 rename: the shipped inline
+    text-payload family now agrees on `text`, and git_commit's `message`
+    is (correctly) not swept in — so the lint raises no payload warning
+    against the real registry."""
     from fastapi.testclient import TestClient
 
     from gateway.app import create_app
@@ -133,4 +119,4 @@ def test_real_inline_registry_flags_payload_inconsistency(tmp_path: Any) -> None
     TestClient(app)  # ensure state is wired
 
     warnings = check_tool_consistency(app.state.tool_registry.list_all())
-    assert any("disagree" in w and "message" in w and "text" in w for w in warnings)
+    assert not any("text-payload family" in w for w in warnings)

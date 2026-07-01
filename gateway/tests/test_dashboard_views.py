@@ -3696,18 +3696,33 @@ def test_alias_page_readiness_unknown_points_at_measure(tmp_path: Path, monkeypa
 
 
 def test_settings_surfaces_tool_consistency_warnings(tmp_path: Path) -> None:
-    """The shipped tool schemas disagree on the payload field name
-    (`message` vs `text`), so the Settings "Boot-time warnings" card
-    surfaces it — the lint isn't log-only."""
+    """The Settings "Boot-time warnings" card surfaces tool-lint findings
+    (not log-only). Inject a tool with an empty description — a generic,
+    family-independent trigger — so the assertion doesn't depend on the
+    real registry's (now consistent) state."""
+    from gateway.tools import ApprovalBucket, Tool
+
+    async def _noop(_a: Any, _c: Any) -> Any:  # pragma: no cover - never called
+        raise AssertionError
+
     cfg = build_test_config(tmp_path)
     cfg.server.boot_probe_enabled = False
     app = create_app(cfg)
+    app.state.tool_registry.register(
+        Tool(
+            name="rogue_undocumented",
+            description="   ",
+            schema={"type": "object", "properties": {}, "additionalProperties": False},
+            callable=_noop,
+            default_bucket=ApprovalBucket.AUTO,
+        )
+    )
     tc = TestClient(app, follow_redirects=False)
 
     body = tc.get("/dashboard/settings", headers=_auth()).text
     assert "Boot-time warnings" in body
-    assert "disagree" in body
-    assert "cron_add" in body
+    assert "rogue_undocumented" in body
+    assert "no description" in body
 
 
 def test_parse_eval_report_full_reads_json_sidecar(tmp_path) -> None:

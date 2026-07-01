@@ -47,7 +47,7 @@ async def test_cron_tool_call_creates_and_fires(
                 "cron_add",
                 {
                     "name": "briefing",
-                    "message": "summarise my open PRs",
+                    "text": "summarise my open PRs",
                     "schedule_spec": "every 60s",
                 },
             ),

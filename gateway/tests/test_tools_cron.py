@@ -6,6 +6,10 @@ itself is already exhaustively tested in test_cron.py, so these
 tests focus on what the tool layer adds: argument validation,
 pretty-printing, and surfacing service errors as tool errors
 the model can reason about.
+
+The tool-facing arg is ``text`` (aligned with send_message /
+learn_add, 2026-07-01); it maps to the internal ``CronJob.message``
+field, which is why ``job.message`` assertions stay.
 """
 
 from __future__ import annotations
@@ -49,7 +53,7 @@ async def test_cron_add_creates_every_schedule(svc: CronService) -> None:
     result = await tool.callable(
         {
             "name": "ping monitor",
-            "message": "check if host is up",
+            "text": "check if host is up",
             "schedule_spec": "every 60s",
         },
         _ctx(svc),
@@ -72,7 +76,7 @@ async def test_cron_add_cron_expression_with_tz(svc: CronService) -> None:
     result = await tool.callable(
         {
             "name": "briefing",
-            "message": "summarise my PRs",
+            "text": "summarise my PRs",
             "schedule_spec": "cron 0 8 * * 1-5",
             "timezone": "America/Los_Angeles",
         },
@@ -94,7 +98,7 @@ async def test_cron_add_silent_polling_warns_about_approval(svc: CronService) ->
     result = await tool.callable(
         {
             "name": "monitor",
-            "message": "check",
+            "text": "check",
             "schedule_spec": "every 60s",
             "silent": True,
             "approval_mode": "",
@@ -110,7 +114,7 @@ async def test_cron_add_no_warning_when_auto(svc: CronService) -> None:
     result = await tool.callable(
         {
             "name": "monitor",
-            "message": "check",
+            "text": "check",
             "schedule_spec": "every 60s",
             "silent": True,
             "approval_mode": "auto",
@@ -126,7 +130,7 @@ async def test_cron_add_rejects_bad_schedule(svc: CronService) -> None:
     result = await tool.callable(
         {
             "name": "bad",
-            "message": "m",
+            "text": "m",
             "schedule_spec": "tomorrow at noon",
         },
         _ctx(svc),
@@ -135,17 +139,17 @@ async def test_cron_add_rejects_bad_schedule(svc: CronService) -> None:
     assert "invalid schedule" in result.payload
 
 
-async def test_cron_add_name_optional_derived_from_message(svc: CronService) -> None:
+async def test_cron_add_name_optional_derived_from_text(svc: CronService) -> None:
     """Regression for the 2026-06-08 reminder failure: ``name``
     used to be required, and a required field literally called
     ``name`` (colliding with the function name) made small models
     thrash — hermes3:8b couldn't set a plain reminder. ``name`` is
-    now optional and derived from the message; only ``message`` +
+    now optional and derived from the text; only ``text`` +
     ``schedule_spec`` are required."""
     tool = _tools()["cron_add"]
     result = await tool.callable(
         {
-            "message": "Take out the trash tonight",
+            "text": "Take out the trash tonight",
             "schedule_spec": "at 2026-06-08T20:00:00-04:00",
         },
         _ctx(svc),
@@ -156,15 +160,15 @@ async def test_cron_add_name_optional_derived_from_message(svc: CronService) -> 
     assert jobs[0].name == "Take out the trash tonight"
 
 
-async def test_cron_add_still_requires_message(svc: CronService) -> None:
-    """message is the one field that can't be derived."""
+async def test_cron_add_still_requires_text(svc: CronService) -> None:
+    """text is the one field that can't be derived."""
     tool = _tools()["cron_add"]
     result = await tool.callable(
         {"name": "label", "schedule_spec": "every 60"},
         _ctx(svc),
     )
     assert result.is_error
-    assert "'message'" in result.payload
+    assert "'text'" in result.payload
 
 
 async def test_cron_add_rejects_invalid_approval_mode(svc: CronService) -> None:
@@ -172,7 +176,7 @@ async def test_cron_add_rejects_invalid_approval_mode(svc: CronService) -> None:
     result = await tool.callable(
         {
             "name": "n",
-            "message": "m",
+            "text": "m",
             "schedule_spec": "every 60",
             "approval_mode": "yolo",
         },
@@ -187,7 +191,7 @@ async def test_tool_fails_when_cron_service_missing() -> None:
     the tool fails with a readable error, not AttributeError."""
     tool = _tools()["cron_add"]
     result = await tool.callable(
-        {"name": "n", "message": "m", "schedule_spec": "every 60"},
+        {"name": "n", "text": "m", "schedule_spec": "every 60"},
         _ctx(None),
     )
     assert result.is_error
@@ -207,12 +211,12 @@ async def test_cron_list_empty(svc: CronService) -> None:
 async def test_cron_list_formats_active_and_disabled(svc: CronService) -> None:
     add = _tools()["cron_add"]
     await add.callable(
-        {"name": "one", "message": "m", "schedule_spec": "every 5m"},
+        {"name": "one", "text": "m", "schedule_spec": "every 5m"},
         _ctx(svc),
     )
     j2 = (
         await add.callable(
-            {"name": "two", "message": "m", "schedule_spec": "cron 0 9 * * *"},
+            {"name": "two", "text": "m", "schedule_spec": "cron 0 9 * * *"},
             _ctx(svc),
         ),
     )
@@ -237,11 +241,11 @@ async def test_cron_list_can_hide_disabled(svc: CronService) -> None:
     list_tool = _tools()["cron_list"]
 
     await add.callable(
-        {"name": "on", "message": "m", "schedule_spec": "every 60"},
+        {"name": "on", "text": "m", "schedule_spec": "every 60"},
         _ctx(svc),
     )
     await add.callable(
-        {"name": "off", "message": "m", "schedule_spec": "every 60"},
+        {"name": "off", "text": "m", "schedule_spec": "every 60"},
         _ctx(svc),
     )
     target = svc.list()[1]
@@ -260,7 +264,7 @@ async def test_cron_update_changes_fields(svc: CronService) -> None:
     update = _tools()["cron_update"]
 
     await add.callable(
-        {"name": "n", "message": "m", "schedule_spec": "every 60"},
+        {"name": "n", "text": "m", "schedule_spec": "every 60"},
         _ctx(svc),
     )
     job_id = svc.list()[0].id
@@ -287,7 +291,7 @@ async def test_cron_update_requires_at_least_one_field(svc: CronService) -> None
     add = _tools()["cron_add"]
     update = _tools()["cron_update"]
     await add.callable(
-        {"name": "n", "message": "m", "schedule_spec": "every 60"},
+        {"name": "n", "text": "m", "schedule_spec": "every 60"},
         _ctx(svc),
     )
     job_id = svc.list()[0].id
@@ -310,7 +314,7 @@ async def test_cron_remove(svc: CronService) -> None:
     add = _tools()["cron_add"]
     remove = _tools()["cron_remove"]
     await add.callable(
-        {"name": "n", "message": "m", "schedule_spec": "every 60"},
+        {"name": "n", "text": "m", "schedule_spec": "every 60"},
         _ctx(svc),
     )
     job_id = svc.list()[0].id
@@ -333,7 +337,7 @@ async def test_cron_pause_and_resume(svc: CronService) -> None:
     pause = _tools()["cron_pause"]
     resume = _tools()["cron_resume"]
     await add.callable(
-        {"name": "n", "message": "m", "schedule_spec": "every 60"},
+        {"name": "n", "text": "m", "schedule_spec": "every 60"},
         _ctx(svc),
     )
     job_id = svc.list()[0].id
@@ -386,3 +390,13 @@ def test_every_tool_has_description_and_schema() -> None:
         assert tool.description
         assert "type" in tool.schema
         _: Any = tool.schema  # silence mypy
+
+
+def test_cron_add_uses_text_arg_not_message() -> None:
+    """Regression guard for the 2026-07-01 rename: the tool-facing
+    payload arg is ``text`` (aligned with send_message / learn_add),
+    not ``message`` — the tool-consistency lint depends on this."""
+    schema = _tools()["cron_add"].schema
+    assert "text" in schema["properties"]
+    assert "message" not in schema["properties"]
+    assert "text" in schema["required"]

@@ -60,7 +60,7 @@ _CRON_ID_ARG = {
 _SCHEMA_CRON_ADD: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "message": {
+        "text": {
             "type": "string",
             "description": (
                 "REQUIRED. The prompt submitted to a fresh agent "
@@ -75,7 +75,7 @@ _SCHEMA_CRON_ADD: dict[str, Any] = {
             "type": "string",
             "description": (
                 "Optional short label (e.g. 'morning briefing'). "
-                "If omitted, it is derived from the message — you "
+                "If omitted, it is derived from the text — you "
                 "do NOT need to supply one."
             ),
         },
@@ -125,7 +125,7 @@ _SCHEMA_CRON_ADD: dict[str, Any] = {
             "default": "UTC",
         },
     },
-    "required": ["message", "schedule_spec"],
+    "required": ["text", "schedule_spec"],
     "additionalProperties": False,
 }
 
@@ -153,7 +153,7 @@ _SCHEMA_CRON_UPDATE: dict[str, Any] = {
     "properties": {
         "id": _CRON_ID_ARG,
         "name": {"type": "string"},
-        "message": {"type": "string"},
+        "text": {"type": "string"},
         "schedule_spec": _SCHEDULE_SPEC_ARG,
         "silent": {"type": "boolean"},
         "approval_mode": {"type": "string", "enum": ["", "auto"]},
@@ -231,21 +231,23 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return ToolResult.error("cron service not available on this gateway")
 
     name = args.get("name")
-    message = args.get("message")
+    text = args.get("text")
     schedule_spec = args.get("schedule_spec")
-    # Only message + schedule_spec are required. ``name`` is an
+    # Only text + schedule_spec are required. ``name`` is an
     # optional label — if the model didn't supply one, derive it
-    # from the message. Requiring a third field (and one named
+    # from the text. Requiring a third field (and one named
     # ``name``, which collides with the function's own name)
     # made small models thrash: they'd give two of the three and
     # oscillate. Observed 2026-06-08 — hermes3:8b could not set a
     # plain reminder because of it. See docs/observed-issues.md.
-    if not isinstance(message, str) or not message.strip():
-        return ToolResult.error("'message' is required and must be non-empty")
+    # The tool arg is ``text`` (aligned with send_message /
+    # learn_add); it maps to the internal CronJob.message field.
+    if not isinstance(text, str) or not text.strip():
+        return ToolResult.error("'text' is required and must be non-empty")
     if not isinstance(schedule_spec, str) or not schedule_spec.strip():
         return ToolResult.error("'schedule_spec' is required")
     if not isinstance(name, str) or not name.strip():
-        name = _derive_cron_name(message)
+        name = _derive_cron_name(text)
 
     tz = str(args.get("timezone") or "UTC")
     try:
@@ -265,7 +267,7 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     job = CronJob(
         id="",
         name=name.strip(),
-        message=message.strip(),
+        message=text.strip(),
         schedule=schedule,
         silent=silent,
         approval_mode=approval_mode,
@@ -326,8 +328,8 @@ async def _tool_cron_update(args: dict[str, Any], ctx: ToolContext) -> ToolResul
     kwargs: dict[str, Any] = {}
     if "name" in args and args["name"] is not None:
         kwargs["name"] = str(args["name"])
-    if "message" in args and args["message"] is not None:
-        kwargs["message"] = str(args["message"])
+    if "text" in args and args["text"] is not None:
+        kwargs["message"] = str(args["text"])
     if "silent" in args and args["silent"] is not None:
         kwargs["silent"] = bool(args["silent"])
     if "approval_mode" in args and args["approval_mode"] is not None:
@@ -406,12 +408,12 @@ def build_cron_tools() -> list[Tool]:
             description=(
                 "Schedule an agent session to fire on its own — "
                 "use this for reminders and recurring jobs. "
-                "REQUIRED args: `message` (what the cron should do "
+                "REQUIRED args: `text` (what the cron should do "
                 "or say when it fires) and `schedule_spec` (when). "
                 "Schedules: interval ('every 60s'), one-shot "
                 "('at 2026-05-06T09:00:00'), or cron-expression "
                 "('cron 0 9 * * *'). `name` is optional (derived "
-                "from the message if omitted). Defaults to ask for "
+                "from the text if omitted). Defaults to ask for "
                 "approval; `silent` and `approval_mode` control "
                 "whether firings announce and whether their "
                 "internal tools auto-approve."

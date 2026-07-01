@@ -29,12 +29,11 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Act on the tool-consistency lint (shipped 2026-07-01,
-  `tool_consistency.py`, boot log + Settings "Boot-time warnings"
-  card): **normalise the payload field name** (`cron_add` /
-  `cron_update` `message` -> `text` to match `send_message` /
-  `learn_add`) and **flatten `edit_file`'s required surface**. The lint
-  now flags both and catches regressions, so these are safe to do.
+- `cron_add` / `cron_update` payload arg renamed `message` -> `text`
+  (DONE 2026-07-01) so the text-payload family agrees; the Lane (b) lint
+  guards it going forward. Remaining ergonomics fix: **improve
+  `edit_file`'s error** - quote the near-miss when `old_str` doesn't
+  match exactly once (the real fumble is the error, not the field count).
 
 **Next**
 - Feed the eval the REAL tool forms (Lane A: `run_eval_suite` offers
@@ -122,20 +121,27 @@ The curated ordering - the judgment call a tool can't make for you.
   live-eval every tool - the ladder tests the model with representatives,
   not the inventory.
   **Lane (b) SHIPPED 2026-07-01:** `tool_consistency.py` -
-  `check_tool_consistency(tools)` flags payload-field-name
-  inconsistency, heavy required surfaces, and empty descriptions;
-  logged at boot (`tools.inconsistent_schema`) and surfaced on the
-  Settings "Boot-time warnings" card (which now aggregates all boot
-  checks). **Lane (a) remains:** feed `run_eval_suite` the real
-  `registry.list_all()` schemas (cases reference tool names) - the
-  bigger, model-side refactor (Next).
+  `check_tool_consistency(tools)` flags text-payload-family arg drift
+  (an explicit family - send_message / learn_add / cron_* - keyed on a
+  canonical `text`, so git_commit's `message` for a *commit* message is
+  NOT a false positive) and empty descriptions; logged at boot
+  (`tools.inconsistent_schema`) and surfaced on the Settings "Boot-time
+  warnings" card (which now aggregates all boot checks incl. MCP/skills).
+  The required-field budget + name-collision rules stay with
+  `test_tool_schema_lint.py` (the CI gate, which handles reviewed
+  exceptions a flat pass can't). **Lane (a) remains:** feed
+  `run_eval_suite` the real `registry.list_all()` schemas (cases
+  reference tool names) - the bigger, model-side refactor (Next).
   _(source: [observed-issues](docs/observed-issues.md))_
-- **Normalise "the words" tool-arg naming** - `cron_add` uses `message`,
-  `send_message`/`learn_add` use `text`; the inconsistency has already
-  caused a live fumble. Breaking change - wants the real-registry eval
-  first.
+- **Normalise "the words" tool-arg naming** - SHIPPED 2026-07-01:
+  `cron_add` / `cron_update` payload arg renamed `message` -> `text` to
+  match `send_message` / `learn_add`; the internal `CronJob.message`
+  field is unchanged (no on-disk migration). The Lane (b) family lint
+  guards against future drift.
 - **Flatten `edit_file`'s fumble surface** - 4 required fields +
-  match-exactly-once; at least quote the near-miss in the error.
+  match-exactly-once; the real ask is to quote the near-miss in the
+  error when `old_str` doesn't match exactly once (an error-ergonomics
+  fix, not a field-count reduction - the 4 fields are legitimate).
 - **Planner pass shouldn't execute tools it didn't offer** - gemma4 calls
   an executor tool from the planner pass (side effect of the
   executor-tools hint).
