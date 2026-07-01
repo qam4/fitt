@@ -1,13 +1,14 @@
-{# Unified per-alias page (Phase 7.6 Decision 6).
+{# Unified per-alias page (Phase 7.6 Decision 6; consolidated 12.5b).
 
    One destination for "tell me about this binding": config +
-   endpoint + "shares with", the full probe detail (status,
-   latency, reachability verdict, narrated-reply preview), the
-   three eval suites (absorbing the former F18 eval view), the
-   context window, and the 24h dispatch count.
-
-   Action buttons: per-suite "run eval" and a per-alias
-   "re-probe this alias".
+   endpoint + "shares with", then one Capability surface with
+   cost-tiered actions — a cheap "Check alive" (reachability +
+   probe, the Liveness subsection) and a heavy "Measure
+   capability" (the eval engine + plan-election -> the Profile
+   subsection: declared facts + measured grades + freshness).
+   The per-suite eval detail sits behind a disclosure (the
+   engine behind "Measure"), the context window, and the 24h
+   dispatch count.
 #}
 {% extends "base.html" %}
 {% set nav_active = "aliases" %}
@@ -67,8 +68,14 @@
 {# ---------------------------------------------------------- capability profile #}
 <div class="card">
   <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
-    <h3 style="margin: 0; flex-grow: 1;">Capability profile</h3>
+    <h3 style="margin: 0; flex-grow: 1;">Capability</h3>
     {% if alias_known %}
+    <form method="post" action="/dashboard/actions/reprobe-alias" style="display: inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="alias" value="{{ alias }}">
+      <button type="submit" style="font-size: 11px; padding: 2px 8px;"
+              title="Reachability + one tool-call probe — a few seconds. Runs no eval/profile.">Check alive</button>
+    </form>
     <form method="post" action="/dashboard/actions/profile-alias" style="display: inline;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="alias" value="{{ alias }}">
@@ -76,9 +83,53 @@
     </form>
     {% endif %}
   </div>
+
+  {# Liveness — the cheap tier ("Check alive": reachability + probe) #}
+  <h4 style="margin-top: 4px;">Liveness
+    <span class="dim" style="font-size: 11px;">(cheap — seconds; "Check alive")</span>
+  </h4>
+  {% if probe %}
+  <table>
+    <tbody>
+      <tr>
+        <th class="right">Status</th>
+        <td><span class="pip pip-{{ probe.pip }}"></span> <code>{{ probe.status }}</code>
+          <span class="dim mono" style="font-size: 11px;">{{ probe.latency_ms }} ms</span>
+        </td>
+      </tr>
+      {% if probe.reachable is not none %}
+      <tr><th class="right">Reachability</th>
+        <td class="dim">{% if probe.reachable %}endpoint answered the ping — reachable{% else %}endpoint did not answer — unreachable{% endif %}</td>
+      </tr>
+      {% endif %}
+      {% if probe.model_used %}<tr><th class="right">Model used</th><td class="mono dim">{{ probe.model_used }}</td></tr>{% endif %}
+      {% if probe.finish_reason %}<tr><th class="right">Finish reason</th><td class="mono dim">{{ probe.finish_reason }}</td></tr>{% endif %}
+      <tr><th class="right">Detail</th><td>{{ probe.detail }}</td></tr>
+      {% if probe_ran_at_human %}<tr><th class="right">Last checked</th><td class="mono dim">{{ probe_ran_at_human }}{% if probe_stale %} <span class="badge-warn">stale</span>{% endif %}</td></tr>{% endif %}
+    </tbody>
+  </table>
+  {% if probe.reply_preview %}
+  <details style="margin-top: 8px;">
+    <summary class="dim" style="font-size: 12px;">Reply preview (narrated instead of calling)</summary>
+    <pre class="eval-reply-preview">{{ probe.reply_preview }}</pre>
+  </details>
+  {% endif %}
+  {% else %}
+  <div class="empty">
+    Not checked yet. Click <strong>Check alive</strong> above (reachability
+    + one tool-call probe), or re-probe all from the
+    <a href="/dashboard/aliases">aliases tab</a>.
+  </div>
+  {% endif %}
+
+  {# Profile — the graded tier ("Measure capability": suites + plan-election) #}
+  <h4 style="margin-top: 16px;">Profile
+    <span class="dim" style="font-size: 11px;">(graded — minutes; "Measure capability")</span>
+  </h4>
   {% if profile %}
   <p class="dim" style="font-size: 12px;">
     model <code>{{ profile.model_id or "?" }}</code> · captured {{ profile.captured_at }}
+    {% if profile.stale %}<span class="badge-warn">stale</span>{% endif %}
     · informs config, does not auto-drive
   </p>
   {% if profile.declared %}
@@ -144,72 +195,13 @@
   {% endif %}
 </div>
 
-{# ---------------------------------------------------------- probe #}
-<div class="card">
-  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
-    <h3 style="margin: 0; flex-grow: 1;">Probe</h3>
-    {% if alias_known %}
-    <form method="post" action="/dashboard/actions/reprobe-alias" style="display: inline;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="alias" value="{{ alias }}">
-      <button type="submit" style="font-size: 11px; padding: 2px 8px;"
-              title="Re-run the tool-call probe for just this alias (~5-15s)">
-        re-probe this alias
-      </button>
-    </form>
-    {% endif %}
-  </div>
-  {% if probe %}
-  <table>
-    <tbody>
-      <tr>
-        <th class="right">Status</th>
-        <td>
-          <span class="pip pip-{{ probe.pip }}"></span>
-          <code>{{ probe.status }}</code>
-        </td>
-      </tr>
-      <tr><th class="right">Latency</th><td class="mono">{{ probe.latency_ms }} ms</td></tr>
-      {% if probe.reachable is not none %}
-      <tr>
-        <th class="right">Reachability</th>
-        <td>
-          {% if probe.reachable %}
-          <span class="dim">endpoint answered the reachability ping — reachable</span>
-          {% else %}
-          <span class="dim">endpoint did not answer — unreachable</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endif %}
-      {% if probe.model_used %}
-      <tr><th class="right">Model used</th><td class="mono dim">{{ probe.model_used }}</td></tr>
-      {% endif %}
-      {% if probe.finish_reason %}
-      <tr><th class="right">Finish reason</th><td class="mono dim">{{ probe.finish_reason }}</td></tr>
-      {% endif %}
-      <tr><th class="right">Detail</th><td>{{ probe.detail }}</td></tr>
-      {% if probe_ran_at_human %}
-      <tr><th class="right">Last probed</th><td class="mono dim">{{ probe_ran_at_human }}</td></tr>
-      {% endif %}
-    </tbody>
-  </table>
-  {% if probe.reply_preview %}
-  <details style="margin-top: 8px;">
-    <summary class="dim" style="font-size: 12px;">Reply preview (narrated instead of calling)</summary>
-    <pre class="eval-reply-preview">{{ probe.reply_preview }}</pre>
-  </details>
-  {% endif %}
-  {% else %}
-  <div class="empty">
-    Not probed yet. Click "re-probe this alias" above, or
-    re-probe all from the <a href="/dashboard/aliases">aliases tab</a>.
-  </div>
-  {% endif %}
-</div>
+{# probe detail is folded into the Capability card's Liveness subsection (12.5b) #}
 
-{# ---------------------------------------------------------- eval (absorbed F18) #}
-<h3 id="eval" style="margin-top: 24px;">Eval</h3>
+{# --------------------------------------- eval detail (the measurement engine) #}
+<details id="eval" style="margin-top: 24px;">
+  <summary style="cursor: pointer; font-size: 16px; font-weight: 600;">Eval detail
+    <span class="dim" style="font-size: 12px; font-weight: 400;">— the per-suite engine behind "Measure capability"; expand for per-case results</span>
+  </summary>
 <p class="tagline">
   Three suites measure different things. <strong>default</strong>
   tests tool-call discipline against FITT's own tool shape;
@@ -311,6 +303,7 @@
 
 <hr>
 {% endfor %}
+</details>
 
 <p class="dim" style="font-size: 11px; margin-top: 16px;">
   same data <code>fitt eval alias {{ alias }} --suite &lt;name&gt;</code> CLI surfaces ·

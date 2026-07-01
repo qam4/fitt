@@ -875,6 +875,20 @@ def _shares_endpoint_with(config: Any, alias: str) -> tuple[str, list[str]]:
     return primary.endpoint or "(no endpoint)", others
 
 
+_PROFILE_STALE_DAYS = 14
+"""A capability profile older than this reads as stale on the surface —
+a nudge to re-measure after a model swap or a while. The profile still
+renders; it's flagged, not hidden (Req 4.2)."""
+
+
+_PROBE_STALE_HOURS = 24
+"""The cheap liveness check (reachability + probe) runs at a shorter
+cadence than the profile, so it carries its own staleness threshold
+(Req 4.3, independent cadences). A liveness reading older than this is
+flagged stale — a nudge to click "Check alive" again — without hiding
+the last-known status."""
+
+
 def _build_profile_view(alias: str) -> dict[str, Any] | None:
     """Shape the stored capability profile (``<alias>-profile.json``) for
     the alias page's Capability card.
@@ -934,6 +948,7 @@ def _build_profile_view(alias: str) -> dict[str, Any] | None:
     return {
         "model_id": profile.model_id,
         "captured_at": profile.captured_at.strftime("%Y-%m-%d %H:%M UTC"),
+        "stale": (datetime.now(UTC) - profile.captured_at).days >= _PROFILE_STALE_DAYS,
         "declared": [
             {"name": f.name, "value": f.value, "source": f.source} for f in profile.declared
         ],
@@ -1007,6 +1022,12 @@ def _build_alias_page_context(request: Request, *, alias: str) -> dict[str, Any]
         if probe_ran_at
         else None
     )
+    # Liveness carries its own freshness (Req 4.2/4.3): a reading older
+    # than the probe threshold is flagged stale rather than shown as
+    # current. Independent of the profile's staleness (different cadence).
+    probe_stale = bool(
+        probe_ran_at is not None and (time.time() - probe_ran_at) >= _PROBE_STALE_HOURS * 3600
+    )
 
     # Eval suites — reuse the F18 assembly verbatim.
     eval_ctx = _build_eval_context(request, alias=alias)
@@ -1030,6 +1051,7 @@ def _build_alias_page_context(request: Request, *, alias: str) -> dict[str, Any]
         "context_source": context_source,
         "probe": probe_view,
         "probe_ran_at_human": probe_ran_at_human,
+        "probe_stale": probe_stale,
         "suites": eval_ctx["suites"],
         "dispatched_24h": dispatch_counts.get(alias, 0),
         "profile": _build_profile_view(alias),

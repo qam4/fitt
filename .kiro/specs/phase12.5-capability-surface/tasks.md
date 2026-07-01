@@ -55,28 +55,63 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 12.5b — Consolidate the surface + tier the actions
 
-- [ ] 6. Add the cheap "check alive" action (reachability + probe
+- [x] 6. Add the cheap "check alive" action (reachability + probe
   only; reuse `/v1/probe/<alias>` + `check_reachable`) and ensure
   it dispatches NO eval/profile work. (Req 2.1, 2.3, Property 1)
-- [ ] 7. Reshape `alias_page.html` + `_build_profile_view` into
+  DONE: the "Check alive" button posts to `/dashboard/actions/reprobe-alias`,
+  whose `_action_reprobe_alias` calls only `probe_alias` (one canary
+  inference + a `check_reachable_standalone` ping on timeout — no eval,
+  no profile). Property 1 covered by
+  `test_check_alive_dispatches_no_eval_or_profile` (patches
+  `run_eval_suite` + `run_profile` to raise; asserts neither fires).
+- [x] 7. Reshape `alias_page.html` + `_build_profile_view` into
   one Capability surface: liveness line, declared, measured
   (capability + cost), resources; the two cost-tiered action
   buttons with cost affordance; eval per-case detail moved behind
   a disclosure (no info lost). (Req 2.2, 2.4, 3.1, 3.2, 3.4)
-- [ ] 8. Demote the three eval-suite cards to the engine behind
+  DONE: single "Capability" card — Liveness subsection (folds in the
+  former standalone probe card) tagged "cheap — seconds", Profile
+  subsection tagged "graded — minutes", declared/measured/resources
+  tables, two buttons ("Check alive" / "Measure capability") with
+  cost affordances in their titles. `test_alias_page_consolidated_capability_surface`.
+- [x] 8. Demote the three eval-suite cards to the engine behind
   "measure"; retain an advanced single-suite affordance, not as
   the headline. (Req 3.2, 3.3)
-- [ ] 9. Per-dimension freshness: profile `captured_at` + probe
+  DONE: the three suites now live inside a collapsed `<details id="eval">`
+  ("Eval detail — the per-suite engine behind Measure capability"); each
+  keeps its own "run <suite> eval" button (the advanced single-suite
+  affordance) but is no longer a top-level card.
+- [x] 9. Per-dimension freshness: profile `captured_at` + probe
   timestamp shown; stale flag past a threshold; independent
   cadences. (Req 4.1, 4.2, 4.3)
+  DONE: profile flagged stale past `_PROFILE_STALE_DAYS` (14d); liveness
+  flagged stale past `_PROBE_STALE_HOURS` (24h) — independent thresholds
+  for the two cadences (Req 4.3). Both render a "stale" badge beside
+  their own timestamp without hiding the reading.
+  `test_build_profile_view_flags_stale` + `test_alias_page_flags_stale_liveness`.
 - [ ] 10. (Engine single-run) Make one "measure" run each needed
   suite once and have the profile aggregate that run rather than
   re-dispatching — or, if large, land the display consolidation
   first and fold this in as the tail (design Decision 3 staging).
   (Req 6.1, 6.2, 6.3)
-- [ ] 11. Tests: surface renders all blocks; cheap-action
+  DEFERRED (design Decision 3 staging): the display consolidation +
+  cost-tiering (6-9) shipped first, as the design explicitly sanctions.
+  "Measure capability" (`run_profile`) already runs its suites once and
+  aggregates within a single measure — no double-dispatch inside one
+  action. The remaining redundancy is cross-action: the eval-detail
+  disclosure reads separate `<alias>-latest.md` files, so a profile run
+  doesn't repopulate that disclosure from the same run. Wiring one
+  measure to feed BOTH the profile grades and the per-suite eval reports
+  is the deeper "single source of truth" change; it lags the UX fix by a
+  slice (the redundancy is wasteful, not wrong). Cross-ref BACKLOG
+  "consolidate the measurement sinks".
+- [x] 11. Tests: surface renders all blocks; cheap-action
   isolation (Property 1); freshness/stale; eval detail present
   behind disclosure. ruff/mypy/pytest green; commit + push.
+  DONE: 4 new/updated dashboard tests (consolidated surface,
+  cheap-action isolation, profile-stale, liveness-stale). Gateway
+  1673 passed / 8 skipped; telegram-bot 199 passed; ruff format+check
+  + mypy clean both packages.
 
 ## Phase 12.5c — The reconciler (the recommendation)
 

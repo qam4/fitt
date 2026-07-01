@@ -49,6 +49,8 @@ models/
 *.swp
 .DS_Store
 
+.scratch/
+
 # OS
 Thumbs.db
 desktop.ini

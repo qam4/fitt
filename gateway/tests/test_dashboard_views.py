@@ -3506,6 +3506,146 @@ def test_build_profile_view_none_when_absent(tmp_path, monkeypatch) -> None:
     assert _build_profile_view("no-such-alias") is None
 
 
+def test_build_profile_view_flags_stale(tmp_path, monkeypatch) -> None:
+    """12.5b freshness: a profile older than the staleness threshold is
+    flagged (not hidden); a fresh one is not."""
+    from datetime import UTC, datetime, timedelta
+
+    from gateway.capability_profile import CapabilityProfile, MeasuredGrade, write_profile
+    from gateway.dashboard.views import _build_profile_view
+
+    monkeypatch.setenv("FITT_HOME", str(tmp_path))
+    grade = MeasuredGrade(name="plan-election", pass_rate=1.0, passes=3, valid=3, samples=3)
+
+    old = CapabilityProfile(
+        alias="a-old",
+        model_id="m",
+        captured_at=datetime.now(UTC) - timedelta(days=60),
+        measured=[grade],
+    )
+    write_profile(old, tmp_path)
+    view_old = _build_profile_view("a-old")
+    assert view_old is not None and view_old["stale"] is True
+
+    fresh = CapabilityProfile(
+        alias="a-fresh",
+        model_id="m",
+        captured_at=datetime.now(UTC),
+        measured=[grade],
+    )
+    write_profile(fresh, tmp_path)
+    view_fresh = _build_profile_view("a-fresh")
+    assert view_fresh is not None and view_fresh["stale"] is False
+
+
+def test_alias_page_consolidated_capability_surface(tmp_path) -> None:
+    """12.5b: one Capability surface with cost-tiered actions — a cheap
+    'Check alive' (Liveness, the folded-in probe) and a heavy 'Measure
+    capability' (Profile); the standalone Probe card is gone and the
+    eval detail sits behind a disclosure."""
+    import time as _t
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    app.state.alias_probe_results = {
+        "fitt-default": ProbeResult(
+            alias="fitt-default",
+            status="ok",
+            detail="emitted 1 tool call(s) as expected",
+            latency_ms=1200,
+            model_used="qwen2.5-coder:14b",
+            finish_reason="tool_calls",
+        )
+    }
+    app.state.alias_probe_ran_at = _t.time()
+    tc = TestClient(app, follow_redirects=False)
+
+    r = tc.get("/dashboard/alias/fitt-default", headers=_auth())
+    assert r.status_code == 200
+    body = r.text
+    # One consolidated Capability surface, two cost-tiered actions.
+    assert ">Capability<" in body
+    assert "Liveness" in body
+    assert "Check alive" in body
+    assert "/dashboard/actions/reprobe-alias" in body
+    assert "Measure capability" in body
+    assert "/dashboard/actions/profile-alias" in body
+    # Probe folded into the Liveness line — no standalone card / old button.
+    assert "re-probe this alias" not in body
+    assert "emitted 1 tool call(s) as expected" in body
+    # Eval demoted behind a disclosure (content still present in the DOM).
+    assert "Eval detail" in body
+
+
+def test_check_alive_dispatches_no_eval_or_profile(tmp_path: Path) -> None:
+    """12.5b Property 1 (cheap action stays cheap): invoking "Check
+    alive" (the reprobe-alias action) runs only the probe — it
+    dispatches NO eval suite and NO profile run. The cost ladder is the
+    whole point: a routine liveness check must never drag in the
+    minutes-long measurement engine."""
+    from unittest.mock import patch
+
+    from gateway.alias_probe import ProbeResult as PR
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+
+    async def _probe_stub(*_a: Any, **_k: Any) -> PR:
+        return PR(alias="fitt-default", status="ok", detail="ok", latency_ms=10, model_used="m")
+
+    async def _boom(*_a: Any, **_k: Any) -> Any:  # pragma: no cover - must not run
+        raise AssertionError("check-alive must not dispatch eval/profile work")
+
+    r = tc.get("/dashboard/alias/fitt-default")
+    csrf = _csrf_from(r.text)
+
+    with (
+        patch("gateway.alias_probe.probe_alias", side_effect=_probe_stub),
+        patch("gateway.alias_eval.run_eval_suite", side_effect=_boom) as eval_mock,
+        patch("gateway.profile_runner.run_profile", side_effect=_boom) as profile_mock,
+    ):
+        r = tc.post(
+            "/dashboard/actions/reprobe-alias",
+            data={"csrf_token": csrf, "alias": "fitt-default"},
+        )
+    assert r.status_code == 303
+    eval_mock.assert_not_called()
+    profile_mock.assert_not_called()
+
+
+def test_alias_page_flags_stale_liveness(tmp_path: Path) -> None:
+    """12.5b freshness (Req 4.2/4.3): a liveness reading older than the
+    probe staleness threshold is flagged stale on the Liveness line,
+    independent of the profile's cadence; a fresh one is not."""
+    import time as _t
+
+    from gateway.alias_probe import ProbeResult as PR
+    from gateway.dashboard.views import _PROBE_STALE_HOURS
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    probe = PR(alias="fitt-default", status="ok", detail="ok", latency_ms=10, model_used="m")
+    app.state.alias_probe_results = {"fitt-default": probe}
+    tc = TestClient(app, follow_redirects=False)
+
+    # Stale: last checked well past the threshold, and no profile on
+    # disk, so the only "stale" badge in the DOM is the liveness one.
+    app.state.alias_probe_ran_at = _t.time() - (_PROBE_STALE_HOURS + 1) * 3600
+    body_stale = tc.get("/dashboard/alias/fitt-default", headers=_auth()).text
+    assert "Last checked" in body_stale
+    assert "stale" in body_stale
+
+    # Fresh: just checked — no stale badge anywhere on the page.
+    app.state.alias_probe_ran_at = _t.time()
+    body_fresh = tc.get("/dashboard/alias/fitt-default", headers=_auth()).text
+    assert "stale" not in body_fresh
+
+
 def test_parse_eval_report_full_reads_json_sidecar(tmp_path) -> None:
     """The dashboard prefers the structured JSON sidecar over
     regex-parsing the markdown (a deliberately-stale .md is ignored)."""
