@@ -98,6 +98,7 @@ from .reachability import check_reachable_standalone
 
 if TYPE_CHECKING:
     from .router import AliasRouter
+    from .tools import ToolRegistry
 
 _log = logging.getLogger(__name__)
 
@@ -131,6 +132,55 @@ class EvalCase:
     tools: list[dict[str, Any]]
     expected_tool: str | None
     description: str = ""
+    tool_names: tuple[str, ...] = ()
+    """Phase 12.6: names of tools to offer from the *live* registry. When
+    set AND a registry is passed to the runner, the case offers those
+    tools' real ``to_openai_schema()`` (the exact shape chat injects)
+    instead of the embedded ``tools`` lookalikes. Empty (the default)
+    keeps the embedded-schema behavior — the backward-compatible path and
+    the coding suite's synthetic toolset. See :func:`resolve_case_tools`."""
+
+
+# --------------------------------------------------------------- tool resolution
+
+
+def _embedded_by_name(case: EvalCase) -> dict[str, dict[str, Any]]:
+    """Index a case's embedded tool schemas by tool name. Tolerates both
+    the flat ``{"name": ...}`` lookalike shape and the nested
+    ``{"function": {"name": ...}}`` shape so a fallback lookup works
+    regardless of how the case wrote them."""
+    out: dict[str, dict[str, Any]] = {}
+    for t in case.tools:
+        name = t.get("name") or (t.get("function") or {}).get("name")
+        if isinstance(name, str) and name:
+            out[name] = t
+    return out
+
+
+def resolve_case_tools(case: EvalCase, registry: ToolRegistry | None) -> list[dict[str, Any]]:
+    """Return the ``tools`` array to offer for ``case`` (Phase 12.6).
+
+    * No registry, or the case names no tools -> the case's embedded
+      ``tools`` unchanged (the backward-compatible path and the coding
+      suite's synthetic toolset).
+    * Registry + ``tool_names`` -> each named tool's real
+      ``to_openai_schema()`` (the exact nested shape the chat handler
+      injects). A named tool absent from the registry falls back to the
+      case's embedded schema for that name if present, else is omitted —
+      never raises (e.g. web_search when the web backend isn't wired)."""
+    if registry is None or not case.tool_names:
+        return case.tools
+    available = set(registry.list_names())
+    embedded = _embedded_by_name(case)
+    resolved: list[dict[str, Any]] = []
+    for name in case.tool_names:
+        if name in available:
+            resolved.append(registry.lookup(name).to_openai_schema())
+        elif name in embedded:
+            resolved.append(embedded[name])
+        # else: named tool isn't registered and has no embedded fallback;
+        # omit it rather than raise (graceful degrade, Req 1.3).
+    return resolved
 
 
 # --------------------------------------------------------------- result
@@ -418,9 +468,16 @@ async def run_eval_case(
     system_prompt: str = "",
     temperature: float | None = None,
     seed: int | None = None,
+    registry: ToolRegistry | None = None,
 ) -> CaseResult:
     """Dispatch one :class:`EvalCase` against ``alias`` and
     classify the response.
+
+    ``registry`` (Phase 12.6): when the case names tools and a registry
+    is supplied, the offered ``tools`` array is sourced from the live
+    registry (real ``to_openai_schema()`` — the shape chat injects) via
+    :func:`resolve_case_tools`; otherwise the case's embedded lookalikes
+    are used (backward-compatible).
 
     ``system_prompt`` (when non-empty) is inserted as a leading
     system message before the case's user prompt. The default
@@ -450,7 +507,7 @@ async def run_eval_case(
     messages.append({"role": "user", "content": case.prompt})
     request_body: dict[str, Any] = {
         "messages": messages,
-        "tools": case.tools,
+        "tools": resolve_case_tools(case, registry),
         "tool_choice": "auto",
         "stream": False,
         "max_tokens": 512,
@@ -640,6 +697,7 @@ async def run_eval_suite(
     cases: list[EvalCase] | None = None,
     timeout_s: float = 15.0,
     system_prompt: str = "",
+    registry: ToolRegistry | None = None,
 ) -> EvalReport:
     """Run every case in ``cases`` (or the default suite) against
     ``alias``, sequentially.
@@ -662,7 +720,12 @@ async def run_eval_suite(
 
     for case in cases:
         r = await run_eval_case(
-            case, alias, router, timeout_s=timeout_s, system_prompt=system_prompt
+            case,
+            alias,
+            router,
+            timeout_s=timeout_s,
+            system_prompt=system_prompt,
+            registry=registry,
         )
         results.append(r)
         # Best-effort: capture the model id from the first
@@ -760,6 +823,7 @@ async def run_eval_case_multi(
     system_prompt: str = "",
     temperature: float | None = None,
     seed: int | None = None,
+    registry: ToolRegistry | None = None,
 ) -> MultiSampleResult:
     """Run ``case`` ``samples`` times against ``alias`` and aggregate
     into a :class:`MultiSampleResult` (capability mode).
@@ -778,6 +842,7 @@ async def run_eval_case_multi(
                 system_prompt=system_prompt,
                 temperature=temperature,
                 seed=seed,
+                registry=registry,
             )
         )
     return aggregate_samples(case.name, results)
@@ -791,6 +856,7 @@ async def run_eval_suite_multi(
     samples: int = 5,
     timeout_s: float = 15.0,
     system_prompt: str = "",
+    registry: ToolRegistry | None = None,
 ) -> list[MultiSampleResult]:
     """Multi-sample every case in ``cases`` (or the default suite)
     against ``alias`` and return per-case pass-rates.
@@ -809,6 +875,7 @@ async def run_eval_suite_multi(
                 samples=samples,
                 timeout_s=timeout_s,
                 system_prompt=system_prompt,
+                registry=registry,
             )
         )
     return out

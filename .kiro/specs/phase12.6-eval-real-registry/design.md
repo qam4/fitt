@@ -3,17 +3,17 @@
 ## Overview
 
 Make the default and realistic eval suites offer the **real registered
-tool schemas in the real wire shape**, sourced from the live
-`ToolRegistry`, instead of hand-written flat lookalikes. Keep the coding
-suite synthetic. Thread the registry through every production caller
-(endpoint, dashboard, CLI, profiler). Treat the resulting pass-rate shift
-as a deliberate re-baseline.
+tool schemas**, sourced from the live `ToolRegistry`, instead of
+hand-written lookalike copies. Keep the coding suite synthetic. Thread the
+registry through every production caller (endpoint, dashboard, CLI,
+profiler). Treat any resulting pass-rate shift as a deliberate
+re-baseline.
 
 The change is small in surface (one injection point in `run_eval_case`)
 but sensitive in effect (it moves a measurement instrument, including the
 capability profiler's grades), which is why it earns a spec.
 
-## Background: the two gaps
+## Background: the gap is source-of-truth, not shape
 
 Today `run_eval_case` does:
 
@@ -21,23 +21,27 @@ Today `run_eval_case` does:
 request_body = {"messages": [...], "tools": case.tools, ...}
 ```
 
-where `case.tools` is a list of flat dicts:
+where `case.tools` is a hand-written copy of a real tool. It is **already
+in the nested wire shape** the live path uses — both the eval lookalikes
+and `Tool.to_openai_schema()` produce
+`{"type":"function","function":{"name","description","parameters"}}`. (An
+earlier scoping note wrongly claimed the eval used a flat shape; that was
+a misread of a truncated view. Corrected 2026-07-01.)
 
-```python
-{"name": "read_file", "description": "...", "parameters": {...}}
-```
+The real gap is that it's a **copy**, not the shipped tool:
 
-Two mismatches versus production:
+- **Drift is uncaught** — if the shipped `read_file` schema changes, the
+  eval keeps testing the stale lookalike; a regression-catcher that can't
+  see the thing it's supposed to catch drift in.
+- **Shipped defects are invisible** — a registry ergonomics problem (the
+  `cron_add` naming fumble class) can't surface in a suite offering its
+  own clean copy.
 
-1. **Content** — a lookalike, not the shipped `read_file` schema. A
-   registry defect (the `cron_add` naming fumble) can't surface.
-2. **Shape** — flat. The chat / executor / scenario paths all offer
-   `[t.to_openai_schema() for t in registry.list_all()]`, i.e. nested
-   `{"type":"function","function":{"name","description","parameters"}}`.
-   The eval has been measuring a shape the live path never sends.
-
-So the eval's "can this model tool-call" answer has been about a
-different request than the one production makes.
+So the eval's "can this model tool-call" answer is about a *copy* of the
+request, which can silently diverge from what production actually sends.
+Because the shapes already match and the default/realistic lookalikes are
+close to the real schemas, the re-baseline shift is expected to be modest
+— but it is a real fidelity gain and a drift guard going forward.
 
 ## Key Design Decisions
 
@@ -55,8 +59,8 @@ and a pure resolver:
 def resolve_case_tools(
     case: EvalCase, registry: ToolRegistry | None
 ) -> list[dict[str, Any]]:
-    """Real nested schemas when a registry + tool_names are present;
-    the case's embedded (flat lookalike) tools otherwise."""
+    """Real registry schemas when a registry + tool_names are present;
+    the case's embedded lookalike tools otherwise."""
 ```
 
 Resolution rules (Req 1, 2, 3):
@@ -72,14 +76,14 @@ Resolution rules (Req 1, 2, 3):
 Additive: the resolver defaults to today's behavior, so nothing changes
 until a case sets `tool_names` AND a caller passes a registry.
 
-### Decision 2: The real wire shape is the correct shape
+### Decision 2: Offer the real registry object, not a copy
 
 `resolve_case_tools` uses `Tool.to_openai_schema()` verbatim, so the eval
-offers exactly the nested shape chat injects (Req 2). We do NOT normalise
-the flat lookalikes into nested — the lookalikes stay flat as the
-fallback, and the whole point is to offer the *real* object. This closes
-the shape gap for the registry-sourced suites; the coding suite keeps its
-flat synthetic schemas (Decision 4).
+offers exactly the object chat injects (Req 2) — same content, same
+(already-matching) nested shape. The point is the *source of truth*: the
+live registry, not a hand-maintained copy that can drift. The embedded
+lookalikes stay as the no-registry fallback; the coding suite keeps its
+synthetic schemas (Decision 4).
 
 ### Decision 3: Thread an optional `registry` through the runners
 
@@ -126,8 +130,8 @@ tool-ergonomics backlog — not something to hide.
         EvalCase(prompt, tool_names=("read_file", ...), tools=[<fallback>])
                                    │
                     resolve_case_tools(case, registry)
-                    ├─ registry + tool_names → [Tool.to_openai_schema() ...]  (real, nested)
-                    └─ else                  → case.tools                     (embedded, flat)
+                    ├─ registry + tool_names → [Tool.to_openai_schema() ...]  (live registry)
+                    └─ else                  → case.tools                     (embedded lookalike)
                                    │
         run_eval_case(case, alias, router, *, registry=None) ── request_body["tools"]
                                    │  (forwarded, unchanged consumers)
@@ -167,11 +171,11 @@ tool-ergonomics backlog — not something to hide.
 `tools` array is identical to today's.
 **Validates: Req 1.4, 7.4**
 
-### Property 2: Real-shape fidelity
+### Property 2: Registry-source fidelity
 *For any* case with `tool_names` and a registry containing those tools,
 the offered `tools` array equals `[registry.lookup(n).to_openai_schema()
-for n in tool_names]` — i.e. exactly what the chat handler would inject
-for the same tools.
+for n in tool_names]` — i.e. exactly the object the chat handler would
+inject for the same tools (same content and shape).
 **Validates: Req 2.1, 2.2**
 
 ### Property 3: Graceful degrade on a missing tool
@@ -193,8 +197,8 @@ whether tools came from the registry or the embedded list.
     (Property 2); no registry or no names → embedded (Property 1);
     missing name → fallback/omit, no raise (Property 3).
   - `run_eval_case` with a fake router that captures `request_body`:
-    assert the offered `tools` are the registry's nested schemas when a
-    registry is passed, and the embedded flat ones when not.
+    assert the offered `tools` are the registry's schemas when a registry
+    is passed, and the embedded lookalike ones when not.
   - Existing cases still classify identically (Property 4).
 - **Endpoint / dashboard / CLI / profiler tests**: assert the registry is
   threaded (the offered tools are real) without a live model — a fake

@@ -33,6 +33,7 @@ from gateway.alias_eval import (
     default_eval_dir,
     realistic_cases,
     render_report_markdown,
+    resolve_case_tools,
     run_eval_case,
     run_eval_suite,
     write_report,
@@ -934,3 +935,119 @@ def test_write_report_writes_json_sidecar(tmp_path: Any) -> None:
     # Coding suite namespaces its sidecar.
     write_report(report, tmp_path, suite="coding")
     assert (tmp_path / "eval" / "fitt-default-coding-latest.json").exists()
+
+
+# --------------------------------------------------------------- Phase 12.6: real-registry tools
+
+
+def _real_tool(
+    name: str, *, props: dict[str, Any] | None = None, required: list[str] | None = None
+) -> Any:
+    """Build a real registry Tool for the resolve tests."""
+    from gateway.tools import ApprovalBucket, Tool
+
+    async def _noop(_a: dict[str, Any], _c: Any) -> Any:  # pragma: no cover - never called
+        raise AssertionError("resolve must not invoke tools")
+
+    return Tool(
+        name=name,
+        description="d",
+        schema={
+            "type": "object",
+            "properties": props or {},
+            "required": required or [],
+            "additionalProperties": False,
+        },
+        callable=_noop,
+        default_bucket=ApprovalBucket.AUTO,
+    )
+
+
+def _registry_with(*tools: Any) -> Any:
+    from gateway.tools import ToolRegistry
+
+    reg = ToolRegistry()
+    for t in tools:
+        reg.register(t)
+    return reg
+
+
+def _case(**kw: Any) -> EvalCase:
+    base: dict[str, Any] = {
+        "name": "c",
+        "prompt": "p",
+        "tools": [_read_file_tool()],
+        "expected_tool": "read_file",
+    }
+    base.update(kw)
+    return EvalCase(**base)
+
+
+def test_resolve_returns_embedded_without_registry() -> None:
+    """Property 1: no registry -> the case's embedded tools, unchanged."""
+    case = _case(tool_names=("read_file",))
+    assert resolve_case_tools(case, None) == [_read_file_tool()]
+
+
+def test_resolve_returns_embedded_without_tool_names() -> None:
+    """Property 1: no tool_names -> embedded, even with a registry."""
+    reg = _registry_with(_real_tool("read_file"))
+    case = _case()  # tool_names defaults to ()
+    assert resolve_case_tools(case, reg) == [_read_file_tool()]
+
+
+def test_resolve_uses_real_registry_schema() -> None:
+    """Property 2: registry + tool_names -> the real nested to_openai_schema."""
+    tool = _real_tool("read_file", props={"project": {"type": "string"}}, required=["project"])
+    reg = _registry_with(tool)
+    case = _case(tool_names=("read_file",))
+    resolved = resolve_case_tools(case, reg)
+    assert resolved == [tool.to_openai_schema()]
+    # And it's the nested wire shape chat injects, not the flat lookalike.
+    assert resolved[0]["type"] == "function"
+    assert resolved[0]["function"]["name"] == "read_file"
+    assert "project" in resolved[0]["function"]["parameters"]["properties"]
+
+
+def test_resolve_missing_name_falls_back_to_embedded() -> None:
+    """Property 3: a named tool absent from the registry but present in the
+    case's embedded tools falls back to the embedded schema (no raise)."""
+    reg = _registry_with(_real_tool("read_file"))  # no web_search registered
+    embedded_ws = {
+        "type": "function",
+        "function": {"name": "web_search", "description": "", "parameters": {}},
+    }
+    case = _case(tools=[embedded_ws], expected_tool="web_search", tool_names=("web_search",))
+    assert resolve_case_tools(case, reg) == [embedded_ws]
+
+
+def test_resolve_missing_name_omitted_when_no_fallback() -> None:
+    """Property 3: a named tool absent from both the registry and the
+    embedded tools is omitted, not raised."""
+    reg = _registry_with(_real_tool("read_file"))
+    case = _case(tools=[], expected_tool="ghost", tool_names=("ghost",))
+    assert resolve_case_tools(case, reg) == []
+
+
+async def test_run_eval_case_offers_registry_schema_when_passed(tmp_path: Path) -> None:
+    """End to end: with a registry + tool_names, the dispatched request
+    body offers the real nested schema (Property 2 through the runner)."""
+    cfg = _cfg(tmp_path)
+    tool = _real_tool("read_file", props={"project": {"type": "string"}}, required=["project"])
+    reg = _registry_with(tool)
+    case = _case(prompt="read it", tool_names=("read_file",))
+    tc = [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]
+    router = _SeqRouter(cfg, [_make_response(tool_calls=tc)])
+    await run_eval_case(case, "fitt-smart", router, registry=reg)  # type: ignore[arg-type]
+    assert router.bodies[-1]["tools"] == [tool.to_openai_schema()]
+
+
+async def test_run_eval_case_offers_embedded_without_registry(tmp_path: Path) -> None:
+    """End to end: no registry -> the embedded lookalike is offered
+    verbatim (Property 1 through the runner)."""
+    cfg = _cfg(tmp_path)
+    case = _case(prompt="read it", tool_names=("read_file",))
+    tc = [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]
+    router = _SeqRouter(cfg, [_make_response(tool_calls=tc)])
+    await run_eval_case(case, "fitt-smart", router)  # type: ignore[arg-type]
+    assert router.bodies[-1]["tools"] == [_read_file_tool()]

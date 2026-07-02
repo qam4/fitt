@@ -1,6 +1,6 @@
 # Implementation Plan: FITT Phase 12.6 — Eval Over the Real Registry
 
-**Status:** not started
+**Status:** in progress
 
 ## Overview
 
@@ -15,21 +15,21 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 12.6a — Mechanism (additive, no behavior change yet)
 
-- [ ] 1. Add `tool_names: tuple[str, ...] = ()` to `EvalCase` (keep the
+- [x] 1. Add `tool_names: tuple[str, ...] = ()` to `EvalCase` (keep the
   existing `tools` field as the fallback / coding-suite path). (Req 1.1)
-- [ ] 2. Add pure `resolve_case_tools(case, registry) -> list[dict]`:
+- [x] 2. Add pure `resolve_case_tools(case, registry) -> list[dict]`:
   registry+names → `[Tool.to_openai_schema() for n in tool_names]`, with
-  per-name graceful fallback to the embedded schema then omit on
-  `KeyError`; no registry or no names → `case.tools`. (Req 1.2, 1.3, 1.4,
+  per-name graceful fallback to the embedded schema then omit on a missing
+  name; no registry or no names → `case.tools`. (Req 1.2, 1.3, 1.4,
   2.1, 2.2, Properties 1, 2, 3)
-- [ ] 3. Thread `registry: ToolRegistry | None = None` through
+- [x] 3. Thread `registry: ToolRegistry | None = None` through
   `run_eval_case` (consumes it via the resolver) and forward it through
   `run_eval_suite`, `run_eval_case_multi`, `run_eval_suite_multi`.
   (Req 1.4, Decision 3)
-- [ ] 4. Tests: `resolve_case_tools` (all three branches, Properties
+- [x] 4. Tests: `resolve_case_tools` (all three branches, Properties
   1-3); `run_eval_case` with a body-capturing fake router asserts real
-  nested schemas when a registry is passed vs embedded flat when not;
-  classification unchanged (Property 4). ruff/mypy/pytest green.
+  registry schemas when a registry is passed vs embedded lookalike when
+  not; classification unchanged (Property 4). ruff/mypy/pytest green.
 
 ## Phase 12.6b — Switch default + realistic to the real registry
 

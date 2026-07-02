@@ -8,36 +8,48 @@ The eval suites (Phase 4.11, extended in 12/12.5) measure whether a bound
 model can tool-call, and the capability profiler grades tool-calling from
 those suites. But every case hand-writes its own tool schema — a
 *lookalike* of a real FITT tool — so the suites have never exercised the
-tools the gateway actually ships. Two consequences, both discovered while
-shipping the tool-consistency lint (2026-07-01):
+tools the gateway actually ships.
 
-1. **Wrong content.** A schema-ergonomics bug in the shipped registry
-   (the `cron_add` `message` vs `text` fumble) is invisible to the eval
-   by construction, because the eval offers its own clean copy.
-2. **Wrong shape.** The lookalikes are flat `{"name", "description",
-   "parameters"}` dicts. The real chat / executor / scenario paths offer
-   tools in the OpenAI *nested* shape (`{"type":"function","function":
-   {...}}`, via `Tool.to_openai_schema()`). So the eval has been
-   measuring a wire shape the live path never uses.
+**The gap is content / source-of-truth, not wire shape.** (An earlier
+scoping note claimed the lookalikes were a *flat* shape the live path
+never sends; that was wrong — the embedded schemas are already nested
+`{"type":"function","function":{...}}`, the same shape
+`Tool.to_openai_schema()` produces. Corrected 2026-07-01.) The real
+problem is that the eval offers hand-written *copies*, so:
+
+1. **Drift is uncaught.** If a shipped tool's schema changes (or was
+   always subtly different from its lookalike), the eval keeps testing
+   the stale copy and never notices — the opposite of what a
+   regression-catcher should do.
+2. **Defects in the shipped shape are invisible.** A schema-ergonomics
+   problem in the real registry (the `cron_add` `message` vs `text`
+   fumble class) can never surface in a suite that offers its own clean
+   copy — and a future case for such a tool would test the copy, not the
+   ship.
 
 This phase makes the **default** and **realistic** suites offer the
-**real registered tool schemas**, in the **real wire shape**, so the eval
-measures what production actually sends the model. This is the "feed the
+**real registered tool schemas** (sourced from the live `ToolRegistry`
+via `Tool.to_openai_schema()`), so the eval measures the exact tools
+production sends the model and drift is caught. This is the "feed the
 eval real tool forms" lane (b-complement of the measurement-ladder split
 in project-overview steering); the separate offline tool-consistency lint
 already shipped.
 
-Because this changes what the model is shown, measured pass-rates —
-including the capability profiler's tool-calling grades — are expected to
-shift. That re-baseline is the point (faithful measurement), not a
-regression to suppress.
+Because this changes the offered schemas, measured pass-rates — including
+the capability profiler's tool-calling grades — **may shift**. The
+default/realistic lookalikes are already close to the real schemas (same
+nested shape, similar params), so the shift is expected to be modest; but
+any shift is a deliberate re-baseline (faithful measurement), not a
+regression to suppress. If a real tool proves genuinely harder for a model
+than its lookalike was, that's a true tool-ergonomics finding.
 
 ## Glossary
 
 - **Eval case** (`EvalCase`): one curated prompt + expected tool-call
-  shape. Today carries an embedded `tools` list (flat lookalike schemas).
+  shape. Today carries an embedded `tools` list (lookalike schemas).
 - **Lookalike schema**: a hand-written tool schema in a case, a copy of a
-  real tool, in the flat `{name, description, parameters}` shape.
+  real tool, in the same nested `{type, function}` shape the real tool
+  uses — a copy, not the live object.
 - **Real schema**: the schema the gateway actually offers the model,
   `Tool.to_openai_schema()` (nested `{type, function}`), sourced from the
   live `ToolRegistry`.
@@ -71,19 +83,21 @@ the exact tool the gateway ships.
 4. THE mechanism SHALL be additive: a case with no tool names, or a run
    with no registry, SHALL behave exactly as today (embedded lookalikes).
 
-### Requirement 2: Tools are offered in the real wire shape
+### Requirement 2: Tools come from the live registry (single source of truth)
 
-**User Story:** As FITT's developer, I want the eval to offer tools in the
-same OpenAI nested shape the live chat path uses, so that the eval
-measures the real request the model receives.
+**User Story:** As FITT's developer, I want the eval to offer the exact
+tool object the gateway ships, so that the eval measures the real request
+the model receives and drift between a copy and the shipped tool is
+caught.
 
 #### Acceptance Criteria
 
 1. WHEN a case's tools are sourced from the registry, THE offered `tools`
-   array SHALL use the nested `{"type":"function","function":{...}}` shape
-   produced by `Tool.to_openai_schema()`.
-2. THE offered shape SHALL match, field for field, what the chat handler
-   injects for the same tool (no eval-only shape divergence).
+   array SHALL be `Tool.to_openai_schema()` for each named tool — the same
+   object the chat handler injects.
+2. THE offered schema SHALL match, field for field, what the chat handler
+   injects for the same tool (no eval-only divergence in content or
+   shape).
 
 ### Requirement 3: Default and realistic suites use the real registry
 
