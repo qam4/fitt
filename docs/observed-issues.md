@@ -33,6 +33,45 @@ doc.
 
 ---
 
+## Phase 12.6 re-baseline: real-registry eval at parity with lookalikes (gemma4)
+
+**First observed:** 2026-07-02 (Phase 12.6d re-baseline over the SSM
+tunnel to EC2).
+**Tag:** Phase 12.6 / eval-over-real-registry / measurement ladder.
+
+After 12.6a-c switched the default + realistic suites to offer FITT's
+*real* registered tool schemas (via `tool_names` + `resolve_case_tools`)
+instead of hand-written lookalikes, profiled `fitt-ec2-gemma4`
+(gemma4:12b-it-qat, over the tunnel) on the wired path:
+
+- **tool-calling: 100% (30/30)**, p50 3.1s / p95 7.9s.
+- **coding: 76% (19/25)** — synthetic suite, unchanged by 12.6.
+- **plan-election: 100% (5/5)**, p50 23.4s.
+
+The finding is a *non-finding*, which is the point: the real schemas
+performed **at parity** with the lookalikes — no tool proved genuinely
+harder once it faced a model in its shipped shape. The design (Decision
+6) said "expect the numbers to move"; for gemma4 they didn't, so the
+switch is a clean re-baseline with no regression and no tool-ergonomics
+surprise to chase.
+
+**Cost:** none — this is the known-good baseline going forward.
+
+**Caveat worth keeping:** the coding suite's per-case failures
+(`code_edit_basic` reads before it edits 5/5; `code_shell_basic`
+intermittently emits a malformed `"tool_calls:"` tool name) are
+**single-turn measurement artifacts**, not capability grades. Reading
+before editing is what an agent *loop* wants; the single-turn eval
+can't see the second turn. Frontier coding agents moved from prompt
+design to loop design, and FITT's coding suite only exists to sanity-
+check router-mode bindings whose external agent brings its own loop. So
+treat the coding pass-rate as a coarse "does this binding tool-call
+under prompt pressure" signal — single-turn tool-election is not loop
+capability. Attribution to model-vs-prompt would need per-case ablation,
+which doesn't scale and isn't worth it here.
+
+---
+
 ## Liveness bullet conflates fresh-shallow reachability with stale-deep probe; nothing auto-refreshes
 
 **First observed:** 2026-07-01 (walking the ping/probe/eval/profile

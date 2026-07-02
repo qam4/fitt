@@ -29,16 +29,18 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Tool-ergonomics fixes DONE 2026-07-01: `cron_add`/`cron_update` payload
-  arg renamed `message` -> `text` (family lint guards it); `edit_file`
-  errors now quote the near-miss (closest on-disk text on a zero-match,
-  usually a whitespace mismatch) and the match line numbers on a
-  >1-match. Next up is Lane A.
+- Lane A DONE 2026-07-02 (`phase12.6-eval-real-registry`, shipped): the
+  default + realistic suites now offer FITT's real registered tool
+  schemas (via `EvalCase.tool_names` + `resolve_case_tools`), the
+  registry threads through every production caller, and the profiler
+  re-baselined (gemma4: tool-calling 100%, real schemas at parity with
+  the old lookalikes — clean, no regression). Also added eval **warmup**
+  (one throwaway load request before the timed cases) so a cold 12b/14b
+  isn't misread as `upstream_silent` on the first case.
 
 **Next**
-- Feed the eval the REAL tool forms (Lane A: `run_eval_suite` offers
-  `registry.list_all()` schemas instead of hand-written lookalikes,
-  cases reference tool names) — the model-side half, a bigger refactor.
+- (open) Pick from Later, or resume a bigger arc (Phase 8/9 — see
+  roadmap). No small item is queued as urgent.
 
 **Later**
 - Render the profile baseline-diff in the Capability card (folds into
@@ -129,9 +131,12 @@ The curated ordering - the judgment call a tool can't make for you.
   warnings" card (which now aggregates all boot checks incl. MCP/skills).
   The required-field budget + name-collision rules stay with
   `test_tool_schema_lint.py` (the CI gate, which handles reviewed
-  exceptions a flat pass can't). **Lane (a) remains:** feed
-  `run_eval_suite` the real `registry.list_all()` schemas (cases
-  reference tool names) - the bigger, model-side refactor (Next).
+  exceptions a flat pass can't). **Lane (a) SHIPPED 2026-07-02**
+  (`phase12.6-eval-real-registry`): the default + realistic suites name
+  real tools and source their live `to_openai_schema()` via
+  `resolve_case_tools`; the coding suite stays synthetic on purpose
+  (models an external coding-agent, not FITT's registry). Re-baselined
+  on gemma4 at parity with the old lookalikes.
   _(source: [observed-issues](docs/observed-issues.md))_
 - **Normalise "the words" tool-arg naming** - SHIPPED 2026-07-01:
   `cron_add` / `cron_update` payload arg renamed `message` -> `text` to

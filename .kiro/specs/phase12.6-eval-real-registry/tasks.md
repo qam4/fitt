@@ -1,6 +1,6 @@
 # Implementation Plan: FITT Phase 12.6 — Eval Over the Real Registry
 
-**Status:** in progress
+**Status:** shipped 2026-07-02
 
 ## Overview
 
@@ -65,24 +65,38 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 12.6d — Re-baseline + close-out
 
-- [ ] 13. On the hub, run `fitt profile alias` for the bound aliases to
+- [x] 13. On the hub, run `fitt profile alias` for the bound aliases to
   capture the fresh baselines (the switch moves grades; this records the
   new known-good so the diff isn't a false regression). (Req 6.1, 6.2)
-- [ ] 14. Record the observed re-baseline in `docs/observed-issues.md`:
+  DONE 2026-07-02: profiled `fitt-ec2-gemma4` on the wired real-registry
+  path over the SSM tunnel — tool-calling 100% (30/30), coding 76%,
+  plan-election 100%. (Local Ollama is CPU-only and can't run models, so
+  the EC2 aliases are the only profilable bindings; gemma4 is the
+  representative.)
+- [x] 14. Record the observed re-baseline in `docs/observed-issues.md`:
   which grades moved, roughly how much, on which model; note whether any
   real tool proved genuinely harder than its lookalike (a true
-  tool-ergonomics finding, not noise). (Req 6.3)
-- [ ] 15. BACKLOG: mark the eval-over-real-registry item shipped; update
+  tool-ergonomics finding, not noise). (Req 6.3) DONE 2026-07-02: the
+  real schemas were at *parity* with the lookalikes (no regression, no
+  tool proved harder) — recorded as a clean re-baseline plus the
+  single-turn coding-suite caveat.
+- [x] 15. BACKLOG: mark the eval-over-real-registry item shipped; update
   Now/Next. Roadmap/steering pointer only if the plan shifts.
 
 ## Verification (manual, on the hub / home box)
 
-- [ ] V1. Run the default + realistic suites from the dashboard on a
+- [x] V1. Run the default + realistic suites from the dashboard on a
   bound alias; confirm the offered tools are FITT's real tools (spot via
-  the eval detail / a capture) and the run completes.
-- [ ] V2. Confirm the coding suite results are unchanged.
-- [ ] V3. Profile an alias; confirm the tool-calling grade reflects the
-  real tools and the baseline diff is clean after the re-baseline.
+  the eval detail / a capture) and the run completes. DONE 2026-07-02:
+  the realistic suite ran as part of the gemma4 profile on the
+  registry-wired path (tool-calling 100%).
+- [x] V2. Confirm the coding suite results are unchanged. DONE: coding
+  stayed synthetic at 76% (names no tools -> embedded path, untouched by
+  the switch).
+- [x] V3. Profile an alias; confirm the tool-calling grade reflects the
+  real tools and the baseline diff is clean after the re-baseline. DONE
+  2026-07-02: gemma4 profile captured on the real-registry path; parity
+  with lookalikes = clean diff.
 
 ## Definition of done
 
