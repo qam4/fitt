@@ -785,6 +785,8 @@ from gateway.alias_eval import (  # noqa: E402
     MultiSampleResult,
     aggregate_samples,
     run_eval_case_multi,
+    run_eval_suite_multi,
+    warmup_alias,
 )
 
 
@@ -1104,3 +1106,58 @@ def test_coding_cases_stay_embedded_even_with_registry() -> None:
     for case in default_coding_cases():
         assert case.tool_names == ()
         assert resolve_case_tools(case, reg) == case.tools
+
+
+# --------------------------------------------------------------- Phase 12: warmup
+
+
+def _warmup_case() -> EvalCase:
+    return EvalCase(
+        name="t", prompt="read it", tools=[_read_file_tool()], expected_tool="read_file"
+    )
+
+
+def _read_tc() -> list[dict[str, Any]]:
+    return [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]
+
+
+async def test_warmup_alias_swallows_exceptions(tmp_path: Path) -> None:
+    """A backend failure during warmup must not propagate — the real
+    cases are left to classify the actual outcome."""
+    cfg = _cfg(tmp_path)
+    router = _SeqRouter(cfg, [RuntimeError("backend down")])
+    await warmup_alias("fitt-smart", router)  # type: ignore[arg-type]  # must not raise
+    # It still issued the throwaway load request (max_tokens==1, no tools).
+    assert router.bodies[0]["max_tokens"] == 1
+    assert "tools" not in router.bodies[0]
+
+
+async def test_run_eval_suite_warms_up_before_cases(tmp_path: Path) -> None:
+    """warmup=True (default): the first dispatch is the throwaway load
+    (max_tokens==1, no tools), then the timed cases run with tools."""
+    cfg = _cfg(tmp_path)
+    router = _SeqRouter(cfg, [_make_response(content="ok"), _make_response(tool_calls=_read_tc())])
+    await run_eval_suite("fitt-smart", router, cases=[_warmup_case()])  # type: ignore[arg-type]
+    assert router.bodies[0]["max_tokens"] == 1
+    assert "tools" not in router.bodies[0]
+    # Second dispatch is the real case: tools present, full token budget.
+    assert "tools" in router.bodies[1]
+    assert router.bodies[1]["max_tokens"] != 1
+
+
+async def test_run_eval_suite_skips_warmup_when_disabled(tmp_path: Path) -> None:
+    """warmup=False: no lone throwaway dispatch — the case is first."""
+    cfg = _cfg(tmp_path)
+    router = _SeqRouter(cfg, [_make_response(tool_calls=_read_tc())])
+    await run_eval_suite("fitt-smart", router, cases=[_warmup_case()], warmup=False)  # type: ignore[arg-type]
+    assert len(router.bodies) == 1
+    assert "tools" in router.bodies[0]
+
+
+async def test_run_eval_suite_multi_warms_up(tmp_path: Path) -> None:
+    """The multi-sample suite warms up once before the k-sampled cases."""
+    cfg = _cfg(tmp_path)
+    router = _SeqRouter(cfg, [_make_response(content="ok"), _make_response(tool_calls=_read_tc())])
+    await run_eval_suite_multi("fitt-smart", router, cases=[_warmup_case()], samples=1)  # type: ignore[arg-type]
+    assert router.bodies[0]["max_tokens"] == 1
+    assert "tools" not in router.bodies[0]

@@ -696,6 +696,35 @@ async def _classify_case_timeout(
     )
 
 
+async def warmup_alias(
+    alias: str,
+    router: AliasRouter,
+    *,
+    timeout_s: float = 120.0,
+) -> None:
+    """Fire one throwaway request to load the model into VRAM *before* the
+    timed cases run, so a cold model isn't misread as ``upstream_silent``
+    on the first few cases (the EC2 cold-start problem — a 12b/14b can take
+    >15s to load, longer than the per-case timeout).
+
+    Best-effort by design: a long timeout to absorb the cold load, and
+    every error/timeout is swallowed — if warmup can't load the model, the
+    real cases will surface the actual failure. On an already-warm model
+    this returns in ~1-3s, so it's cheap to always run. It does NOT count
+    toward any grade; it's purely a side-effect load."""
+    body: dict[str, Any] = {
+        "messages": [{"role": "user", "content": "ok"}],
+        "stream": False,
+        "max_tokens": 1,
+    }
+    try:
+        await asyncio.wait_for(router.dispatch(alias, body), timeout=timeout_s)
+    except Exception:
+        # Warmup is opportunistic; a failure here just means the cases
+        # will run cold and classify the real outcome themselves.
+        pass
+
+
 async def run_eval_suite(
     alias: str,
     router: AliasRouter,
@@ -704,6 +733,8 @@ async def run_eval_suite(
     timeout_s: float = 15.0,
     system_prompt: str = "",
     registry: ToolRegistry | None = None,
+    warmup: bool = True,
+    warmup_timeout_s: float = 120.0,
 ) -> EvalReport:
     """Run every case in ``cases`` (or the default suite) against
     ``alias``, sequentially.
@@ -718,8 +749,17 @@ async def run_eval_suite(
     limits), and a 5-case parallel burst is a good way to
     get rate-limited through no fault of the case design.
     A 5-case sequential run takes roughly 15-25 seconds;
-    acceptable for an on-demand operator command."""
+    acceptable for an on-demand operator command.
+
+    ``warmup`` (Phase 12, cold-start fix): when true (default), one
+    throwaway request loads the model into VRAM before the timed cases,
+    so a cold 12b/14b isn't misclassified as ``upstream_silent`` on the
+    first case. Best-effort — see :func:`warmup_alias`. Set false for the
+    reproducible/CI path or a known-warm backend where the extra request
+    is pure cost."""
     cases = cases if cases is not None else default_cases()
+    if warmup:
+        await warmup_alias(alias, router, timeout_s=warmup_timeout_s)
     started_at = datetime.now(UTC)
     results: list[CaseResult] = []
     model_id: str | None = None
@@ -863,14 +903,23 @@ async def run_eval_suite_multi(
     timeout_s: float = 15.0,
     system_prompt: str = "",
     registry: ToolRegistry | None = None,
+    warmup: bool = True,
+    warmup_timeout_s: float = 120.0,
 ) -> list[MultiSampleResult]:
     """Multi-sample every case in ``cases`` (or the default suite)
     against ``alias`` and return per-case pass-rates.
 
     This is the capability-mode counterpart to :func:`run_eval_suite`:
     instead of one pass/fail per case it reports passes/valid over k
-    samples, so a 5/5 that's really a 4/5 doesn't read as solid."""
+    samples, so a 5/5 that's really a 4/5 doesn't read as solid.
+
+    ``warmup`` (default true): one throwaway request loads the model into
+    VRAM before the k-sampled cases, so cold-load latency doesn't eat the
+    first sample as ``upstream_silent``. The warmup runs once for the
+    whole suite, not per case. See :func:`warmup_alias`."""
     cases = cases if cases is not None else default_cases()
+    if warmup:
+        await warmup_alias(alias, router, timeout_s=warmup_timeout_s)
     out: list[MultiSampleResult] = []
     for case in cases:
         out.append(
