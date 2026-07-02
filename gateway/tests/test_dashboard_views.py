@@ -3782,3 +3782,38 @@ def test_parse_eval_report_falls_back_to_markdown(tmp_path) -> None:
     assert rep["passed"] == 3
     assert rep["total"] == 4
     assert rep["finished_iso"] == "2026-01-01T00:00:02"
+
+
+def test_run_eval_action_threads_registry(tmp_path: Path) -> None:
+    """Phase 12.6c: the dashboard run-eval action passes the app's live
+    tool registry to the suite runner."""
+    from datetime import UTC, datetime
+    from unittest.mock import patch
+
+    from gateway.alias_eval import EvalReport
+
+    captured: dict[str, Any] = {}
+
+    async def _stub(*_a: Any, **kw: Any) -> EvalReport:
+        captured.update(kw)
+        return EvalReport(
+            alias="fitt-default",
+            model_id="m",
+            started_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+            cases=[],
+        )
+
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+    tc = TestClient(app, follow_redirects=False)
+    _login(tc)
+    csrf = _csrf_from(tc.get("/dashboard/alias/fitt-default").text)
+
+    with patch("gateway.alias_eval.run_eval_suite", side_effect=_stub):
+        tc.post(
+            "/dashboard/actions/run-eval",
+            data={"csrf_token": csrf, "alias": "fitt-default", "suite": "default"},
+        )
+    assert captured.get("registry") is app.state.tool_registry

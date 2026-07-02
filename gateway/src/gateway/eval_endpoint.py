@@ -212,7 +212,11 @@ async def run_eval(
         )
     try:
         report = await run_eval_suite(
-            alias, eval_router, cases=cases, system_prompt=realistic_prompt
+            alias,
+            eval_router,
+            cases=cases,
+            system_prompt=realistic_prompt,
+            registry=request.app.state.tool_registry,
         )
     except UnknownAlias as exc:
         raise HTTPException(

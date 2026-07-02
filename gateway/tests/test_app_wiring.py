@@ -129,3 +129,14 @@ def test_app_still_serves_health(tmp_path: Path) -> None:
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
+
+
+def test_build_core_tool_registry_has_eval_named_tools(tmp_path: Path) -> None:
+    """Phase 12.6c: the shared core registry builder (used by create_app
+    and the headless eval CLI) contains the tools the eval suites name, so
+    a CLI run offers their real schemas."""
+    from gateway.tools import build_core_tool_registry
+
+    cfg = build_test_config(tmp_path)
+    names = set(build_core_tool_registry(cfg).list_names())
+    assert {"read_file", "grep_repo", "list_capabilities", "web_search"} <= names

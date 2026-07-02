@@ -1562,6 +1562,7 @@ def eval_alias_cmd(
     from .alias_eval_coding import default_coding_cases
     from .config import fitt_home
     from .router import AliasRouter
+    from .tools import build_core_tool_registry
 
     cfg = load_config(
         config_file or default_config_path(),
@@ -1574,6 +1575,10 @@ def eval_alias_cmd(
         sys.exit(2)
 
     cases = default_coding_cases() if suite == "coding" else None
+    # Real tool schemas for the suites' named tools (Phase 12.6) — the
+    # same core registry the gateway builds, so the CLI eval measures the
+    # shipped tools, not lookalikes.
+    registry = build_core_tool_registry(cfg)
     base_router = AliasRouter(cfg)
     recording: Any = None
     eval_router: Any = base_router
@@ -1582,7 +1587,9 @@ def eval_alias_cmd(
 
         recording = RecordingRouter(base_router)
         eval_router = recording
-    report = asyncio.run(run_eval_suite(alias, eval_router, cases=cases, timeout_s=timeout_s))
+    report = asyncio.run(
+        run_eval_suite(alias, eval_router, cases=cases, timeout_s=timeout_s, registry=registry)
+    )
     if recording is not None:
         recording.save(record_path)
         _console.print(
@@ -1636,12 +1643,14 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
     from .alias_eval_coding import default_coding_cases
     from .config import fitt_home
     from .router import AliasRouter
+    from .tools import build_core_tool_registry
 
     cfg = load_config(
         config_file or default_config_path(),
         default_secrets_path(),
     )
     router = AliasRouter(cfg)
+    registry = build_core_tool_registry(cfg)
     any_failed = False
 
     cases = default_coding_cases() if suite == "coding" else None
@@ -1649,7 +1658,9 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
     async def _run_all() -> None:
         nonlocal any_failed
         for alias in cfg.alias_names():
-            report = await run_eval_suite(alias, router, cases=cases, timeout_s=timeout_s)
+            report = await run_eval_suite(
+                alias, router, cases=cases, timeout_s=timeout_s, registry=registry
+            )
             write_report(report, fitt_home(), suite=suite)
             colour = "green" if report.passed == report.total else "yellow"
             if report.passed != report.total:

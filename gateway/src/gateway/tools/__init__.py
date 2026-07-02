@@ -8,6 +8,8 @@ re-export from here once they're stable enough to commit to an API.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from . import deny_list
 from ._types import (
     ApprovalBucket,
@@ -30,6 +32,43 @@ from .send_message import SendMessageRateLimiter, build_send_message_tool
 from .shelltools import build_shell_tools
 from .web_search import build_web_search_tools
 
+if TYPE_CHECKING:
+    from ..config import Config
+
+
+def build_core_tool_registry(config: Config) -> ToolRegistry:
+    """Assemble a :class:`ToolRegistry` with the dependency-free tool
+    groups: inline, fileops, git, shell, web_search, cron, lessons, plan.
+
+    This is everything :func:`gateway.app.create_app` registers *except*
+    ``project_shell`` and ``send_message``, which need runtime handles
+    (per-client approval defaults, the rate limiter + push-channel probe).
+    ``create_app`` calls this and then adds those two; headless callers
+    (the ``fitt eval`` CLI, and any other non-server path that needs the
+    real tool schemas) use it directly, so the tool assembly lives in one
+    place instead of being copied. The eval suites only name tools in this
+    core set, so a registry built here offers the same real schemas the
+    gateway ships."""
+    registry = ToolRegistry(ToolPolicy.from_config(config.tools))
+    for t in build_inline_tools(registry):
+        registry.register(t)
+    for t in build_fileops_tools():
+        registry.register(t)
+    for t in build_git_tools():
+        registry.register(t)
+    for t in build_shell_tools():
+        registry.register(t)
+    for t in build_web_search_tools(config.web.search_backend):
+        registry.register(t)
+    for t in build_cron_tools():
+        registry.register(t)
+    for t in build_lessons_tools():
+        registry.register(t)
+    for t in build_plan_tools():
+        registry.register(t)
+    return registry
+
+
 __all__ = [
     "ApprovalBucket",
     "ApprovalDecision",
@@ -42,6 +81,7 @@ __all__ = [
     "ToolPolicy",
     "ToolRegistry",
     "ToolResult",
+    "build_core_tool_registry",
     "build_cron_tools",
     "build_fileops_tools",
     "build_git_tools",

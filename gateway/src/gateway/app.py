@@ -190,18 +190,9 @@ def create_app(config: Config) -> FastAPI:
         ApprovalBucket,
         ExecutionBackend,
         SendMessageRateLimiter,
-        ToolPolicy,
-        ToolRegistry,
-        build_cron_tools,
-        build_fileops_tools,
-        build_git_tools,
-        build_inline_tools,
-        build_lessons_tools,
-        build_plan_tools,
+        build_core_tool_registry,
         build_project_shell_tool,
         build_send_message_tool,
-        build_shell_tools,
-        build_web_search_tools,
     )
 
     app.state.project_registry = ProjectRegistry(default_projects_path())
@@ -272,31 +263,14 @@ def create_app(config: Config) -> FastAPI:
             )
             app.state.local_shell = ShellInterpreter.none()
 
-    tool_policy = ToolPolicy.from_config(config.tools)
-    tool_registry = ToolRegistry(tool_policy)
-    # Build and register each inline tool group in a stable order.
-    # `build_inline_tools(registry)` captures the registry in a
-    # closure for `list_capabilities`, so construct it before
-    # registering anything else.
-    for t in build_inline_tools(tool_registry):
-        tool_registry.register(t)
-    for t in build_fileops_tools():
-        tool_registry.register(t)
-    for t in build_git_tools():
-        tool_registry.register(t)
-    for t in build_shell_tools():
-        tool_registry.register(t)
-    # Phase 4.11 — web_search tool. Triggers provider discovery
-    # as a side effect; the configured backend's name is baked
-    # into the tool's description (cf. design.md Decision 5).
-    for t in build_web_search_tools(config.web.search_backend):
-        tool_registry.register(t)
-    for t in build_cron_tools():
-        tool_registry.register(t)
-    for t in build_lessons_tools():
-        tool_registry.register(t)
-    for t in build_plan_tools():
-        tool_registry.register(t)
+    # Core tool groups (inline / fileops / git / shell / web_search /
+    # cron / lessons / plan) assembled by the shared builder so the
+    # registry isn't re-created by hand in every headless caller (the
+    # `fitt eval` CLI, tests). project_shell + send_message need runtime
+    # handles (per-client defaults, the rate limiter + push probe), so
+    # they're registered here on the returned registry.
+    tool_registry = build_core_tool_registry(config)
+    tool_policy = tool_registry.policy
 
     # Phase 4.7: project_shell. Registered with baked-in per-
     # client defaults so Open WebUI (least-trust) gets ``block``

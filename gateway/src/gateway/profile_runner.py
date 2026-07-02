@@ -133,15 +133,19 @@ async def run_profile(
         samples=samples,
         timeout_s=timeout_s,
         system_prompt=system_prompt,
+        registry=registry,
     )
     # Coding cases embed their own realistic system prompt in the
-    # prompt text, so no separate system_prompt here.
+    # prompt text, so no separate system_prompt here. The coding suite
+    # names no tools, so passing the registry is inert (it stays on the
+    # embedded path) — passed for consistency.
     coding_results = await run_eval_suite_multi(
         alias,
         router,
         cases=default_coding_cases(),
         samples=samples,
         timeout_s=timeout_s,
+        registry=registry,
     )
     # Plan-election: run the planner pass on the canonical multi-step
     # prompt and record how often the alias emits a plan (Stage 1).

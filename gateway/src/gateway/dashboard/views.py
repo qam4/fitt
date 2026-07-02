@@ -2286,7 +2286,11 @@ async def _action_run_eval(
     eval_router = AliasRouter(config)
     try:
         report = await run_eval_suite(
-            alias, eval_router, cases=cases, system_prompt=realistic_prompt
+            alias,
+            eval_router,
+            cases=cases,
+            system_prompt=realistic_prompt,
+            registry=request.app.state.tool_registry,
         )
     except Exception as exc:
         return False, f"Eval failed: {type(exc).__name__}: {exc}"

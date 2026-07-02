@@ -297,3 +297,18 @@ def test_build_realistic_system_prompt_token_estimate(tmp_path: Path) -> None:
 
 # --------------------------------------------------------------- helpers
 # (None needed; tests use inline async stubs as side_effect.)
+
+
+def test_eval_endpoint_threads_real_registry(client: TestClient) -> None:
+    """Phase 12.6c: the endpoint passes the app's live tool registry to
+    the suite runner, so the eval offers the real tools."""
+    captured: dict[str, Any] = {}
+
+    async def _stub(*_args: Any, **kwargs: Any) -> EvalReport:
+        captured.update(kwargs)
+        return _make_report("fitt-default")
+
+    with patch("gateway.eval_endpoint.run_eval_suite", side_effect=_stub):
+        r = client.post("/v1/eval/fitt-default", headers=_auth())
+    assert r.status_code == 200, r.text
+    assert captured.get("registry") is client.app.state.tool_registry  # type: ignore[attr-defined]

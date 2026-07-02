@@ -88,3 +88,33 @@ async def test_run_profile_assembles_three_dimensions(tmp_path: Path) -> None:
     assert by_name["plan-election"].pass_rate == 0.5
     # Declared ping was skipped, so no declared block — measured stands alone.
     assert profile.declared == []
+
+
+async def test_run_profile_threads_registry(tmp_path: Path) -> None:
+    """Phase 12.6c: run_profile passes the live registry to both eval
+    suite runs, so the profiler's tool-calling grade reflects the real
+    tools."""
+    cfg = build_test_config(tmp_path)
+    cfg.server.boot_probe_enabled = False
+    app = create_app(cfg)
+
+    fake = [_case(5, 5, 5, [100.0])]
+    suite_mock = AsyncMock(side_effect=[fake, fake])
+    election = PlanElectionMulti(
+        alias="fitt-default",
+        samples=[
+            PlanElectionSample(
+                planned=True, transient=False, latency_ms=1000.0, in_tokens=50, out_tokens=20
+            )
+        ],
+    )
+    with (
+        patch("gateway.alias_eval.run_eval_suite_multi", new=suite_mock),
+        patch("gateway.planner.measure_plan_election", new=AsyncMock(return_value=election)),
+        patch("httpx.get", side_effect=RuntimeError("no network in test")),
+    ):
+        await run_profile(alias="fitt-default", cfg=cfg, state=app.state, samples=2, timeout_s=5.0)
+
+    assert suite_mock.call_count == 2
+    for call in suite_mock.call_args_list:
+        assert call.kwargs.get("registry") is app.state.tool_registry

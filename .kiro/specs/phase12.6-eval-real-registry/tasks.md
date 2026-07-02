@@ -48,16 +48,19 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 12.6c — Wire every production caller
 
-- [ ] 8. `/v1/eval/<alias>` endpoint: pass `app.state.tool_registry` to
-  the suite runner. (Req 5.1)
-- [ ] 9. Dashboard `_action_run_eval`: pass `request.app.state.
+- [x] 8. `/v1/eval/<alias>` endpoint: pass `request.app.state.tool_registry`
+  to the suite runner. (Req 5.1)
+- [x] 9. Dashboard `_action_run_eval`: pass `request.app.state.
   tool_registry`. (Req 5.2)
-- [ ] 10. `fitt eval alias` CLI: pass the wired registry. (Req 5.3)
-- [ ] 11. Profiler (`profile_runner`): pass the registry into the
+- [x] 10. `fitt eval alias` + `eval all` CLI: pass a registry built by the
+  shared `build_core_tool_registry(cfg)` (also extracted from create_app,
+  removing the duplicated assembly). (Req 5.3)
+- [x] 11. Profiler (`profile_runner`): pass the registry into the
   realistic + coding suite runs used for the tool-calling grade.
   (Req 5.4)
-- [ ] 12. Tests: each caller threads the registry (body-capture or wiring
-  assertion, no live model); existing caller tests stay green (Req 7).
+- [x] 12. Tests: each caller threads the registry (mock the runner, assert
+  the `registry` kwarg is the app's live registry); `build_core_tool_registry`
+  has the eval-named tools; existing caller tests stay green (Req 7).
   ruff/mypy/pytest green; commit + push.
 
 ## Phase 12.6d — Re-baseline + close-out
