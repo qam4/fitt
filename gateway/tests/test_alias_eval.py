@@ -1051,3 +1051,56 @@ async def test_run_eval_case_offers_embedded_without_registry(tmp_path: Path) ->
     router = _SeqRouter(cfg, [_make_response(tool_calls=tc)])
     await run_eval_case(case, "fitt-smart", router)  # type: ignore[arg-type]
     assert router.bodies[-1]["tools"] == [_read_file_tool()]
+
+
+# ------------------------------------------- Phase 12.6b: suites use the real registry
+
+
+def test_default_cases_name_real_tools() -> None:
+    """Every default case now names the FITT tools it offers, so a
+    registry-backed run sources their real schemas."""
+    named = {n for case in default_cases() for n in case.tool_names}
+    assert {"read_file", "grep_repo", "list_capabilities"} <= named
+
+
+def test_default_cases_resolve_to_registry_when_present() -> None:
+    """With a registry, a default case offers the registry's object, not
+    its embedded lookalike (distinguishable here by a marker prop)."""
+    reg = _registry_with(
+        _real_tool("read_file", props={"marker_only": {"type": "string"}}),
+        _real_tool("grep_repo", props={"marker_only": {"type": "string"}}),
+        _real_tool("list_capabilities"),
+    )
+    read_case = default_cases()[0]  # read_file_basic
+    resolved = resolve_case_tools(read_case, reg)
+    assert resolved == [reg.lookup("read_file").to_openai_schema()]
+    # The registry schema, not the embedded lookalike (which has project/path).
+    assert "marker_only" in resolved[0]["function"]["parameters"]["properties"]
+
+
+def test_default_cases_unchanged_without_registry() -> None:
+    """Backward-compat: no registry -> the embedded lookalikes, verbatim."""
+    for case in default_cases():
+        assert resolve_case_tools(case, None) == case.tools
+
+
+def test_realistic_case_names_web_search() -> None:
+    named = {n for case in realistic_cases() for n in case.tool_names}
+    assert "web_search" in named
+
+
+def test_coding_cases_stay_embedded_even_with_registry() -> None:
+    """The coding suite models an external toolset (incl. a generic
+    `shell` FITT doesn't register), so it names no tools and stays on the
+    embedded path even when a registry is passed."""
+    from gateway.alias_eval_coding import default_coding_cases
+
+    reg = _registry_with(
+        _real_tool("read_file"),
+        _real_tool("edit_file"),
+        _real_tool("glob_search"),
+        _real_tool("shell"),
+    )
+    for case in default_coding_cases():
+        assert case.tool_names == ()
+        assert resolve_case_tools(case, reg) == case.tools

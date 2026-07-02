@@ -33,17 +33,18 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 12.6b — Switch default + realistic to the real registry
 
-- [ ] 5. Set `tool_names` on `default_cases()` (read_file, grep_repo,
+- [x] 5. Set `tool_names` on `default_cases()` (read_file, grep_repo,
   list_capabilities, tool_disambiguation's pair) and `realistic_cases()`
   (adds web_search); keep embedded `tools` as the no-registry fallback.
   Verify prompts remain valid against the real schemas (project+path
   etc.). (Req 3.1, 3.2, 3.3)
-- [ ] 6. Leave `default_coding_cases()` untouched; add a one-line comment
-  pinning why it stays synthetic (external coding-agent toolset incl.
-  `shell`, not FITT's registry). (Req 4.1, 4.2)
-- [ ] 7. Tests: default + realistic cases now resolve to real schemas
-  under a registry; coding suite still resolves to its embedded schemas.
-  ruff/mypy/pytest green; commit + push.
+- [x] 6. Leave `default_coding_cases()` untouched; docstring note pins why
+  it stays synthetic (external coding-agent toolset incl. `shell`, not
+  FITT's registry — `resolve_case_tools` leaves it on the embedded path).
+  (Req 4.1, 4.2)
+- [x] 7. Tests: default + realistic cases resolve to real schemas under a
+  registry, embedded without one; coding suite names no tools and stays
+  embedded even with a registry. ruff/mypy/pytest green; commit + push.
 
 ## Phase 12.6c — Wire every production caller
 

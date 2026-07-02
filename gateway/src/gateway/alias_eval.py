@@ -350,6 +350,7 @@ def default_cases() -> list[EvalCase]:
             ),
             tools=[read_file_tool],
             expected_tool="read_file",
+            tool_names=("read_file",),
             description=(
                 "Baseline single-tool call. If this fails the "
                 "binding has a fundamental tool-call problem."
@@ -360,6 +361,7 @@ def default_cases() -> list[EvalCase]:
             prompt=("Search the `hub` project for occurrences of 'TODO'. Use the grep_repo tool."),
             tools=[grep_tool],
             expected_tool="grep_repo",
+            tool_names=("grep_repo",),
             description=(
                 "Different tool, different arg shape. Catches bindings that overfit to one tool."
             ),
@@ -373,6 +375,7 @@ def default_cases() -> list[EvalCase]:
             ),
             tools=[read_file_tool, grep_tool],
             expected_tool="read_file",
+            tool_names=("read_file", "grep_repo"),
             description=(
                 "Two tools offered, one correct answer. Catches "
                 "bindings that pick the first tool by default."
@@ -383,6 +386,7 @@ def default_cases() -> list[EvalCase]:
             prompt="What is 2 + 2?",
             tools=[read_file_tool, grep_tool],
             expected_tool=None,
+            tool_names=("read_file", "grep_repo"),
             description=(
                 "Tools offered but irrelevant. A good binding "
                 "answers inline with no tool call. Catches over-"
@@ -394,6 +398,7 @@ def default_cases() -> list[EvalCase]:
             prompt=("List the tools you have access to. Use the list_capabilities tool."),
             tools=[list_caps_tool],
             expected_tool="list_capabilities",
+            tool_names=("list_capabilities",),
             description=(
                 "Meta tool call with no arguments. Catches "
                 "bindings that only tool-call when args are "
@@ -445,6 +450,7 @@ def realistic_cases() -> list[EvalCase]:
         prompt=("What are today's match results at Roland Garros? Give me the scores."),
         tools=[web_search_tool],
         expected_tool="web_search",
+        tool_names=("web_search",),
         description=(
             "Live, time-varying fact the model cannot know from "
             "training data. A good binding reaches for web_search "

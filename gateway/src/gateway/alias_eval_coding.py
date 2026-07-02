@@ -281,6 +281,15 @@ def _shell_tool() -> dict[str, Any]:
 def default_coding_cases() -> list[EvalCase]:
     """Return the canonical coding-agent suite.
 
+    Phase 12.6 note: this suite deliberately does NOT set
+    ``EvalCase.tool_names`` and keeps its embedded synthetic schemas. It
+    models an *external* coding-agent (router-mode) toolset — read/edit/
+    glob plus a generic ``shell`` — which is NOT FITT's registry (FITT
+    has ``project_shell`` / ``run_tests``, not a bare ``shell``). So
+    ``resolve_case_tools`` leaves these cases on the embedded path even
+    when a registry is passed. Only the default + realistic suites switch
+    to the live registry.
+
     Five cases. Each one is paired with the
     :data:`_CODING_AGENT_SYSTEM_PROMPT` via the
     :attr:`EvalCase.system_prompt` field — same as the default
