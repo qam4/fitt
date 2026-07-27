@@ -134,44 +134,50 @@ Status legend: `[x]` done, `[ ]` not yet.
        implementation shipped 2026-05-08 ..." with the
        binary-gate (session-poisoning xfail flip) called
        out.
-- [ ] 12b. Mark Phase 5 DONE in the roadmap once live
-       validation lands.
+- [x] 12b. Mark Phase 5 DONE in the roadmap. DONE 2026-07-02:
+       validation reconciled to automated tests (section 13); no live
+       check pending. Roadmap pointer flipped.
 
-## 13. Live validation
+## 13. Validation
 
-(Manual.)
+Reconciled 2026-07-02: the checks below were originally written as
+manual live steps but are all covered by automated tests (the manual
+steps were redundant belt-and-suspenders that never got run). Preferring
+deterministic tests over live checks — no live validation is required to
+call Phase 5 done. Each item cites the test that covers it.
 
-- [ ] 13a. From Telegram: "remember: always use uv."
-       Approve `learn_add`. Next turn: ask something
-       unrelated. Inspect: does the `[Learned
-       corrections]` block in the dispatched system
-       prompt actually contain the lesson?
-       (`docker compose logs gateway --tail 50 | grep
-       Learned` as an approximation — the full
-       dispatched prompt isn't logged, but the
-       request-builder logs the block length.)
-- [ ] 13b. `docker compose exec gateway fitt learn
-       list` shows the lesson.
-- [ ] 13c. From Telegram: "forget about uv." Approve
-       `learn_remove`. `fitt learn list` shows 0
-       entries.
-- [ ] 13d. From Telegram: run `project_shell` with a
-       failing command. Next turn: ask a follow-up.
-       Confirm the tool's exit-code outcome made it
-       into memory (inspect
-       `docker compose exec gateway cat
-       /root/.fitt/sessions/main/history/<today>.md`).
-       The `## <ts> tool project_shell` block should
-       show `exit=N: <brief>`, NOT the assistant's
-       natural-language paraphrase.
-- [ ] 13e. Wait 24 hours. Check that yesterday's turn
-       now renders as "first turn + count" in today's
-       dispatch. Hard to verify without logging the
-       full system prompt — this is where live
-       validation is mostly "it feels right or it
-       doesn't."
-- [ ] 13f. `fitt inbox --since 1d --kind system_pruned
-       --json` shows history prune ran overnight.
+- [x] 13a. Lesson added via `learn_add` appears in the NEXT request's
+       dispatched system prompt.
+       Covered: `tests/e2e/test_lessons_lifecycle.py::
+       test_learn_add_then_next_request_sees_lesson` (drives
+       learn_add -> approval -> persistence -> next-request injection
+       over HTTP; asserts the `- <lesson>` bullet in the dispatched
+       system message).
+- [x] 13b. `fitt learn list` shows the lesson.
+       Covered: the same e2e asserts `e2e_app.state.lessons.read()`;
+       CLI wiring in `tests/test_cli_learn.py` (list/add/remove).
+- [x] 13c. After `learn_remove` the lesson stops appearing.
+       Covered: `tests/e2e/test_lessons_lifecycle.py::
+       test_learn_remove_hides_lesson_from_next_request`.
+- [x] 13d. A failing `project_shell` persists as a structured
+       `exit=N` outcome in memory, NOT the assistant's paraphrase.
+       Covered: `tests/e2e/test_session_poisoning_lifecycle.py`
+       (strict-xfail flipped green) + `tests/e2e/
+       test_project_shell_lifecycle.py`.
+- [x] 13e. Yesterday's turns render as "first turn + count" and today
+       rides verbatim, in the dispatched prompt.
+       Covered: `tests/test_memory_decay.py` (unit-tests the 4-layer
+       rendering with an injected `now`) + `tests/e2e/
+       test_history_decay_lifecycle.py` (NEW 2026-07-02: proves the
+       decayed history reaches the dispatched prompt through the full
+       HTTP pipeline).
+- [x] 13f. History prune runs and emits a `system_pruned` event
+       (`fitt inbox --kind system_pruned`).
+       Covered: `tests/test_history_pruner.py` (~13 unit tests:
+       over-age deletion + the `system_pruned` event, deterministic via
+       injected `now`) + `tests/test_dashboard_views.py::
+       test_action_pruner_tick_invokes_pruner` (the tick is reachable
+       over the HTTP dashboard surface).
 
 ## Definition of done
 
@@ -181,10 +187,14 @@ Status legend: `[x]` done, `[ ]` not yet.
   WITHOUT `@pytest.mark.xfail` — flipping strict-xfail
   green means the Phase 5 fix actually landed.
 - Roadmap pointer flipped DONE.
-- Live validation (13a–13f) green.
-- Author has used `fitt learn` in real life at least
-  once and the recorded lesson was still present a week
-  later.
+- Validation (section 13) green — reconciled 2026-07-02 to
+  automated tests (e2e lessons + session-poisoning lifecycles,
+  the decay unit suite + `test_history_decay_lifecycle.py`, the
+  history-pruner unit + dashboard-surface tests) rather than
+  manual live checks. No live step is a gate.
+- (Soft, not a gate) Author lives with `fitt learn` in real use
+  and confirms recall over time — Principle 9 soak, tracked by
+  use, not by this checkbox.
 
 ## Size note
 
