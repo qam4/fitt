@@ -33,6 +33,39 @@ doc.
 
 ---
 
+## Phase 9 substrate: Honcho evaluated (desk research), rejected for v1
+
+**First observed:** 2026-07-02 (Phase 9a spike, short-circuited by
+desk research before infra).
+**Tag:** Phase 9 / memory-v1 / substrate decision.
+
+The Phase 9 spec made Honcho (plastic-labs) the P0 substrate spike.
+Reading the primary docs (Honcho server v3.0.9, self-hosting guide)
+answered the fit question without standing it up:
+
+- **Weight.** Self-host = FastAPI API + a background *deriver*
+  worker + Postgres/pgvector. Two-to-three services, not one.
+- **Cloud LLMs by default.** Deriver/summary/dialectic default to
+  Gemini + Anthropic; embeddings to OpenAI. Fully-local (Ollama
+  embeddings, llama.cpp) is a non-default, community-patched path —
+  friction with Principle 5 (local, no subscription).
+- **AGPL-3.0.** Fine for FITT calling it over HTTP (network
+  boundary, doesn't infect FITT's code); noted for the record.
+- **Value-add is a v1 non-goal.** Honcho's differentiator is the
+  reasoning layer (peer representations, conclusions, dialectic
+  chat). Phase 9-v1 explicitly scoped that out; v1 wants keyword +
+  vector *search* over FITT's own markdown.
+
+**Decision:** build the home-grown `LocalRetrievalProvider` (SQLite
+FTS5 + embeddings, brute-force cosine) against the `RetrievalProvider`
+ABC. Deployment-neutral, dependency-light, does exactly what v1
+needs. **Cost:** none — the ABC was designed for exactly this fork,
+so only the wired module changes. **Revisit:** Honcho becomes
+interesting again if FITT later wants automatic user-model synthesis
+/ conclusions (a deliberate v1 non-goal today).
+
+---
+
 ## Phase 12.6 re-baseline: real-registry eval at parity with lookalikes (gemma4)
 
 **First observed:** 2026-07-02 (Phase 12.6d re-baseline over the SSM

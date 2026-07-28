@@ -40,12 +40,13 @@ The curated ordering - the judgment call a tool can't make for you.
 
 **Next**
 - Phase 9 (Memory v1: vector / RAG / cross-project) — spec promoted
-  2026-07-02 (`.kiro/specs/phase9-memory-v1/`). Substrate behind a
-  `RetrievalProvider` ABC; **Honcho is the P0 spike** (home-grown
-  SQLite FTS5 + embeddings is the same-ABC fallback). Start at 9a
-  (the Honcho decision gate). Phase 8 is NOT a hard prerequisite —
-  Phase 5 already persists tool turns compactly, so the indexer can
-  degrade gracefully.
+  2026-07-02 (`.kiro/specs/phase9-memory-v1/`). `RetrievalProvider`
+  ABC landed (9a task 1). Honcho P0 spike resolved by desk research
+  (rejected for v1: multi-service + cloud-LLM default vs Principle 5
+  + AGPL + reasoning value-add is a v1 non-goal). **Next: 9b — build
+  the home-grown `LocalRetrievalProvider` (SQLite FTS5 + embeddings,
+  brute-force cosine) against the ABC** — all local code, no infra
+  hand-off. Phase 8 is NOT a hard prerequisite.
 - (Phase 5 closed 2026-07-02: validation reconciled to automated
   tests; see roadmap.)
 

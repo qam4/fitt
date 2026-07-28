@@ -26,28 +26,28 @@ Status legend: `[x]` done, `[ ]` not yet.
   `test_retrieval_base.py` covers construction/frozen, ABC
   non-instantiability, and a minimal concrete provider. The
   behavioral contract suite (Properties 1-8) lands in 9b.
-- [ ] 2. Stand up Honcho self-hosted as a compose service; state
-  under `$FITT_HOME/memory/honcho/`; endpoint via config/alias.
-  Compose + `.env` glue only — no Python container branch.
-  (Design deployment notes, U4.4)
-- [ ] 3. Implement `HonchoRetrievalProvider` against the ABC
-  (`index` via sync_turn, `search`, `status`). (Design D2)
-- [ ] 4. Run the U1.4 quality query set on a real/synthetic
-  multi-week corpus; record retrieval quality. (U1.4)
-- [ ] 5. **Decision gate.** Evaluate against D2's three criteria
-  (quality clears U1.4; deployment-neutral fit; operational
-  weight). Record the outcome in this spec + `docs/observed-
-  issues.md`. If adopt → 9b wires Honcho. If reject → 9b adds the
-  local provider against the same ABC.
+- [x] 2-5. **Honcho spike — RESOLVED by desk research 2026-07-02:
+  reject for v1, go home-grown.** Tasks 2-4 (stand up Honcho,
+  implement `HonchoRetrievalProvider`, run the quality bake-off)
+  were superseded: primary Honcho docs (server v3.0.9) made the
+  cost/fit call without standing it up. Self-host = API + deriver +
+  Postgres/pgvector (2-3 services); cloud LLMs by default (fully-
+  local is a community-patched path, friction with Principle 5);
+  AGPL-3.0; and its reasoning/conclusions value-add is a v1
+  non-goal. Decision gate (task 5) outcome: **build the local
+  SQLite FTS5 + embeddings provider** (9b). Recorded in requirements
+  OD1, design D2, and `docs/observed-issues.md`. Honcho stays a
+  documented revisit if v1 grows toward user-model synthesis.
 
-## Phase 9b — Substrate wiring (Honcho adopted) OR local provider
+## Phase 9b — Local provider (SQLite FTS5 + embeddings)
 
-- [ ] 6. (adopt path) Wire `HonchoRetrievalProvider` into
-  `app.state`; config keys (`memory.retrieval_backend`,
-  endpoints) with `.example` templates. OR (fallback path)
-  implement `LocalRetrievalProvider` (SQLite FTS5 + a vector
-  column/table; `$FITT_HOME/memory/index.db`) against the ABC.
-  (Design D2, D7)
+- [ ] 6. Implement `LocalRetrievalProvider` against the ABC at
+  `gateway/src/gateway/retrieval/local.py`: SQLite at
+  `$FITT_HOME/memory/index.db`; an FTS5 virtual table for keyword
+  search; an embeddings blob column with brute-force cosine in
+  Python for semantic search (no compiled `sqlite-vec` — keeps the
+  deployment-neutral rule clean at single-user scale). Upsert keyed
+  by `(session_id, turn_anchor)`. (Design D2, D4)
 - [ ] 7. `memory.embedding_alias` resolves through model binding;
   default a local Ollama embed model; dimension-mismatch detection
   in `status()`/`index()` (fail loud). (U7.1, U7.2, P6)

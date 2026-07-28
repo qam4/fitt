@@ -87,6 +87,18 @@ warrants an explicit decision with rationale in design.md.
   deployment-neutral rule and Principle 5, local/no-subscription).
   Resolution: a time-boxed Honcho spike (Phase 9a) decides;
   requirements below hold either way.
+  **RESOLVED 2026-07-02 → home-grown.** The Phase 9a spike was
+  short-circuited by desk research (primary Honcho docs, server
+  v3.0.9): self-hosting is API + deriver worker + Postgres/pgvector
+  (2-3 services), defaults to cloud LLMs (Gemini/Anthropic/OpenAI —
+  fully-local is a non-default community-patched path, friction with
+  Principle 5), is AGPL-3.0, and its value-add (reasoning /
+  conclusions / peer-modeling) is exactly what v1 scoped out (see
+  non-goals). FITT-v1 wants keyword + vector search over its own
+  markdown, which the home-grown provider does directly and
+  deployment-neutral. Not an empirical quality bake-off — a cost/fit
+  call. Revisit Honcho if requirements later grow toward user-model
+  synthesis.
 - **OD2. Phase 8 coupling.** Proceed now with graceful
   degradation (index existing Phase-5 structured history; quality
   improves when compaction lands) rather than hard-gating on

@@ -123,17 +123,26 @@ so the fallback is never a second-class citizen.
   (indexer, tool, prefetch, visibility, tests) is substrate-
   agnostic. Rationale: the spike can decide late without
   reworking the phase.
-- **D2. Honcho provider is P0; local provider is the fallback.**
-  Build + evaluate the Honcho-backed provider first (Phase 9a
-  spike). Decision gate: does self-hosted Honcho answer a
-  representative "remember when we discussed X" on real session
-  data (U1.4) *and* fit the deployment-neutral rule acceptably
-  (runs via compose alongside the gateway; no code `if container`
-  branch; state under `FITT_HOME/memory/honcho/`)? If yes → adopt
-  with the FITT-side wrapper. If no (quality or operational
-  friction) → implement the local SQLite FTS5 + embeddings
-  provider against the same ABC. Either way the ABC + indexer +
-  tool land.
+- **D2. Substrate: home-grown local provider (RESOLVED
+  2026-07-02).** The Honcho spike (P0) was resolved by desk
+  research rather than a live bake-off: Honcho self-hosts as API +
+  deriver + Postgres/pgvector, defaults to cloud LLMs (friction
+  with Principle 5), is AGPL-3.0, and its reasoning/conclusions
+  value-add is a v1 non-goal. For an always-on local single-user
+  hub wanting search over its own markdown, that's too much
+  surface for too little v1 value. **Decision: build the local
+  `SQLite FTS5 + embeddings` provider against the ABC.** Honcho
+  stays a documented revisit if v1 later grows toward user-model
+  synthesis. The ABC (already landed) means this is the only module
+  the decision changes.
+  - **Local provider shape:** SQLite for storage; an FTS5 virtual
+    table for keyword search; embeddings stored as a blob column
+    with brute-force cosine similarity in Python for semantic
+    search. Brute-force is deliberate — at single-user corpus scale
+    (thousands of turns) it's fast enough and avoids a compiled
+    vector extension (`sqlite-vec`), keeping the deployment-neutral
+    rule clean (no native build step). Revisit an ANN index only if
+    corpus size ever makes linear scan bite.
 - **D3. Indexing is async, post-persistence.** `MemoryIndexer`
   runs after `append_turn`, off the request path (a background
   task / queue). A dropped or delayed index entry is acceptable

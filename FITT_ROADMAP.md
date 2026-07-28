@@ -1252,11 +1252,13 @@ output and gets noisy retrievals).
 
 *Spec promoted 2026-07-02 to `.kiro/specs/phase9-memory-v1/`
 (requirements + design + tasks). Key decisions taken there:
-substrate behind a `RetrievalProvider` ABC with **Honcho as the P0
-spike** (home-grown SQLite FTS5 + embeddings as the same-ABC
-fallback); Phase 8 is NOT a hard prerequisite (Phase 5 already
-persists tool turns compactly, so graceful degradation is fine).
-Implementation not yet started.*
+substrate behind a `RetrievalProvider` ABC. The Honcho P0 spike was
+resolved by desk research 2026-07-02 (rejected for v1 — self-host
+weight + cloud-LLM default vs Principle 5 + AGPL + its
+reasoning/conclusions value-add is a v1 non-goal); building the
+home-grown SQLite FTS5 + embeddings provider against the ABC. Phase
+8 is NOT a hard prerequisite (Phase 5 already persists tool turns
+compactly). ABC landed (9a task 1); local provider (9b) next.*
 
 ---
 
