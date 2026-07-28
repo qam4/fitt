@@ -17,10 +17,15 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 9a — Honcho spike (P0, decision gate)
 
-- [ ] 1. Define the `RetrievalProvider` ABC + dataclasses
-  (`MemoryDoc`, `RetrievalQuery`, `RetrievalHit`, `IndexStatus`)
-  in `gateway/src/gateway/retrieval/base.py`. Pure types + ABC;
-  no substrate yet. (Design D1)
+- [x] 1. Define the `RetrievalProvider` ABC + dataclasses
+  (`MemoryDoc`, `RetrievalQuery`, `RetrievalHit`, `IndexStats`,
+  `IndexStatus`) in `gateway/src/gateway/retrieval/base.py`. Pure
+  types + ABC; no substrate yet. (Design D1) DONE 2026-07-02:
+  frozen-slots value types + async ABC (index/search/reindex/
+  status + `name`); `RetrievalMode`/`RetrievalScope` literals;
+  `test_retrieval_base.py` covers construction/frozen, ABC
+  non-instantiability, and a minimal concrete provider. The
+  behavioral contract suite (Properties 1-8) lands in 9b.
 - [ ] 2. Stand up Honcho self-hosted as a compose service; state
   under `$FITT_HOME/memory/honcho/`; endpoint via config/alias.
   Compose + `.env` glue only — no Python container branch.
