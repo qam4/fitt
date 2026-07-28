@@ -39,8 +39,15 @@ The curated ordering - the judgment call a tool can't make for you.
   isn't misread as `upstream_silent` on the first case.
 
 **Next**
-- (open) Pick from Later, or resume a bigger arc (Phase 8/9 — see
-  roadmap). No small item is queued as urgent.
+- Phase 9 (Memory v1: vector / RAG / cross-project) — spec promoted
+  2026-07-02 (`.kiro/specs/phase9-memory-v1/`). Substrate behind a
+  `RetrievalProvider` ABC; **Honcho is the P0 spike** (home-grown
+  SQLite FTS5 + embeddings is the same-ABC fallback). Start at 9a
+  (the Honcho decision gate). Phase 8 is NOT a hard prerequisite —
+  Phase 5 already persists tool turns compactly, so the indexer can
+  degrade gracefully.
+- (Phase 5 closed 2026-07-02: validation reconciled to automated
+  tests; see roadmap.)
 
 **Later**
 - Render the profile baseline-diff in the Capability card (folds into

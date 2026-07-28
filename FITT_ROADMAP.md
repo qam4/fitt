@@ -1250,8 +1250,13 @@ output and gets noisy retrievals).
   alternative substrate; deferred until multi-surface data
   justifies the graph shape.
 
-*Full three-file spec to be written under
-`.kiro/specs/phase9-memory-v1/` when this phase starts.*
+*Spec promoted 2026-07-02 to `.kiro/specs/phase9-memory-v1/`
+(requirements + design + tasks). Key decisions taken there:
+substrate behind a `RetrievalProvider` ABC with **Honcho as the P0
+spike** (home-grown SQLite FTS5 + embeddings as the same-ABC
+fallback); Phase 8 is NOT a hard prerequisite (Phase 5 already
+persists tool turns compactly, so graceful degradation is fine).
+Implementation not yet started.*
 
 ---
 
