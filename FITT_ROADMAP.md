@@ -1259,12 +1259,13 @@ value types, LocalRetrievalProvider (FTS5 keyword + brute-force-cosine
 semantic), alias-bound embedder + config + boot wiring, async off-hot-
 path indexer, the `memory_search` tool (three shapes + scope), opt-in
 `[Recalled context]` prefetch, and `fitt memory reindex`/`status` over
-the markdown ground truth. All unit/integration tested (gateway 1772).
-**Live recall-quality validation (V1 / U1.4) pending** — needs a local
-embedding model (e.g. nomic-embed-text on Ollama); the plumbing is
-proven by tests, but end-to-end recall quality with real embeddings
-hasn't been exercised. Retrieval is off by default (opt-in via
-`memory.embedding_alias`). Phase 8 not a hard prerequisite.*
+the markdown ground truth. All unit/integration tested (gateway 1772). **SHIPPED 2026-07-02:**
+recall quality (V1/U1.4) validated with real `nomic-embed-text`
+embeddings on the local CPU Ollama — a 3-week-old (out-of-window) turn
+was recalled #1 by a semantic query; keyword/scope/prefetch all
+confirmed. Embeddings run on CPU (no GPU/EC2 needed). Retrieval is off
+by default (opt-in via `memory.embedding_alias`; see observed-issues for
+the config snippet). Phase 8 not a hard prerequisite.*
 
 ---
 

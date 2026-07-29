@@ -1,7 +1,7 @@
 # Implementation Plan: FITT Phase 9 — Memory v1 (Vector / RAG / Cross-Project)
 
-**Status:** code complete 2026-07-02 (9a–9g); live recall-quality
-validation (V1 / U1.4) pending an embedding backend
+**Status:** shipped 2026-07-02 (9a–9g complete; V1/U1.4 recall quality
+validated with real nomic-embed-text embeddings on local CPU Ollama)
 
 ## Overview
 
@@ -176,12 +176,16 @@ live embedding backend is V1 — recall *quality* with real embeddings
 (the U1.4 bar) — which can't be faked. It stays open until a local
 embedding model is available (see close-out note).
 
-- [ ] V1. **Live, pending.** Ask a "remember when we discussed X" turn
-  that predates the recency window; confirm the agent (via
-  `memory_search` or prefetch) surfaces the relevant older turn.
-  Needs a real embedding model (e.g. `nomic-embed-text` on Ollama) +
-  `memory.embedding_alias` bound + `fitt memory reindex`. The plumbing
-  is proven by tests; this validates end-to-end recall quality.
+- [x] V1. **VALIDATED 2026-07-02** with real `nomic-embed-text`
+  embeddings on the local CPU Ollama. Indexed synthetic multi-week
+  turns; the semantic query "what did we decide about the training
+  crashes?" ranked a **3-week-old** (out-of-recency-window) CUDA-OOM
+  turn #1 (score 0.616) over pasta/milk/deploy noise. Keyword
+  ('checkpointing'), scope=all (found the other session), scope=session
+  isolation, and the prefetch block all confirmed. Key finding:
+  embeddings run fine on the CPU-only Ollama that can't do chat
+  generation (a single forward pass, not autoregressive decoding) — no
+  GPU/EC2 needed for retrieval.
 - [x] V2. `scope=all` returns other sessions, default scope does not.
   Covered: `test_retrieval_local.py::test_scope_session_excludes_other_
   sessions` (P7) + the tool's scope pass-through test.

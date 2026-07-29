@@ -33,6 +33,47 @@ doc.
 
 ---
 
+## Embeddings run on CPU-only Ollama; Phase 9 recall validated locally
+
+**First observed:** 2026-07-02 (Phase 9 V1 validation).
+**Tag:** Phase 9 / memory-v1 / retrieval quality.
+
+The local Ollama (`localhost:11434`) can't run chat models (CPU-only,
+refuses generation) — but it runs `nomic-embed-text` embeddings fine
+(dim 768). Embedding is a single forward pass, not autoregressive
+decoding, so it's far lighter than chat. **Implication:** FITT's
+retrieval subsystem needs no GPU/EC2 — the embedding model lives happily
+on the CPU hub.
+
+Validated recall quality (V1/U1.4) end to end with real embeddings:
+indexed synthetic multi-week turns, and the semantic query "what did we
+decide about the training crashes?" ranked a **3-week-old** CUDA-OOM
+turn #1 (score 0.616) over unrelated noise — i.e. a turn well outside
+the recency-injection window is recalled by meaning. Keyword search,
+cross-session scope, session isolation, and the prefetch block all
+confirmed. Phase 9 shipped.
+
+**Operator note (home deployment):** to turn it on, add the embed model
++ an alias in `~/.fitt/config.yaml` and set `memory.embedding_alias`:
+
+```yaml
+models:
+  - id: local-embed
+    backend: ollama
+    model: nomic-embed-text
+    endpoint: http://<ollama-host>:11434
+aliases:
+  fitt-embed: local-embed
+memory:
+  embedding_alias: fitt-embed
+```
+
+Then `fitt memory reindex` to backfill, `fitt memory status` to check.
+In Docker, the endpoint must be reachable from the gateway container
+(MagicDNS name / host IP, not localhost).
+
+---
+
 ## Phase 9 substrate: Honcho evaluated (desk research), rejected for v1
 
 **First observed:** 2026-07-02 (Phase 9a spike, short-circuited by

@@ -29,22 +29,18 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Phase 9 (Memory v1) — **CODE COMPLETE 2026-07-02 (9a–9g)**, all
-  unit/integration tested. Home-grown SQLite FTS5 + embeddings behind a
-  `RetrievalProvider` ABC (Honcho rejected by the 9a spike); async
-  indexer, `memory_search` tool, opt-in prefetch, `fitt memory
-  reindex`/`status`. Retrieval off by default (opt-in via
-  `memory.embedding_alias`). **One live check remains (V1 / U1.4):**
-  end-to-end recall quality with real embeddings — needs a local embed
-  model (e.g. `nomic-embed-text` on Ollama), then bind
-  `memory.embedding_alias`, `fitt memory reindex`, and confirm a
-  "remember when" turn surfaces the right older excerpt. The plumbing
-  is test-proven; only recall quality is unverified.
+- Phase 9 (Memory v1) — **SHIPPED 2026-07-02 (9a–9g)**. Home-grown
+  SQLite FTS5 + embeddings behind a `RetrievalProvider` ABC (Honcho
+  rejected by the 9a spike); async indexer, `memory_search` tool,
+  opt-in prefetch, `fitt memory reindex`/`status`. Recall quality
+  validated with real `nomic-embed-text` on the local CPU Ollama (a
+  3-week-old turn recalled #1). Off by default (opt-in via
+  `memory.embedding_alias`; config snippet in observed-issues). Live
+  with it before extending (Principle 9).
 
 **Next**
-- (open) Phase 9 live-validate when an embedding model is available;
-  otherwise pick from Later or a bigger arc (Phase 10 voice / 11 home
-  assistant — see roadmap).
+- (open) Live with Phase 9 in real use, then pick a bigger arc (Phase 10
+  voice / 11 home assistant — see roadmap). No small item queued.
 - (Phase 5 closed 2026-07-02: validation reconciled to automated
   tests; see roadmap.)
 
