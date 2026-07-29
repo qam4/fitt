@@ -330,8 +330,7 @@ class LocalRetrievalProvider(RetrievalProvider):
         try:
             where, params = self._scope_clause(query)
             rows = conn.execute(
-                f"SELECT * FROM docs WHERE {where} "
-                "ORDER BY date DESC, turn_anchor DESC LIMIT ?",
+                f"SELECT * FROM docs WHERE {where} ORDER BY date DESC, turn_anchor DESC LIMIT ?",
                 [*params, query.k * 4],
             ).fetchall()
             hits = [self._row_to_hit(r, 0.0) for r in rows]
@@ -375,7 +374,7 @@ class LocalRetrievalProvider(RetrievalProvider):
             stored_dim = int(meta["dim"]) if "dim" in meta else None
             last = meta.get("last_indexed_at")
             notes: list[str] = []
-            if stored_dim is not None and stored_dim != self._embedder.dim:
+            if stored_dim is not None and self._embedder.dim and stored_dim != self._embedder.dim:
                 notes.append(
                     f"dimension mismatch: index dim {stored_dim} != configured "
                     f"model dim {self._embedder.dim} — reindex required"

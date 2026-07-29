@@ -162,6 +162,15 @@ class MemoryConfig(BaseModel):
     skills_dir: Path = Field(default_factory=lambda: fitt_home() / "skills")
     skills_enabled: bool = True
 
+    # Phase 9 — cross-session retrieval (Memory v1). When set, binds an
+    # embedding model (by alias, resolved like any other model) and wires
+    # the LocalRetrievalProvider onto app.state at boot. Left unset (the
+    # default), the retrieval subsystem stays off — the index isn't built
+    # and no retrieval tool/prefetch activates. The index lives at
+    # ``$FITT_HOME/memory/index.db`` (SQLite FTS5 + embeddings), a
+    # rebuildable derivative of the markdown.
+    embedding_alias: str | None = None
+
     @field_validator("identity_dir", "sessions_dir", "skills_dir", mode="before")
     @classmethod
     def _expand(cls, v: object) -> object:

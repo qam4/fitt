@@ -52,9 +52,17 @@ Status legend: `[x]` done, `[ ]` not yet.
   status, FTS5 external-content table kept in sync via triggers,
   float32-blob cosine, lineage dedup, scope filter, injected
   `Embedder` protocol (real Ollama embedder is task 7).
-- [ ] 7. `memory.embedding_alias` resolves through model binding;
+- [x] 7. `memory.embedding_alias` resolves through model binding;
   default a local Ollama embed model; dimension-mismatch detection
-  in `status()`/`index()` (fail loud). (U7.1, U7.2, P6)
+  in `status()`/`index()` (fail loud). (U7.1, U7.2, P6) DONE
+  2026-07-02: `AliasEmbedder` (retrieval/embedder.py) maps an alias's
+  `ModelConfig` to the right LiteLLM `aembedding` call (ollama/openai/
+  openrouter; anthropic raises), caching dim from the first response.
+  `MemoryConfig.embedding_alias` (opt-in; unset = retrieval off) wires
+  the `LocalRetrievalProvider` onto `app.state.retrieval_provider` at
+  boot — a bad alias degrades to disabled with a loud WARNING rather
+  than crashing (retrieval is off the request path). config.example
+  documents it. Provider wired but not yet consumed (indexer = 9c).
 - [x] 8. Provider contract tests (`test_retrieval_local.py`)
   parametrized over the wired provider (`params=["local"]` — add a
   substrate → add a param): P1, P2, P4, P5, P6, P7, P8, plus the

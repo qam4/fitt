@@ -176,6 +176,16 @@ memory:
   # the directory.
   skills_enabled: true
 
+  # Phase 9 — cross-session retrieval (Memory v1). Bind an
+  # embedding model by alias to turn on the retrieval subsystem
+  # (SQLite FTS5 + embeddings index at $FITT_HOME/memory/index.db,
+  # a rebuildable derivative of the markdown). The alias resolves
+  # like any other model, so add an embedding model under models:
+  # and an alias for it. Leave unset (the default) to keep
+  # retrieval off. Use a local Ollama embedding model to honour
+  # Principle 5 (local, no subscription), e.g. nomic-embed-text.
+  # embedding_alias: fitt-embed
+
 # ------------------------------------------------------------------
 # Web search (Phase 4.11)
 # ------------------------------------------------------------------

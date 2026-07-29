@@ -18,9 +18,11 @@ from .base import (
     RetrievalQuery,
     RetrievalScope,
 )
+from .embedder import AliasEmbedder
 from .local import Embedder, LocalRetrievalProvider
 
 __all__ = [
+    "AliasEmbedder",
     "Embedder",
     "IndexStats",
     "IndexStatus",

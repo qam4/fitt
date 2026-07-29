@@ -165,6 +165,42 @@ def create_app(config: Config) -> FastAPI:
     )
     app.state.skills = skills_loader.scan()
 
+    # Phase 9 — cross-session retrieval provider (Memory v1). Opt-in:
+    # off unless the operator binds ``memory.embedding_alias`` to an
+    # embedding model. When set, resolve the alias like any other model,
+    # build the alias-bound embedder, and wire the LocalRetrievalProvider
+    # (SQLite FTS5 + embeddings at ``$FITT_HOME/memory/index.db``) onto
+    # app.state. The provider is wired but not yet consumed by the
+    # request path — the async indexer (9c) and the memory_search tool /
+    # prefetch (9d/9e) land next. A bad alias fails loud (a WARNING) but
+    # doesn't crash boot: retrieval is optional and off the request path,
+    # so degrade-to-disabled beats taking down the gateway.
+    app.state.retrieval_provider = None
+    _embedding_alias = getattr(memory_cfg, "embedding_alias", None)
+    if _embedding_alias:
+        from .retrieval import AliasEmbedder, LocalRetrievalProvider
+
+        try:
+            _embed_model = config.resolve_alias(_embedding_alias)[0]
+            _embed_key = None
+            if config.secrets is not None:
+                _embed_key = config.secrets.api_key_for(
+                    _embed_model.backend, model_id=_embed_model.id
+                )
+            app.state.retrieval_provider = LocalRetrievalProvider(
+                fitt_home() / "memory" / "index.db",
+                AliasEmbedder(_embed_model, _embed_key),
+            )
+            _log.info(
+                "retrieval.enabled",
+                extra={"embedding_alias": _embedding_alias, "model": _embed_model.id},
+            )
+        except Exception as exc:
+            _log.warning(
+                "retrieval.disabled",
+                extra={"embedding_alias": _embedding_alias, "error": str(exc)},
+            )
+
     # Session registry: same freshness guarantee. `fitt session new`
     # from a separate shell is visible on the next request.
     app.state.session_registry = SessionRegistry(config.memory.sessions_dir)
