@@ -41,19 +41,26 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 9b — Local provider (SQLite FTS5 + embeddings)
 
-- [ ] 6. Implement `LocalRetrievalProvider` against the ABC at
+- [x] 6. Implement `LocalRetrievalProvider` against the ABC at
   `gateway/src/gateway/retrieval/local.py`: SQLite at
   `$FITT_HOME/memory/index.db`; an FTS5 virtual table for keyword
   search; an embeddings blob column with brute-force cosine in
   Python for semantic search (no compiled `sqlite-vec` — keeps the
   deployment-neutral rule clean at single-user scale). Upsert keyed
-  by `(session_id, turn_anchor)`. (Design D2, D4)
+  by `(session_id, turn_anchor)`. (Design D2, D4) DONE 2026-07-02:
+  index/search (discovery/scroll/browse + semantic/keyword)/reindex/
+  status, FTS5 external-content table kept in sync via triggers,
+  float32-blob cosine, lineage dedup, scope filter, injected
+  `Embedder` protocol (real Ollama embedder is task 7).
 - [ ] 7. `memory.embedding_alias` resolves through model binding;
   default a local Ollama embed model; dimension-mismatch detection
   in `status()`/`index()` (fail loud). (U7.1, U7.2, P6)
-- [ ] 8. Provider contract tests (`test_retrieval_provider_
-  contract.py`) parametrized over the wired provider: P1, P2, P4,
-  P5, P6, P7, P8. (Design testing)
+- [x] 8. Provider contract tests (`test_retrieval_local.py`)
+  parametrized over the wired provider (`params=["local"]` — add a
+  substrate → add a param): P1, P2, P4, P5, P6, P7, P8, plus the
+  semantic/keyword/browse/scroll shapes, via a deterministic
+  token-hash fake embedder. (Design testing) DONE 2026-07-02: 11
+  tests green.
 
 ## Phase 9c — Async indexer (off the hot path)
 

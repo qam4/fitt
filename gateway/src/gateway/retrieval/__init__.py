@@ -11,17 +11,22 @@ from .base import (
     IndexStats,
     IndexStatus,
     MemoryDoc,
+    RetrievalError,
     RetrievalHit,
     RetrievalMode,
     RetrievalProvider,
     RetrievalQuery,
     RetrievalScope,
 )
+from .local import Embedder, LocalRetrievalProvider
 
 __all__ = [
+    "Embedder",
     "IndexStats",
     "IndexStatus",
+    "LocalRetrievalProvider",
     "MemoryDoc",
+    "RetrievalError",
     "RetrievalHit",
     "RetrievalMode",
     "RetrievalProvider",

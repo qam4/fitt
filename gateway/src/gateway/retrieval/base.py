@@ -54,6 +54,14 @@ fast and isolated; ``all`` = opt-in cross-session recall, with each
 hit labeled by its originating session (design D8, U3)."""
 
 
+class RetrievalError(Exception):
+    """Raised for detectable index misconfigurations that must fail
+    loud rather than serve wrong results — chiefly a configured
+    embedding model whose vector dimension disagrees with the stored
+    index (Property 6, Principle 11). Callers (the async indexer,
+    the tool) isolate it so chat is never affected."""
+
+
 # --------------------------------------------------------------- value types
 
 
