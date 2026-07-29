@@ -29,24 +29,22 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Lane A DONE 2026-07-02 (`phase12.6-eval-real-registry`, shipped): the
-  default + realistic suites now offer FITT's real registered tool
-  schemas (via `EvalCase.tool_names` + `resolve_case_tools`), the
-  registry threads through every production caller, and the profiler
-  re-baselined (gemma4: tool-calling 100%, real schemas at parity with
-  the old lookalikes — clean, no regression). Also added eval **warmup**
-  (one throwaway load request before the timed cases) so a cold 12b/14b
-  isn't misread as `upstream_silent` on the first case.
+- Phase 9 (Memory v1) — **CODE COMPLETE 2026-07-02 (9a–9g)**, all
+  unit/integration tested. Home-grown SQLite FTS5 + embeddings behind a
+  `RetrievalProvider` ABC (Honcho rejected by the 9a spike); async
+  indexer, `memory_search` tool, opt-in prefetch, `fitt memory
+  reindex`/`status`. Retrieval off by default (opt-in via
+  `memory.embedding_alias`). **One live check remains (V1 / U1.4):**
+  end-to-end recall quality with real embeddings — needs a local embed
+  model (e.g. `nomic-embed-text` on Ollama), then bind
+  `memory.embedding_alias`, `fitt memory reindex`, and confirm a
+  "remember when" turn surfaces the right older excerpt. The plumbing
+  is test-proven; only recall quality is unverified.
 
 **Next**
-- Phase 9 (Memory v1: vector / RAG / cross-project) — spec promoted
-  2026-07-02 (`.kiro/specs/phase9-memory-v1/`). `RetrievalProvider`
-  ABC landed (9a task 1). Honcho P0 spike resolved by desk research
-  (rejected for v1: multi-service + cloud-LLM default vs Principle 5
-  + AGPL + reasoning value-add is a v1 non-goal). **Next: 9b — build
-  the home-grown `LocalRetrievalProvider` (SQLite FTS5 + embeddings,
-  brute-force cosine) against the ABC** — all local code, no infra
-  hand-off. Phase 8 is NOT a hard prerequisite.
+- (open) Phase 9 live-validate when an embedding model is available;
+  otherwise pick from Later or a bigger arc (Phase 10 voice / 11 home
+  assistant — see roadmap).
 - (Phase 5 closed 2026-07-02: validation reconciled to automated
   tests; see roadmap.)
 

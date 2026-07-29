@@ -1,6 +1,7 @@
 # Implementation Plan: FITT Phase 9 — Memory v1 (Vector / RAG / Cross-Project)
 
-**Status:** not started
+**Status:** code complete 2026-07-02 (9a–9g); live recall-quality
+validation (V1 / U1.4) pending an embedding backend
 
 ## Overview
 
@@ -159,23 +160,38 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 9g — Close-out
 
-- [ ] 20. Full `uv run pytest -q` green across gateway +
-  telegram-bot; ruff + mypy clean both packages.
-- [ ] 21. Roadmap Phase 9 pointer → DONE with date; BACKLOG
-  Now/Next updated; observed-issues carries the spike outcome +
-  any retrieval-quality findings.
+- [x] 20. Full `uv run pytest -q` green across gateway +
+  telegram-bot; ruff + mypy clean both packages. DONE 2026-07-02:
+  gateway 1772 passed / 8 skipped, telegram-bot 199 passed, ruff +
+  mypy clean (104 src files).
+- [x] 21. Roadmap Phase 9 pointer + BACKLOG + observed-issues
+  updated. DONE 2026-07-02: recorded as CODE COMPLETE with live
+  recall-quality validation (V1/U1.4) pending an embedding backend.
 
-## Verification (manual, on the hub)
+## Verification
 
-- [ ] V1. Ask a "remember when we discussed X" turn that predates
-  the recency window; confirm the agent (via `memory_search` or
-  prefetch) surfaces the relevant older turn.
-- [ ] V2. `scope=all` query returns hits from another session,
-  labeled by session; a default-scope query does not.
-- [ ] V3. Edit/delete a history file, `fitt memory reindex`,
-  confirm retrieval reflects the change (no dead/fabricated hits).
-- [ ] V4. Kill the embedding backend; confirm chat still responds
-  at normal latency and indexing catches up when it returns.
+Most V-checks are covered by automated tests (preferring tests over
+live checks, per the Phase 5 lesson). The one that genuinely needs a
+live embedding backend is V1 — recall *quality* with real embeddings
+(the U1.4 bar) — which can't be faked. It stays open until a local
+embedding model is available (see close-out note).
+
+- [ ] V1. **Live, pending.** Ask a "remember when we discussed X" turn
+  that predates the recency window; confirm the agent (via
+  `memory_search` or prefetch) surfaces the relevant older turn.
+  Needs a real embedding model (e.g. `nomic-embed-text` on Ollama) +
+  `memory.embedding_alias` bound + `fitt memory reindex`. The plumbing
+  is proven by tests; this validates end-to-end recall quality.
+- [x] V2. `scope=all` returns other sessions, default scope does not.
+  Covered: `test_retrieval_local.py::test_scope_session_excludes_other_
+  sessions` (P7) + the tool's scope pass-through test.
+- [x] V3. Reindex reflects markdown edits; no dead/fabricated hits.
+  Covered: `test_retrieval_reindex.py::test_reindex_equivalent_and_
+  idempotent` (delete + rebuild → equivalent, P1/P2).
+- [x] V4. Embedding backend down → chat unaffected; indexing catches
+  up. Covered: `test_memory_indexer.py` (append_turn doesn't block on a
+  stalled index; `_index_one` swallows failures) +
+  `test_retrieval_prefetch.py::test_prefetch_swallows_backend_error`.
 
 ## Definition of done
 

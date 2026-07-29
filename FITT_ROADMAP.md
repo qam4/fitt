@@ -1250,15 +1250,21 @@ output and gets noisy retrievals).
   alternative substrate; deferred until multi-surface data
   justifies the graph shape.
 
-*Spec promoted 2026-07-02 to `.kiro/specs/phase9-memory-v1/`
-(requirements + design + tasks). Key decisions taken there:
-substrate behind a `RetrievalProvider` ABC. The Honcho P0 spike was
-resolved by desk research 2026-07-02 (rejected for v1 — self-host
-weight + cloud-LLM default vs Principle 5 + AGPL + its
-reasoning/conclusions value-add is a v1 non-goal); building the
-home-grown SQLite FTS5 + embeddings provider against the ABC. Phase
-8 is NOT a hard prerequisite (Phase 5 already persists tool turns
-compactly). ABC landed (9a task 1); local provider (9b) next.*
+*Spec at `.kiro/specs/phase9-memory-v1/`. Substrate behind a
+`RetrievalProvider` ABC; Honcho rejected for v1 by the 9a desk-research
+spike (self-host weight + cloud-LLM default vs Principle 5 + AGPL +
+reasoning value-add is a v1 non-goal) in favour of a home-grown SQLite
+FTS5 + embeddings provider. **CODE COMPLETE 2026-07-02 (9a–9g):** ABC +
+value types, LocalRetrievalProvider (FTS5 keyword + brute-force-cosine
+semantic), alias-bound embedder + config + boot wiring, async off-hot-
+path indexer, the `memory_search` tool (three shapes + scope), opt-in
+`[Recalled context]` prefetch, and `fitt memory reindex`/`status` over
+the markdown ground truth. All unit/integration tested (gateway 1772).
+**Live recall-quality validation (V1 / U1.4) pending** — needs a local
+embedding model (e.g. nomic-embed-text on Ollama); the plumbing is
+proven by tests, but end-to-end recall quality with real embeddings
+hasn't been exercised. Retrieval is off by default (opt-in via
+`memory.embedding_alias`). Phase 8 not a hard prerequisite.*
 
 ---
 
