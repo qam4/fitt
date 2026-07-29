@@ -72,6 +72,7 @@ class CronRunner:
         artifact_store: Any = None,
         turns: Any = None,
         plan_store: Any = None,
+        retrieval: Any = None,
         prompt_resolver: Any = None,
     ) -> None:
         self._config = config
@@ -89,6 +90,7 @@ class CronRunner:
         self._artifact_store = artifact_store
         self._turns = turns
         self._plan_store = plan_store
+        self._retrieval = retrieval
         self._prompt_resolver = prompt_resolver
 
     # -------------------------------------------------- public API
@@ -329,6 +331,7 @@ class CronRunner:
             turn_id=turn_id,
             web_search_backend=self._config.web.search_backend,
             plan_store=self._plan_store,
+            retrieval=self._retrieval,
         )
 
         alias_router = AliasRouter(self._config)

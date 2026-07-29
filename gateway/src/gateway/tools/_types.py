@@ -282,6 +282,14 @@ class ToolContext:
     contexts where planning isn't wired; the plan tool fails with a
     readable error when it's missing."""
 
+    retrieval: Any = None
+    """Phase 9 — the :class:`~gateway.retrieval.base.RetrievalProvider`
+    the ``memory_search`` tool queries for cross-session recall. Typed
+    ``Any`` for the same import-cycle reason as the other handles.
+    ``None`` when retrieval isn't configured (no ``memory.embedding_
+    alias``); the tool isn't registered in that case, so a live ``None``
+    only happens in tests, where the tool returns a readable error."""
+
 
 # --------------------------------------------------------------- decisions
 

@@ -28,6 +28,7 @@ from .lessons import build_lessons_tools
 from .plan_tools import build_plan_tools
 from .project_shell import build_project_shell_tool
 from .registry import ToolPolicy, ToolRegistry
+from .retrieval_search import build_retrieval_tools
 from .send_message import SendMessageRateLimiter, build_send_message_tool
 from .shelltools import build_shell_tools
 from .web_search import build_web_search_tools
@@ -66,6 +67,12 @@ def build_core_tool_registry(config: Config) -> ToolRegistry:
         registry.register(t)
     for t in build_plan_tools():
         registry.register(t)
+    # Phase 9d: memory_search is offered only when cross-session
+    # retrieval is configured (memory.embedding_alias bound), so the
+    # model never sees a dead tool on a retrieval-off deployment.
+    if getattr(config.memory, "embedding_alias", None):
+        for t in build_retrieval_tools():
+            registry.register(t)
     return registry
 
 
@@ -89,6 +96,7 @@ __all__ = [
     "build_lessons_tools",
     "build_plan_tools",
     "build_project_shell_tool",
+    "build_retrieval_tools",
     "build_send_message_tool",
     "build_shell_tools",
     "build_web_search_tools",

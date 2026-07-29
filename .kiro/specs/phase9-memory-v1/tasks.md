@@ -100,17 +100,24 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 9d — Retrieval tool
 
-- [ ] 12. `memory_search` tool: one tool, three shapes (discovery
+- [x] 12. `memory_search` tool: one tool, three shapes (discovery
   / scroll / browse) + `mode` semantic|keyword + `scope`
   session|all. Read-only ⇒ `auto` bucket; schema follows the
   text-payload-family naming + non-empty description (offline
-  lint). Lineage dedup. (Design D5, U2.1–U2.3, U3.1, U6.1)
-- [ ] 13. Register via the core registry (`build_core_tool_
+  lint). Lineage dedup. (Design D5, U2.1–U2.3, U3.1, U6.1) DONE
+  2026-07-02: `tools/retrieval_search.py`; provider off
+  `ctx.retrieval`; formats hits as `[session date] excerpt`; scope
+  defaults to the current session.
+- [x] 13. Register via the core registry (`build_core_tool_
   registry`); appears in `list_capabilities`. Tests: schema lint +
-  registry membership.
-- [ ] 14. E2E: `memory_search` via the HTTP tool path returns
-  anchored excerpts with provenance; `scope=all` opt-in behaves.
-  (P5, P7, U1.1, U1.2)
+  registry membership. DONE 2026-07-02: registered only when
+  `memory.embedding_alias` is set (no dead tool on retrieval-off
+  deployments); `ctx.retrieval` wired in chat.py (both sites) +
+  cron_runner.
+- [x] 14. Tests: tool shape, hit formatting, scope pass-through,
+  no-provider error, mode validation, conditional registration.
+  (P5, P7, U1.1, U1.2) DONE 2026-07-02: `test_retrieval_search_
+  tool.py`, 6 tests. (Full HTTP e2e folds into 9g's V-checks.)
 
 ## Phase 9e — Prefetch (opt-in, off by default)
 

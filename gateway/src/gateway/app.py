@@ -511,6 +511,7 @@ def create_app(config: Config) -> FastAPI:
         turns=app.state.turns,
         plan_store=app.state.plan_store,
         prompt_resolver=app.state.prompt_resolver,
+        retrieval=app.state.retrieval_provider,
     )
     app.state.cron_runner = cron_runner
     app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=cron_runner.fire)

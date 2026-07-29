@@ -508,6 +508,7 @@ def _build_tool_context(request: Request) -> ToolContext:
         cron=getattr(request.app.state, "cron", None),
         events=getattr(request.app.state, "events", None),
         plan_store=getattr(request.app.state, "plan_store", None),
+        retrieval=getattr(request.app.state, "retrieval_provider", None),
     )
 
 
@@ -1239,6 +1240,7 @@ async def chat_completions(request: Request) -> Response:
             turn_id=turn_id,
             web_search_backend=config.web.search_backend,
             plan_store=getattr(request.app.state, "plan_store", None),
+            retrieval=getattr(request.app.state, "retrieval_provider", None),
         )
         # Phase 4.9: pass cfg-derived upstream timeout +
         # request_id into the tool loop so its dispatch can
