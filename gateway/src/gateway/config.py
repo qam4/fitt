@@ -171,6 +171,16 @@ class MemoryConfig(BaseModel):
     # rebuildable derivative of the markdown.
     embedding_alias: str | None = None
 
+    # Phase 9e — automatic prefetch. When true (and retrieval is
+    # configured), the most relevant prior excerpts for the current user
+    # message are injected into a bounded ``[Recalled context]`` system
+    # block each turn. Off by default: prefetch adds a retrieval call on
+    # the request path and spends token budget, so it's opt-in until an
+    # operator decides the recall is worth the cost.
+    prefetch_enabled: bool = False
+    # How many excerpts prefetch injects (kept small to bound the block).
+    prefetch_k: int = 3
+
     @field_validator("identity_dir", "sessions_dir", "skills_dir", mode="before")
     @classmethod
     def _expand(cls, v: object) -> object:

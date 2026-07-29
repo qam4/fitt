@@ -267,6 +267,69 @@ def memory_path(session: str, config_file: Path | None) -> None:
     _console.print(str(store.history_path(session)))
 
 
+@memory_group.command("status")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def memory_status(config_file: Path | None) -> None:
+    """Show the cross-session retrieval index status (Phase 9)."""
+    import asyncio
+
+    from .retrieval.wiring import build_retrieval_provider
+
+    cfg = load_config(config_file or default_config_path(), default_secrets_path())
+    try:
+        provider = build_retrieval_provider(cfg)
+    except Exception as e:
+        _console.print(f"[red]retrieval misconfigured[/red]: {e}")
+        sys.exit(2)
+    if provider is None:
+        _console.print(
+            "[yellow]Retrieval is off[/yellow] (set memory.embedding_alias in config.yaml)."
+        )
+        return
+    st = asyncio.run(provider.status())
+    _console.print("[bold]Retrieval index[/bold]")
+    _console.print(f"  docs indexed : {st.doc_count}")
+    _console.print(f"  embedding    : {st.embedding_model or '(none yet)'}")
+    _console.print(f"  dim          : {st.dim if st.dim is not None else '(none)'}")
+    last = st.last_indexed_at.isoformat() if st.last_indexed_at else "(never)"
+    _console.print(f"  last indexed : {last}")
+    _console.print(f"  backend up   : {st.backend_reachable}")
+    for n in st.notes:
+        _console.print(f"  [yellow]note[/yellow]: {n}")
+
+
+@memory_group.command("reindex")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def memory_reindex(config_file: Path | None) -> None:
+    """Rebuild the retrieval index from the markdown history (Phase 9).
+
+    Offline + idempotent: re-runs upsert by ``(session, turn_anchor)``,
+    so it's safe to run after hand-editing history or swapping the
+    embedding model. Embeds each changed turn — needs the embedding
+    backend reachable."""
+    import asyncio
+
+    from .retrieval.reindex import reindex_from_markdown
+    from .retrieval.wiring import build_retrieval_provider
+
+    cfg = load_config(config_file or default_config_path(), default_secrets_path())
+    try:
+        provider = build_retrieval_provider(cfg)
+    except Exception as e:
+        _console.print(f"[red]retrieval misconfigured[/red]: {e}")
+        sys.exit(2)
+    if provider is None:
+        _console.print(
+            "[yellow]Retrieval is off[/yellow] (set memory.embedding_alias in config.yaml)."
+        )
+        return
+    _console.print("[cyan]Reindexing from markdown history...[/cyan]")
+    stats = asyncio.run(reindex_from_markdown(provider, cfg.memory.sessions_dir))
+    _console.print(
+        f"[green]indexed {stats.indexed}, skipped {stats.skipped}, errors {stats.errors}[/green]"
+    )
+
+
 # --------------------------------------------------------------- fitt session
 
 

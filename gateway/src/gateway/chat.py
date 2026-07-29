@@ -114,6 +114,7 @@ def _inject_memory(
     *,
     capability_block: str = "",
     skills_block: str = "",
+    recalled_block: str = "",
 ) -> dict[str, Any]:
     """Return a shallow copy of ``body`` with memory (and
     optionally a capability block + skills block) prepended.
@@ -145,7 +146,13 @@ def _inject_memory(
     # Stack the prefix layers in order: capabilities, skills,
     # identity+lessons. Drop empty strings so we don't end up
     # with stray blank-line separators in the system message.
-    prefix_parts = [p for p in (capability_block, skills_block, ctx.system_prefix) if p]
+    # Phase 9e: the recalled-context block (when prefetch is on) sits
+    # last — after identity/lessons — so it reads as a distinct,
+    # clearly-labeled memory section, not part of the operator's
+    # identity or the learned-corrections list.
+    prefix_parts = [
+        p for p in (capability_block, skills_block, ctx.system_prefix, recalled_block) if p
+    ]
     system_prefix = "\n\n".join(prefix_parts)
 
     if not system_prefix and not ctx.history_messages:
@@ -1182,11 +1189,28 @@ async def chat_completions(request: Request) -> Response:
         loaded_skills = getattr(request.app.state, "skills", [])
         skills_block = render_skills_block(loaded_skills, tool_registry)
 
+        # Phase 9e: optional prefetch of recalled context. Off unless
+        # the operator enabled it AND retrieval is configured. Adds a
+        # retrieval call on the request path (opt-in cost); best-effort.
+        recalled_block = ""
+        _cfg = request.app.state.config
+        _retrieval = getattr(request.app.state, "retrieval_provider", None)
+        if _retrieval is not None and getattr(_cfg.memory, "prefetch_enabled", False):
+            from .retrieval.prefetch import prefetch_block
+
+            recalled_block = await prefetch_block(
+                _retrieval,
+                query=_last_user_message(parsed.to_litellm_body().get("messages") or []),
+                session_id=session_id,
+                k=getattr(_cfg.memory, "prefetch_k", 3),
+            )
+
         request_body = _inject_memory(
             parsed.to_litellm_body(),
             ctx,
             capability_block=capability_block,
             skills_block=skills_block,
+            recalled_block=recalled_block,
         )
 
     # The memory'd body will be dispatched; we remember the original

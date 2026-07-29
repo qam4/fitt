@@ -178,23 +178,11 @@ def create_app(config: Config) -> FastAPI:
     app.state.retrieval_provider = None
     _embedding_alias = getattr(memory_cfg, "embedding_alias", None)
     if _embedding_alias:
-        from .retrieval import AliasEmbedder, LocalRetrievalProvider
+        from .retrieval.wiring import build_retrieval_provider
 
         try:
-            _embed_model = config.resolve_alias(_embedding_alias)[0]
-            _embed_key = None
-            if config.secrets is not None:
-                _embed_key = config.secrets.api_key_for(
-                    _embed_model.backend, model_id=_embed_model.id
-                )
-            app.state.retrieval_provider = LocalRetrievalProvider(
-                fitt_home() / "memory" / "index.db",
-                AliasEmbedder(_embed_model, _embed_key),
-            )
-            _log.info(
-                "retrieval.enabled",
-                extra={"embedding_alias": _embedding_alias, "model": _embed_model.id},
-            )
+            app.state.retrieval_provider = build_retrieval_provider(config)
+            _log.info("retrieval.enabled", extra={"embedding_alias": _embedding_alias})
         except Exception as exc:
             _log.warning(
                 "retrieval.disabled",

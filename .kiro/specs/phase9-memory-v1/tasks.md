@@ -121,28 +121,41 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 9e — Prefetch (opt-in, off by default)
 
-- [ ] 15. `memory.prefetch_enabled` (default false). When on,
+- [x] 15. `memory.prefetch_enabled` (default false). When on,
   inject the top excerpt(s) for the current message as a bounded
   `[Recalled context]` block, distinct from `[Learned
   corrections]` + recency history, labeled with provenance.
-  (Design D6, U6.2, U6.3)
-- [ ] 16. Tests: block present only when enabled + hits exist;
-  size-bounded; provenance-labeled; default-injected prompt
-  unchanged when off (U3.3, P5).
+  (Design D6, U6.2, U6.3) DONE 2026-07-02: `retrieval/prefetch.py`
+  (`prefetch_block`, session-scoped, excerpt-capped, provenance-
+  labeled, swallows backend errors). `_inject_memory` grows a
+  `recalled_block` placed LAST in the system prefix (after
+  identity/lessons). `memory.prefetch_enabled`/`prefetch_k` config;
+  chat handler calls it only when enabled AND retrieval configured.
+- [x] 16. Tests: block present only when enabled + hits exist;
+  size-bounded; provenance-labeled; injection ordering.
+  (U3.3, P5) DONE 2026-07-02: `test_retrieval_prefetch.py`, 6 tests.
 
 ## Phase 9f — Re-index + visibility
 
-- [ ] 17. Offline, idempotent re-index script/CLI (`fitt memory
+- [x] 17. Offline, idempotent re-index script/CLI (`fitt memory
   reindex`) walking `sessions/*/history/*.md` → `provider.
   reindex(...)`; upsert-keyed by `(session, turn_anchor)`. (U4.1,
-  U4.2, U8.2, P1, P2)
-- [ ] 18. Index status on an existing surface: `fitt memory
+  U4.2, U8.2, P1, P2) DONE 2026-07-02: `retrieval/reindex.py`
+  (`iter_docs_from_markdown` groups blocks by shared timestamp,
+  reusing the live turn→doc mapping so anchors align) +
+  `fitt memory reindex`.
+- [x] 18. Index status on an existing surface: `fitt memory
   status` (doc_count, last_indexed_at, embedding_model, backend
-  reachable, dim) + optional dashboard card + "reindex now"
-  action. (U8.1, U8.2)
-- [ ] 19. E2E reindex-equivalence: seed markdown → index →
-  snapshot results → delete `memory/` → reindex → equivalent
-  results. (P1, P2, U4.1)
+  reachable, dim). (U8.1, U8.2) DONE 2026-07-02. Dashboard card +
+  "reindex now" action left as the optional follow-up (task marked
+  optional in design); the CLI covers the required visibility.
+  `build_retrieval_provider` (retrieval/wiring.py) shared by
+  create_app + CLI (removed the duplicated assembly).
+- [x] 19. Reindex-equivalence: seed markdown → reindex →
+  snapshot results → delete index → reindex → equivalent
+  results; idempotent second run. (P1, P2, U4.1) DONE 2026-07-02:
+  `test_retrieval_reindex.py`, 4 tests (mapping, equivalence +
+  idempotency, missing-dir, provider gating).
 
 ## Phase 9g — Close-out
 
