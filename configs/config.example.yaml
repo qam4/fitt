@@ -32,6 +32,10 @@ aliases:
   fitt-default: qwen-coder-big      # everyday coding turns (local)
   fitt-smart:   openrouter-sonnet   # hard turns (cloud)
   fitt-fast:    qwen-coder-small    # cheap helpers (local)
+  # fitt-embed:   local-embed       # Phase 9 embeddings — uncomment with
+                                     # the `local-embed` model below +
+                                     # memory.embedding_alias to turn on
+                                     # cross-session retrieval.
 
 # ------------------------------------------------------------------
 # Models
@@ -121,6 +125,18 @@ models:
     endpoint: http://localhost:11434
     model: qwen2.5-coder:7b
 
+  # --- Local: Ollama embedding model (Phase 9 cross-session memory) ---
+  # Powers memory_search + prefetch. Embedding is a light single
+  # forward pass (no autoregressive decoding), so it runs fine on a
+  # CPU-only Ollama — no GPU needed. Pull it first:
+  #   ollama pull nomic-embed-text        # 768-dim, ~274MB
+  # In Docker, use a host reachable from the gateway container
+  # (MagicDNS name / Tailscale IP), NOT localhost.
+  # - id: local-embed
+  #   backend: ollama
+  #   endpoint: http://localhost:11434
+  #   model: nomic-embed-text
+
 # ------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------
@@ -176,15 +192,27 @@ memory:
   # the directory.
   skills_enabled: true
 
-  # Phase 9 — cross-session retrieval (Memory v1). Bind an
-  # embedding model by alias to turn on the retrieval subsystem
-  # (SQLite FTS5 + embeddings index at $FITT_HOME/memory/index.db,
-  # a rebuildable derivative of the markdown). The alias resolves
-  # like any other model, so add an embedding model under models:
-  # and an alias for it. Leave unset (the default) to keep
-  # retrieval off. Use a local Ollama embedding model to honour
-  # Principle 5 (local, no subscription), e.g. nomic-embed-text.
+  # Phase 9 — cross-session retrieval (Memory v1). Bind an embedding
+  # model by alias to turn on retrieval (SQLite FTS5 keyword + vector
+  # semantic search at $FITT_HOME/memory/index.db, a rebuildable
+  # derivative of the markdown). Uncomment the `local-embed` model and
+  # the `fitt-embed` alias above, then set this. Leave unset (the
+  # default) to keep retrieval off — no index is built and neither the
+  # memory_search tool nor prefetch activates.
+  #
+  # After binding: `fitt memory reindex` backfills the index from
+  # existing history; `fitt memory status` shows counts + freshness.
   # embedding_alias: fitt-embed
+
+  # Automatic prefetch: when true (and retrieval is on), the most
+  # relevant prior excerpts for the current user message are injected
+  # into a bounded [Recalled context] system block each turn. Off by
+  # default — it adds a retrieval call on the request path and spends
+  # token budget, so it's opt-in. The memory_search tool works
+  # regardless; prefetch just makes recall automatic. prefetch_k caps
+  # how many excerpts get injected.
+  # prefetch_enabled: false
+  # prefetch_k: 3
 
 # ------------------------------------------------------------------
 # Web search (Phase 4.11)
