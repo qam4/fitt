@@ -19,6 +19,7 @@ from .base import (
     RetrievalScope,
 )
 from .embedder import AliasEmbedder
+from .indexer import MemoryIndexer, build_turn_text, turn_anchor_from_ts
 from .local import Embedder, LocalRetrievalProvider
 
 __all__ = [
@@ -28,10 +29,13 @@ __all__ = [
     "IndexStatus",
     "LocalRetrievalProvider",
     "MemoryDoc",
+    "MemoryIndexer",
     "RetrievalError",
     "RetrievalHit",
     "RetrievalMode",
     "RetrievalProvider",
     "RetrievalQuery",
     "RetrievalScope",
+    "build_turn_text",
+    "turn_anchor_from_ts",
 ]

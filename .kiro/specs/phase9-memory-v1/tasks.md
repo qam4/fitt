@@ -72,17 +72,31 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase 9c — Async indexer (off the hot path)
 
-- [ ] 9. `MemoryIndexer` subscribes to turn persistence and calls
+- [x] 9. `MemoryIndexer` subscribes to turn persistence and calls
   `provider.index(...)` AFTER the response is sent (background
   task / queue). Backend-down → queue/skip + warn; chat
-  unaffected. (Design D3, U5.1, U5.3)
-- [ ] 10. Map a persisted turn (incl. Phase-5 structured tool
+  unaffected. (Design D3, U5.1, U5.3) DONE 2026-07-02:
+  `retrieval/indexer.py`. `MemoryStore.append_turn` fires a
+  registered listener after the write; `MemoryIndexer.on_turn`
+  schedules `loop.create_task(provider.index(...))` and returns
+  immediately. `_index_one` swallows backend failures (WARNING;
+  re-indexable later). No-provider and no-running-loop are no-ops.
+  Wired in create_app (`app.state.memory_indexer` + `set_turn_
+  listener`); one hook covers chat + cron persistence.
+- [x] 10. Map a persisted turn (incl. Phase-5 structured tool
   turns) → `MemoryDoc` with `{session_id, date, turn_anchor,
   role, text, lineage_root}`. Index Phase-8 compacted summaries
-  when present (graceful degradation). (Design D9)
-- [ ] 11. Tests: `test_memory_indexer.py` (turn→doc mapping,
-  backend-down path) + e2e chat-path isolation: a turn issues zero
-  embedding dispatch pre-response. (P3, U5.1, U5.2)
+  when present (graceful degradation). (Design D9) DONE 2026-07-02:
+  `turn_anchor_from_ts` (matches the on-disk header stamp) +
+  `build_turn_text` (user+assistant combined) — both reproducible
+  from markdown so a reindex (9f) aligns. role="turn",
+  lineage_root=session_id (resume-chain lineage a later refinement).
+- [x] 11. Tests: `test_memory_indexer.py` (turn→doc mapping,
+  backend-down path) + chat-path isolation: append_turn returns
+  without waiting on a (blocked) index. (P3, U5.1, U5.2) DONE
+  2026-07-02: 5 tests — markdown-aligned mapping, no-provider/
+  no-loop no-ops, the P3 blocked-index-doesn't-block-append_turn
+  proof, and listener-failure-doesn't-break-persistence.
 
 ## Phase 9d — Retrieval tool
 

@@ -201,6 +201,14 @@ def create_app(config: Config) -> FastAPI:
                 extra={"embedding_alias": _embedding_alias, "error": str(exc)},
             )
 
+    # Phase 9c: the async indexer bridges turn persistence to the
+    # retrieval index off the chat hot path. Wrapping a None provider
+    # makes it a no-op, so the listener registers unconditionally.
+    from .retrieval.indexer import MemoryIndexer
+
+    app.state.memory_indexer = MemoryIndexer(app.state.retrieval_provider)
+    app.state.memory.set_turn_listener(app.state.memory_indexer.on_turn)
+
     # Session registry: same freshness guarantee. `fitt session new`
     # from a separate shell is visible on the next request.
     app.state.session_registry = SessionRegistry(config.memory.sessions_dir)

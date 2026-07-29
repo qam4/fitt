@@ -311,6 +311,23 @@ class MemoryStore:
         new_content = existing + separator + "".join(blocks)
         path.write_text(new_content, encoding="utf-8")
 
+        # Phase 9c: notify the retrieval indexer after a successful
+        # write. The listener schedules off-hot-path indexing and must
+        # never break persistence, so failures are swallowed.
+        listener = getattr(self, "_turn_listener", None)
+        if listener is not None:
+            try:
+                listener(session_id, now, user_message, assistant_message)
+            except Exception as exc:  # pragma: no cover - defensive
+                _log.warning("memory.turn_listener_failed", extra={"error": str(exc)})
+
+    def set_turn_listener(self, listener: Any) -> None:
+        """Register a callback fired after each turn is persisted
+        (Phase 9c). Signature: ``(session_id, ts: datetime,
+        user_message, assistant_message)``. Used to feed the retrieval
+        indexer without coupling MemoryStore to it."""
+        self._turn_listener = listener
+
     # ---------- internals -----------------------------------------
 
     def _ensure_identity_defaults(self) -> None:
