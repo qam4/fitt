@@ -33,6 +33,67 @@ doc.
 
 ---
 
+## Prompt-size budget: total tokens vs the model's degradation threshold
+
+**First observed:** granite 2026-05-22; framing written down 2026-07-02
+after re-deriving it for the third time.
+**Tag:** model-fit / prompt budget / the mental model we keep losing.
+
+The recurring confusion, settled. Small/quantized local models lose
+tool-call discipline as **total prompt size** grows — well before the
+context-window ceiling. Granite 3.3 8B: clean structured `tool_calls`
+at ~141 prompt tokens (no system prompt), narrated JSON at ~5K tokens
+(FITT's full prompt), on a **256k** window. So it's a *quality* problem
+at ~2% of capacity, not an overflow problem. Position/content matter
+secondarily ("lost in the middle"); total size is the dominant driver.
+
+What the prompt is made of, per turn:
+
+- **Fixed overhead** — capability block + skills + identity + lessons,
+  injected *every* turn. Does NOT accumulate across turns (each request
+  is stateless); it's a flat per-turn tax.
+- **History** — accumulates, but is **capped** by `max_history_chars`
+  (~6K tokens; oldest turns truncated past it). So it **plateaus** — it
+  does not grow forever. Turn 10 and turn 1000 are about the same size.
+- **Prefetch** — Phase 9 `[Recalled context]`, opt-in, bounded.
+
+So per-turn total plateaus at ≈ `fixed overhead + history cap`. Two
+consequences people (us) get wrong:
+
+1. "System becomes negligible as history grows" is true as a *ratio*
+   and irrelevant — the model cares about the *absolute total*, which
+   only climbs to the plateau.
+2. **Trimming the system prompt buys headroom, not a cure.** If the
+   plateau (fixed + history budget) still exceeds the model's
+   threshold, you degrade permanently after a few turns regardless. You
+   have to keep the *total* under threshold.
+
+KV/prefix cache is a red herring here: it skips *recompute* of a stable
+prefix (speed/VRAM), but the tokens still occupy the window and every
+generated token still attends over all of them — no help for the
+quality degradation.
+
+**The single question:** is FITT's plateau (fixed overhead + injected
+history) under the bound model's degradation threshold? Levers to keep
+it there:
+
+- Trim fixed overhead (`tools.compact_capability_block`-style block
+  trimming) — lowers the floor.
+- Lower `max_history_chars` — lowers the ceiling, but crudely (drops
+  turns).
+- **Retrieval (Phase 9, shipped)** — keep injected history tiny, full
+  transcript stays on disk — lowers the ceiling *without losing
+  precision*. The good one.
+- Compaction (Phase 8, unbuilt) — fit more meaning per token (lossy),
+  for when even lean history is too big.
+
+The number that grounds all of it — *where this model degrades* — is
+the "context-degradation curve" (a backlogged capability-profile
+dimension). Measure it → set the budget deliberately. See the backlog
+item "Monitor prompt size against the model's input budget."
+
+---
+
 ## Embeddings run on CPU-only Ollama; Phase 9 recall validated locally
 
 **First observed:** 2026-07-02 (Phase 9 V1 validation).

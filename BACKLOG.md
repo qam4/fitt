@@ -108,6 +108,27 @@ The curated ordering - the judgment call a tool can't make for you.
   `/v1/eval` alike. Graduate when the wait bites.
   _(source: phase 12.5a live use; see phase12.5 spec deferred)_
 
+- **Monitor prompt size against the model's input budget (and act when
+  over)** - the granite lesson, generalised. Small/quantized local
+  models degrade at a *total* prompt-token threshold well below the
+  context window (granite: clean at 141 tok, narrated at ~5K, on a 256k
+  window). FITT's per-turn prompt plateaus at `fixed overhead
+  (capability+skills+identity+lessons) + history cap`, so the question
+  is whether that plateau sits under the bound model's degradation
+  threshold. **Have:** per-turn prompt-token count is already visible
+  (`/lastturn`, `history_truncated_bytes`). **Missing:** (1) the
+  threshold itself - the "context-degradation curve" profile dimension
+  (listed under profile dimensions above) that measures where THIS model
+  falls off; (2) a live guardrail that compares prompt tokens against it
+  and warns / acts. **Act =** the levers: trim fixed overhead
+  (`compact_capability_block`-style), lower `max_history_chars`,
+  retrieval (Phase 9, precision-preserving - the good one), or
+  compaction (Phase 8, lossy). This is the measure->adapt loop
+  (Principle 12) applied to prompt size. Start with the measurement,
+  add a boot/dashboard warning; auto-acting is later.
+  _(detail + full framing: [observed-issues](docs/observed-issues.md)
+  "Prompt-size budget")_
+
 ## Tool ergonomics & coverage
 
 - **Eval harness should exercise the REAL registered tools** - today it
