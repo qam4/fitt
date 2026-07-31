@@ -92,6 +92,46 @@ the "context-degradation curve" (a backlogged capability-profile
 dimension). Measure it → set the budget deliberately. See the backlog
 item "Monitor prompt size against the model's input budget."
 
+**Refinements from the 2026-07-02 thread (would this have helped
+granite? mostly no — a useful check on our own solutions):**
+
+- **Which lever works depends on WHERE the bytes are.** History-
+  dominated bloat → retrieval (precision) or compaction (lossy).
+  Fixed-overhead-dominated (granite: ~5K was capability + skills +
+  identity + lessons, ~no history) → trim the blocks
+  (`compact_capability_block`-style) or swap the model. So retrieval
+  and compaction — the two big memory features — **would not have
+  fixed granite.** Earlier framing over-sold retrieval as the general
+  answer; it's the answer for *history*, not FITT's fixed per-turn tax.
+- **The durable granite fix was model choice**, not a prompt-size
+  lever: `choosing-a-model.md` says ≤8B is fine for chat-only aliases
+  or small-prompt tool turns, not a tool-heavy default. Prompt-size
+  levers extend a marginal model's runway; they don't rescue one
+  already at its limit with the irreducible prompt.
+- **Monitoring must compare against the measured threshold, not the
+  window.** A size-vs-window monitor would have shown granite GREEN
+  (5K of a huge window looks fine) — that's the trap. What actually
+  catches granite today is the *realistic eval suite* (runs the real
+  prompt, observes narration); the missing piece is the per-model
+  threshold number for a live guardrail.
+- **Coding-agent "%-of-window" compaction triggers assume degradation
+  ≈ capacity.** True for frontier models (they hold quality to near
+  their window), false for small local ones (granite degrades at ~2-4%
+  of window). A 95%-of-window trigger fires *far too late* for FITT's
+  model class. **FITT's Phase 8 draft trigger inherits this bug** —
+  reshape it to a degradation-based trigger, not a capacity %.
+- **Advertised context ≠ effective budget, and it's partly your own
+  config.** The "2% of 256k" denominator is inflated: 256k was an
+  operator-set `OLLAMA_CONTEXT_LENGTH`, not granite's native. Two
+  separate capabilities: *hold/retrieve N tokens* (needle-in-haystack,
+  what the spec advertises) vs *tool-call discipline under a dense
+  instruction prompt* (collapses far earlier, worse on 8B + Q4).
+  Untested hypothesis worth a 10-min check: over-extending `num_ctx`
+  beyond native can trigger RoPE position-scaling that degrades quality
+  at ALL lengths — so a *smaller* `OLLAMA_CONTEXT_LENGTH` might recover
+  granite's short-prompt tool-calling. The config you pick is itself an
+  input to where the model degrades.
+
 ---
 
 ## Embeddings run on CPU-only Ollama; Phase 9 recall validated locally

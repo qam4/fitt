@@ -1096,6 +1096,15 @@ docs.
   `memory.compaction_threshold_pct`. Skip compaction when the
   bound model's context window is unknown — fail loud rather
   than guess.
+  - **CAVEAT (2026-07-02): this %-of-window trigger is
+    mis-specified for FITT's small local models.** It assumes
+    degradation ≈ capacity, which holds for frontier models but
+    not for 8B-class ones — granite degrades at ~2-4% of window,
+    so a 95% trigger fires far too late. The right trigger is the
+    *measured degradation point* (the "context-degradation curve"
+    capability-profile dimension), not a % of the advertised
+    window. See `docs/observed-issues.md` "Prompt-size budget."
+    Reshape before building.
 - **Summarization call.** Use the alias bound to
   `auxiliary.compaction.model` (default: `fitt-fast`); if
   unbound, use the same alias as the originating turn. Pattern
