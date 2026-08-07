@@ -38,14 +38,18 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase B — Judge provider
 
-- [ ] 4. `gateway/src/gateway/e2e_judge.py`: `CliJudge` (headless
-  kiro-cli, stdin prompt → stdout verdict, temp 0), a `JudgeInput`
-  builder (intent + rubric + reply + tool_sequence + objective
-  outcome), and a lenient verdict parser (JSON `{passed, score,
-  reasoning}` + fallback). Provider/parse error → un-judged verdict.
-  (R4.1, R4.2, R4.3; Design D3)
-- [ ] 5. Tests: fake Cli returns canned JSON → parsed verdict; raising
-  / garbage-output Cli → un-judged. No real kiro-cli in the test.
+- [x] 4. `gateway/src/gateway/e2e_judge.py`: `CliJudge` (headless
+  command, stdin prompt → stdout verdict; temp 0 lives in the operator's
+  command flags), `build_judge_prompt` (intent + rubric + reply +
+  tool_sequence + objective outcome), and `parse_verdict` (JSON
+  `{passed, score, reasoning}`, tolerating fences/prose, + a PASS/FAIL
+  lenient fallback). Runner error / timeout / unparseable → un-judged
+  verdict. Runner injected for testing. (R4.1, R4.2, R4.3; Design D3)
+  DONE 2026-07-02.
+- [x] 5. Tests: clean/fenced JSON parse, lenient PASS/FAIL, unparseable
+  → raises; CliJudge with a fake runner (canned → parsed; raising →
+  un-judged; garbage → un-judged); empty command rejected. No real
+  kiro-cli. DONE 2026-07-02: 9 tests, ruff/mypy clean.
 
 ## Phase C — Driver
 
