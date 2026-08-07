@@ -107,12 +107,24 @@ objective side-effect check caught the three fabrications. This is
 exactly the "did it actually get it done, not just look right"
 verification the harness exists for.
 
-**Cost / next:** the harness now works and faithfully reports these — its
-stated purpose (a dev/debug driver to *drive* feature work). Neither
-tunnelled DUT is a clean tool-driver in a single chat turn today; the
-harness is the right instrument to measure that as models/prompts
-change. Judge (`--judge`) not yet exercised live (needs the kiro-cli
-headless command string). Web-search + retrieval were off in this
+**Judge validated live (2026-08-07).** The frontier judge runs via
+`--judge --judge-command "kiro-cli chat --no-interactive"` — kiro-cli
+reads the prompt on stdin, exits 0, and prints the verdict (a leading
+`> ` + a credits banner that the first-`{...}`-block parser strips).
+Two gotchas worth remembering: (a) a terse "reply with ONLY this JSON"
+prompt trips kiro-cli's prompt-injection guard and it refuses — a
+properly-framed grading prompt (task + rubric + reply, which
+`build_judge_prompt` produces) does not; (b) trust no tools
+(`--trust-tools=`) so the judge only reads and answers. On the hermes
+run the judge **independently agreed with the objective layer** —
+FAIL on the three fabrications, PASS on the real todo (judge 1/4 ==
+objective 1/4), which is the cross-check we wanted.
+
+**Cost / next:** the harness now works end to end (objective + judge)
+and faithfully reports these — its stated purpose (a dev/debug driver to
+*drive* feature work). Neither tunnelled DUT is a clean tool-driver in a
+single chat turn today; the harness is the right instrument to measure
+that as models/prompts change. Web-search + retrieval were off in this
 config, so news/memory scenarios can't pass until those are configured —
 expected, not a harness fault.
 

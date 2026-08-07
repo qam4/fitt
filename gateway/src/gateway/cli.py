@@ -1948,6 +1948,14 @@ def eval_e2e_cmd(
             f"### {r.scenario}",
             "",
             f"- objective: **{'PASS' if r.outcome.passed else 'FAIL'}** — {r.outcome.reason}",
+        ]
+        if r.verdict.judged:
+            score = f"{r.verdict.score:.2f}" if r.verdict.score is not None else "n/a"
+            lines.append(
+                f"- judge: **{'PASS' if r.verdict.passed else 'FAIL'}** "
+                f"(score {score}) — {r.verdict.reasoning}"
+            )
+        lines += [
             f"- loop_status: `{run.loop_status}`" + (f" — {run.error}" if run.error else ""),
             f"- tools: {', '.join(run.tool_sequence) or '(none)'}",
             f"- reply: {reply or '(empty)'}",

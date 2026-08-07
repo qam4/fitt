@@ -150,16 +150,22 @@ Status legend: `[x]` done, `[ ]` not yet.
   (qwen3:14b thinking-model tool-loop exhaustion; hermes3:8b
   hallucinates success on 3/4 while only the todo actually executes)
   in `docs/observed-issues.md`. The written report gained a
-  per-scenario diagnostic block (loop_status / error / tools / reply).
-  Judge (`--judge`) live still pending the kiro-cli command string.
+  per-scenario diagnostic block (loop_status / error / tools / reply +
+  judge score/reasoning). Judge validated live 2026-08-07 via
+  `--judge-command "kiro-cli chat --no-interactive"` — it independently
+  agreed with the objective layer (judge 1/4 == objective 1/4 on hermes).
 
 ## Verification (manual, needs the tunnel)
 
 - [ ] V1. Reminder scenario live: FITT sets a one-shot cron for ~9am
   tomorrow; the objective assertion passes; `fitt cron list` confirms.
-- [ ] V2. News scenario live with `--judge`: the judge scores summary
-  quality (not just "did it fetch"); a deliberately-bad summary is
-  caught.
+- [x] V2. News scenario live with `--judge`: DONE 2026-08-07. With
+  `--judge-command "kiro-cli chat --no-interactive"`, the frontier judge
+  scored hermes3:8b's fabricated news summary FAIL (agreeing with the
+  objective "web_search did not fire") and passed the real todo — the
+  judge catches fabricated quality, not just "did it fetch". (A dedicated
+  bad-vs-good A/B is still worth adding, but the fabrication case
+  demonstrates it.)
 - [x] V3. Todo scenario live: FITT adds the item to `todos.md`; the
   objective assertion passes. DONE 2026-08-07: hermes3:8b called the
   real `todo_add`, the item landed in the isolated `todos.md`, and the
