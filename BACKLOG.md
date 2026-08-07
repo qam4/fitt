@@ -129,6 +129,22 @@ The curated ordering - the judgment call a tool can't make for you.
   _(detail + full framing: [observed-issues](docs/observed-issues.md)
   "Prompt-size budget")_
 
+- **Judged end-to-end harness — SPEC'd 2026-07-02
+  (`.kiro/specs/judged-e2e-harness/`).** The missing rung: every
+  real-model check today grades *structurally* (did the right tool
+  fire / did the loop finish) — nothing verifies a feature's *outcome*
+  end to end ("give me a news summary" is graded did-it-fetch, not
+  is-it-good). This adds it: drive a natural-language request through
+  the real pipeline against a real DUT (`fitt-ec2-qwen3` over the
+  tunnel), **assert the actual side effect** (cron created for the
+  right time, todo added — the primary, judge-free layer), and
+  **optionally have a frontier judge (kiro-cli) score the fuzzy reply
+  quality** (off by default). Modeled on chess-coach
+  `game-coaching-eval`; extends `scenario_eval`. Sequenced to also
+  drive the new `todo_*` feature test-first (Phase E). Dev-driver, not
+  a CI gate.
+  _(source: this session; ties to the reminder + todo feature asks)_
+
 ## Tool ergonomics & coverage
 
 - **Eval harness should exercise the REAL registered tools** - today it
