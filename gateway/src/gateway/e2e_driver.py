@@ -143,6 +143,20 @@ def build_http_dispatch(
     that fired on the final turn, recovered from the persisted history."""
     import httpx
 
+    # The gateway rejects chat requests for unregistered sessions
+    # (HTTP 400 unknown_session), so register a non-main scenario
+    # session before driving it. Idempotent: skip if it already exists.
+    registry = getattr(app.state, "session_registry", None)
+    if registry is not None and session_id != "main" and registry.get(session_id) is None:
+        from .sessions import DuplicateSessionId
+
+        try:
+            registry.create(session_id, name=f"e2e {session_id}")
+        except DuplicateSessionId:  # pragma: no cover - racy create
+            pass
+        # An InvalidSessionId (bad chars) is a caller bug and must
+        # surface, not silently become an unknown_session 400 later.
+
     async def _dispatch(turns: list[dict[str, Any]]) -> RunResult:
         transport = httpx.ASGITransport(app=app)
         reply = ""

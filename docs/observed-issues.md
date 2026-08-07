@@ -33,6 +33,91 @@ doc.
 
 ---
 
+## Judged e2e harness: first live run findings (session/isolation bugs + model tool-driving)
+
+**First observed:** 2026-08-07, first live run of `fitt eval e2e`
+against the EC2 tunnel (qwen3:14b and hermes3:8b).
+**Tag:** eval / harness / model-fit / tool-call discipline.
+
+The judged end-to-end harness (`.kiro/specs/judged-e2e-harness/`) shipped
+and had its first live run. It drives each seed scenario (reminder /
+news / memory-recall / todo) through the *real* chat pipeline over the
+in-process ASGI app, then checks the objective side effect. The run
+surfaced three harness bugs (all fixed) and two model findings.
+
+**Harness bugs found and fixed:**
+
+1. **Unregistered sessions → HTTP 400.** `build_http_dispatch` used a
+   per-scenario `session_id` (`e2e-todo-0`, ...) that the gateway
+   rejected with `unknown_session`. Every scenario failed with
+   `upstream_error` before reaching the model. Fix: the dispatch now
+   registers the session via `session_registry.create` (idempotent)
+   before driving it.
+2. **No isolation → real-data pollution + stale false-positives.** The
+   run used the operator's real `~/.fitt`, so `todo_add` wrote "call the
+   doctor" into the *real* todo list (10× — see finding below), and a
+   later run's objective check PASSED off that stale item even though
+   that run's model never called the tool. Fix: `fitt eval e2e` now runs
+   under an isolated scratch `FITT_HOME` (+ redirected `memory` dirs);
+   only the DUT endpoint/aliases come from the real config. Objective
+   checks are now causally valid (empty stores at start → only this run
+   can populate them).
+3. **ASK-bucket tools can't execute (no approver).** The reminder
+   scenario's `cron_add` is an ASK-bucket tool; with no human to tap
+   approval it blocked to timeout and rejected — the scenario could
+   never pass. Fix: the eval app wraps `app.state.approval` in
+   `_AutoApproveWrapper` (same posture as the cron/profile runners; deny
+   list still enforced).
+4. **Invalid session ids from underscores.** Scenario names with
+   underscores (`news_summary`, `memory_recall`) produced session ids
+   that failed the `^[a-z0-9][a-z0-9-]*$` validator, so those sessions
+   silently didn't register and every turn 400'd — masked by an
+   over-broad `except` in the dispatch's session-ensure. Fix: sanitize
+   the id (non-conforming char → hyphen) in the CLI, and narrow the
+   dispatch's `except` to only the benign duplicate so a real
+   validation error surfaces (Principle 11: fail loud). The
+   per-scenario diagnostic block in the written report (loop_status /
+   error / tools / reply) is what made this visible.
+
+**Model findings (both DUTs fail to cleanly drive tools in a plain turn):**
+
+- **qwen3:14b (thinking) tool-loops to exhaustion.** On "add a todo" it
+  called `todo_add` on *every* iteration and hit `tool_loop_exhausted`
+  (10 iters), writing the item 10×. Base prompt was only ~4,095 tokens
+  (NOT prompt bloat — cf. the prompt-size entry below); the context grew
+  to ~40,950 (the model's 40,960 ceiling) purely from loop accumulation
+  of its heavy `reasoning_content` (186 output tokens just to say
+  "Hello"). This is a thinking-model loop-control problem, not a
+  prompt-size one.
+- **hermes3:8b narrates tool calls.** It emitted the call as JSON in
+  `content` (`{"name": "todo_add", ...}`) with no real `tool_calls`
+  structure on the reminder/news turns — the known narrated-tool-call
+  failure (see hallucinations doc, problem A). It *did* emit a real
+  `todo_add` on the todo scenario (2 iterations, executed), so it's
+  inconsistent rather than incapable.
+
+A clean hermes3:8b run (all fixes in) scored **1/4 objective** and made
+the harness's whole point concrete: hermes *hallucinated success* on 3 of
+4 — it replied "I have added your reminder … due tomorrow at 9am"
+(no `cron_add`), fabricated plausible "Search results for …" (no
+`web_search`), and invented a hub redeploy procedure (no
+`memory_search`) — while only the **todo** case actually executed a tool
+and moved real state. A reply-only judge would have passed all four; the
+objective side-effect check caught the three fabrications. This is
+exactly the "did it actually get it done, not just look right"
+verification the harness exists for.
+
+**Cost / next:** the harness now works and faithfully reports these — its
+stated purpose (a dev/debug driver to *drive* feature work). Neither
+tunnelled DUT is a clean tool-driver in a single chat turn today; the
+harness is the right instrument to measure that as models/prompts
+change. Judge (`--judge`) not yet exercised live (needs the kiro-cli
+headless command string). Web-search + retrieval were off in this
+config, so news/memory scenarios can't pass until those are configured —
+expected, not a harness fault.
+
+---
+
 ## Prompt-size budget: total tokens vs the model's degradation threshold
 
 **First observed:** granite 2026-05-22; framing written down 2026-07-02

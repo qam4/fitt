@@ -1820,6 +1820,7 @@ def eval_e2e_cmd(
     Non-deterministic by nature (a live model + optionally a tunnel) —
     this is a dev/debug driver, not a CI gate."""
     import asyncio
+    import re
     import shlex
     from datetime import UTC, datetime
 
@@ -1865,16 +1866,47 @@ def eval_e2e_cmd(
             _console.print("[red]DUT endpoint unreachable — aborting[/red]")
             sys.exit(2)
 
+    # Isolate ALL agent-mutable state under a scratch home so a live run
+    # never touches the operator's real todos / cron / sessions (and so
+    # objective checks can't false-positive on stale data). State splits
+    # across FITT_HOME (todos, cron, audit, events) and config.memory
+    # dirs (sessions, identity, lessons) — redirect both. The DUT
+    # endpoint + aliases come from the real config, so the run still hits
+    # the real model.
+    import os
+    import tempfile
+
+    iso_home = Path(tempfile.mkdtemp(prefix="fitt-e2e-"))
+    os.environ["FITT_HOME"] = str(iso_home)
+    cfg.memory = cfg.memory.model_copy(
+        update={
+            "identity_dir": iso_home / "identity",
+            "sessions_dir": iso_home / "sessions",
+        }
+    )
+    _console.print(f"[dim]isolated run home: {iso_home}[/dim]")
+
     from .app import create_app
+    from .cron_runner import _AutoApproveWrapper
 
     app = create_app(cfg)
+    # No human is here to tap approvals, so ASK-bucket tools (e.g.
+    # cron_add for the reminder scenario) would otherwise block until
+    # timeout and reject. Auto-approve them for the eval run — the deny
+    # list is still enforced by the wrapper. Same posture as the cron
+    # runner and profile runner.
+    app.state.approval = _AutoApproveWrapper(app.state.approval)
     scenarios = seed_scenarios()
 
     async def _run() -> Any:
         results = []
         for s in range(samples):
             for scen in scenarios:
-                session_id = f"e2e-{scen.name}-{s}"
+                # Session ids must match ^[a-z0-9][a-z0-9-]*$ — scenario
+                # names can carry underscores (news_summary), so map any
+                # non-conforming char to a hyphen.
+                safe = re.sub(r"[^a-z0-9-]", "-", scen.name.lower())
+                session_id = f"e2e-{safe}-{s}"
                 dispatch = build_http_dispatch(app, alias=dut, token=token, session_id=session_id)
                 results.append(
                     await run_scenario(
@@ -1893,8 +1925,35 @@ def eval_e2e_cmd(
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     out_path = out or (fitt_home() / "eval" / f"e2e-{ts}.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    header = f"# Judged e2e report — dut=`{dut}` samples={samples} judge={use_judge}\n\n"
-    out_path.write_text(header + "```\n" + rendered + "\n```\n", encoding="utf-8")
+    lines = [
+        f"# Judged e2e report — dut=`{dut}` samples={samples} judge={use_judge}",
+        "",
+        "## Summary",
+        "",
+        "```",
+        rendered,
+        "```",
+        "",
+        "## Per-scenario detail",
+        "",
+    ]
+    # Diagnostics the summary render drops — the point of a live run is
+    # debugging, so surface loop_status / error / reply / tools per run.
+    for r in report.results:
+        run = r.trajectory.run
+        reply = run.reply.strip().replace("\n", " ")
+        if len(reply) > 300:
+            reply = reply[:300] + "…"
+        lines += [
+            f"### {r.scenario}",
+            "",
+            f"- objective: **{'PASS' if r.outcome.passed else 'FAIL'}** — {r.outcome.reason}",
+            f"- loop_status: `{run.loop_status}`" + (f" — {run.error}" if run.error else ""),
+            f"- tools: {', '.join(run.tool_sequence) or '(none)'}",
+            f"- reply: {reply or '(empty)'}",
+            "",
+        ]
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     _console.print(f"[cyan]report[/cyan] → {out_path}")
 
     if min_objective_rate is not None and report.objective_rate < min_objective_rate:

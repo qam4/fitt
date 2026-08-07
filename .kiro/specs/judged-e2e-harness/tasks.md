@@ -1,6 +1,9 @@
 # Implementation Plan: Judged End-to-End Harness
 
-**Status:** not started
+**Status:** core shipped — Phases A-F done (pure core, judge provider,
+driver, seed scenarios, todo feature, `fitt eval e2e` CLI, CI smoke,
+first live run). Remaining: live `--judge` exercise (needs the kiro-cli
+headless command) and the tunnel-dependent verifications V1/V2/V4/V5.
 
 ## Overview
 
@@ -133,12 +136,22 @@ Status legend: `[x]` done, `[ ]` not yet.
   todo_add) + a fake judge, asserting the objective check reads the
   landed item and the judge pass runs; plus a narrate-only negative that
   the objective check fails when nothing lands. 2 tests.
-- [ ] 17. Full `uv run pytest` / `mypy src` / `ruff check` / `ruff
-  format --check` green in both packages. (R8.1)
-- [ ] 18. Docs note + kiro-monitor launch example; first live run
-  (reminder + news + todo + memory_recall vs `fitt-ec2-qwen3`, judge
-  on); record findings in BACKLOG/observed-issues. Roadmap/BACKLOG
-  pointer.
+- [x] 17. Full `uv run pytest` / `mypy src` / `ruff check` / `ruff
+  format --check` green in both packages. (R8.1) DONE 2026-08-07:
+  gateway 1856 passed (one pre-existing log_bodies ordering flake,
+  unrelated — passes in isolation), telegram-bot 199 passed; mypy +
+  ruff clean.
+- [x] 18. Docs note + first live run; record findings in
+  observed-issues. DONE 2026-08-07: first live run of `fitt eval e2e`
+  against the EC2 tunnel (qwen3:14b and hermes3:8b). Surfaced +
+  fixed four harness bugs (unregistered sessions, no state isolation,
+  ASK-bucket tools with no approver, invalid session ids from
+  underscores) and recorded them plus the model findings
+  (qwen3:14b thinking-model tool-loop exhaustion; hermes3:8b
+  hallucinates success on 3/4 while only the todo actually executes)
+  in `docs/observed-issues.md`. The written report gained a
+  per-scenario diagnostic block (loop_status / error / tools / reply).
+  Judge (`--judge`) live still pending the kiro-cli command string.
 
 ## Verification (manual, needs the tunnel)
 
@@ -147,8 +160,11 @@ Status legend: `[x]` done, `[ ]` not yet.
 - [ ] V2. News scenario live with `--judge`: the judge scores summary
   quality (not just "did it fetch"); a deliberately-bad summary is
   caught.
-- [ ] V3. Todo scenario live: FITT adds the item to `todos.md`; the
-  objective assertion passes.
+- [x] V3. Todo scenario live: FITT adds the item to `todos.md`; the
+  objective assertion passes. DONE 2026-08-07: hermes3:8b called the
+  real `todo_add`, the item landed in the isolated `todos.md`, and the
+  objective assertion passed (causally valid — isolated empty store at
+  start). The other DUTs/scenarios did not (see observed-issues).
 - [ ] V4. Memory-recall scenario live (Phase 9): after stating a fact
   and asking about it later, the real DUT calls `memory_search` and the
   reply is grounded in the recalled fact — closing the one Phase 9 link
