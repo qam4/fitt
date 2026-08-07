@@ -197,6 +197,12 @@ def create_app(config: Config) -> FastAPI:
     app.state.memory_indexer = MemoryIndexer(app.state.retrieval_provider)
     app.state.memory.set_turn_listener(app.state.memory_indexer.on_turn)
 
+    # Phase E — todo store (untimed task list; not injected into the
+    # system prompt — accessed on demand via the todo_* tools).
+    from .todos import TodoStore, default_todos_path
+
+    app.state.todos = TodoStore(default_todos_path(fitt_home()))
+
     # Session registry: same freshness guarantee. `fitt session new`
     # from a separate shell is visible on the next request.
     app.state.session_registry = SessionRegistry(config.memory.sessions_dir)
@@ -500,6 +506,7 @@ def create_app(config: Config) -> FastAPI:
         plan_store=app.state.plan_store,
         prompt_resolver=app.state.prompt_resolver,
         retrieval=app.state.retrieval_provider,
+        todos=app.state.todos,
     )
     app.state.cron_runner = cron_runner
     app.state.cron_scheduler = CronScheduler(app.state.cron, on_fire=cron_runner.fire)

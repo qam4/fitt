@@ -10,6 +10,7 @@ from gateway.e2e_scenarios import (
     news_scenario,
     reminder_scenario,
     seed_scenarios,
+    todo_scenario,
 )
 
 
@@ -91,12 +92,35 @@ def test_memory_fails_if_fact_not_recalled() -> None:
     assert not scen.outcome_assert(_traj(reply="I don't recall.", tools=("memory_search",))).passed
 
 
+# --------------------------------------------------------------- todo
+
+
+def test_todo_passes_when_item_in_todos_text() -> None:
+    scen = todo_scenario(item="call the doctor")
+    snap = {"todos_text": "# Todos\n## Open\n- [ ] call the doctor\n"}
+    assert scen.outcome_assert(_traj(snapshot=snap)).passed
+
+
+def test_todo_fails_when_item_absent() -> None:
+    scen = todo_scenario(item="call the doctor")
+    assert not scen.outcome_assert(_traj(snapshot={"todos_text": "- [ ] buy milk"})).passed
+
+
+def test_todo_fails_with_empty_snapshot() -> None:
+    assert not todo_scenario().outcome_assert(_traj(snapshot={})).passed
+
+
 # --------------------------------------------------------------- set
 
 
 def test_seed_scenarios_have_rubrics_and_turns() -> None:
     scens = seed_scenarios()
-    assert {s.name for s in scens} == {"reminder", "news_summary", "memory_recall"}
+    assert {s.name for s in scens} == {
+        "reminder",
+        "news_summary",
+        "memory_recall",
+        "todo",
+    }
     for s in scens:
         assert s.turns and s.rubric  # all judged + non-empty
     # memory_recall is multi-turn.

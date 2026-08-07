@@ -97,15 +97,24 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase E — Todo feature, test-first
 
-- [ ] 13. **todo** scenario + `outcome_assert` = `todos.md` gained the
-  item; write it FIRST (fails — no feature yet). (R7.1)
-- [ ] 14. Build the `todo_*` tool group + markdown store
+- [x] 13. **todo** scenario + `outcome_assert` = `todos.md` gained the
+  item; write it FIRST (fails — no feature yet). (R7.1) DONE 2026-08-07:
+  `todo_scenario` + `_todo_assert` in `e2e_scenarios.py`; asserts
+  `snapshot["todos_text"]` contains the item.
+- [x] 14. Build the `todo_*` tool group + markdown store
   (`$FITT_HOME/todos.md`), modeled on Phase 5 `learn_*`
   (`todo_add`/`todo_list`/`todo_done`/`todo_remove`); register in the
   core registry; wire onto `ToolContext`. Iterate until the objective
-  assertion passes.
-- [ ] 15. Unit tests for the todo store + tools (mirror the lessons
-  tests).
+  assertion passes. DONE 2026-08-07: `todos.py` (`TodoStore` +
+  `Todo`, checkbox format, mtime reload, ceiling), `tools/todo_tools.py`
+  (add/list/done auto, remove ask); registered unconditionally in
+  `build_core_tool_registry`; `ToolContext.todos` wired in `create_app`,
+  both chat.py sites, and the cron runner.
+- [x] 15. Unit tests for the todo store + tools (mirror the lessons
+  tests). DONE 2026-08-07: `test_todos.py` (30) + `test_todo_tools.py`
+  (17) + a todo scenario assertion in `test_e2e_scenarios.py`. Full
+  gateway + telegram-bot suites green (one pre-existing log_bodies
+  ordering flake, unrelated).
 
 ## Phase F — Smoke, docs, first live run
 

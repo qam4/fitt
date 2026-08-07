@@ -108,6 +108,30 @@ def memory_recall_scenario(
     )
 
 
+def _todo_assert(item: str):  # type: ignore[no-untyped-def]
+    def _a(traj: E2ETrajectory) -> OutcomeResult:
+        text = str(traj.snapshot.get("todos_text", ""))
+        if item.lower() in text.lower():
+            return OutcomeResult(True, f"todos.md contains {item!r}")
+        return OutcomeResult(False, f"todos.md does not contain {item!r}")
+
+    return _a
+
+
+def todo_scenario(*, item: str = "call the doctor") -> TaskScenario:
+    return TaskScenario(
+        name="todo",
+        turns=[{"role": "user", "content": f"Add '{item}' to my todo list."}],
+        outcome_assert=_todo_assert(item),
+        rubric=f"Did the assistant confirm it added '{item}' to the todo list?",
+    )
+
+
 def seed_scenarios() -> list[TaskScenario]:
-    """The scenarios available today (todo lands in Phase E)."""
-    return [reminder_scenario(), news_scenario(), memory_recall_scenario()]
+    """The scenarios available today."""
+    return [
+        reminder_scenario(),
+        news_scenario(),
+        memory_recall_scenario(),
+        todo_scenario(),
+    ]

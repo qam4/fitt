@@ -282,6 +282,12 @@ class ToolContext:
     contexts where planning isn't wired; the plan tool fails with a
     readable error when it's missing."""
 
+    todos: Any = None
+    """Phase E — the :class:`~gateway.todos.TodoStore` the ``todo_*``
+    tools mutate. Typed ``Any`` to dodge an import cycle. ``None`` in
+    tests that don't exercise the todo tools; those tools fail with a
+    readable error when it's missing."""
+
     retrieval: Any = None
     """Phase 9 — the :class:`~gateway.retrieval.base.RetrievalProvider`
     the ``memory_search`` tool queries for cross-session recall. Typed

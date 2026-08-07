@@ -42,7 +42,10 @@ def test_snapshot_reads_cron_and_empty_todos(
     snap = snapshot_app(app)
     jobs = snap["cron_jobs"]
     assert any(j["schedule_kind"] == "at" and j["at_ts"] is not None for j in jobs)
-    assert snap["todos_text"] == ""  # no todos.md yet (Phase E)
+    # Phase E: create_app now provisions todos.md (the template), so the
+    # snapshot sees the header but no actual items.
+    assert "## Open" in snap["todos_text"]
+    assert not todos_contain(snap, "call the doctor")
     assert "event_kinds" in snap
 
 
