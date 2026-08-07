@@ -163,8 +163,16 @@ catch quality regressions the structural checks can't.
 
 - **7.1** Ship at least: **reminder** (cron one-shot; objective
   assertion on the cron store), **news summary** (existing scenario,
-  now quality-judged per 4.4), and **todo curation** (drives the new
-  `todo_*` feature — objective assertion on `todos.md`).
+  now quality-judged per 4.4), **todo curation** (drives the new
+  `todo_*` feature — objective assertion on `todos.md`), and **memory
+  recall** (Phase 9 — a multi-turn scenario: state a fact, then later
+  ask about it; objective assertion = `memory_search` fired AND the
+  retrieved excerpt matches the earlier turn; judge = was the recalled
+  answer grounded). The memory recall case is what verifies Phase 9
+  end-to-end — the one link the shipped tests don't cover is whether a
+  real model *decides* to call `memory_search` (the provider core +
+  the indexer→index→tool chain are already proven with real
+  embeddings; only the model's tool-call decision is untested).
 - **7.2** Adding a scenario SHALL require only a scenario definition +
   its outcome assertion (+ optional rubric) — no bespoke classifier per
   scenario (the scaling win over `classify_news_outcome`).

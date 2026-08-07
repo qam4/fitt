@@ -67,31 +67,37 @@ Status legend: `[x]` done, `[ ]` not yet.
   layer (substantive reply + web_search in tool_sequence) + a **rubric
   that judges summary quality** (grounded, on-topic, substantive).
   (R7.1, R4.4)
-- [ ] 11. Tests: each scenario's `outcome_assert` passes on a crafted
+- [ ] 11. **memory_recall** (Phase 9): multi-turn scenario (state a
+  fact, drain the indexer, ask about it); `outcome_assert` =
+  `memory_search` in the tool_sequence AND its excerpt matches turn 1;
+  rubric judges groundedness. Closes Phase 9's one unproven link (does
+  the real model decide to call `memory_search`). (R7.1)
+- [ ] 12. Tests: each scenario's `outcome_assert` passes on a crafted
   good snapshot and fails on a bad one (fake snapshots — no live run).
 
 ## Phase E — Todo feature, test-first
 
-- [ ] 12. **todo** scenario + `outcome_assert` = `todos.md` gained the
+- [ ] 13. **todo** scenario + `outcome_assert` = `todos.md` gained the
   item; write it FIRST (fails — no feature yet). (R7.1)
-- [ ] 13. Build the `todo_*` tool group + markdown store
+- [ ] 14. Build the `todo_*` tool group + markdown store
   (`$FITT_HOME/todos.md`), modeled on Phase 5 `learn_*`
   (`todo_add`/`todo_list`/`todo_done`/`todo_remove`); register in the
   core registry; wire onto `ToolContext`. Iterate until the objective
   assertion passes.
-- [ ] 14. Unit tests for the todo store + tools (mirror the lessons
+- [ ] 15. Unit tests for the todo store + tools (mirror the lessons
   tests).
 
 ## Phase F — Smoke, docs, first live run
 
-- [ ] 15. CI-safe smoke: one scenario through the Phase 4.6 e2e app
+- [ ] 16. CI-safe smoke: one scenario through the Phase 4.6 e2e app
   (stubbed LLM) + a fake judge — proves driver wiring without a live
   model. (R8.3)
-- [ ] 16. Full `uv run pytest` / `mypy src` / `ruff check` / `ruff
+- [ ] 17. Full `uv run pytest` / `mypy src` / `ruff check` / `ruff
   format --check` green in both packages. (R8.1)
-- [ ] 17. Docs note + kiro-monitor launch example; first live run
-  (reminder + news + todo vs `fitt-ec2-qwen3`, judge on); record
-  findings in BACKLOG/observed-issues. Roadmap/BACKLOG pointer.
+- [ ] 18. Docs note + kiro-monitor launch example; first live run
+  (reminder + news + todo + memory_recall vs `fitt-ec2-qwen3`, judge
+  on); record findings in BACKLOG/observed-issues. Roadmap/BACKLOG
+  pointer.
 
 ## Verification (manual, needs the tunnel)
 
@@ -102,7 +108,11 @@ Status legend: `[x]` done, `[ ]` not yet.
   caught.
 - [ ] V3. Todo scenario live: FITT adds the item to `todos.md`; the
   objective assertion passes.
-- [ ] V4. A judge/tunnel failure yields an un-judged / transient
+- [ ] V4. Memory-recall scenario live (Phase 9): after stating a fact
+  and asking about it later, the real DUT calls `memory_search` and the
+  reply is grounded in the recalled fact — closing the one Phase 9 link
+  the provider/indexer tests can't (the model's decision to retrieve).
+- [ ] V5. A judge/tunnel failure yields an un-judged / transient
   result, not a crashed batch.
 
 ## Definition of done

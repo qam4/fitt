@@ -150,6 +150,17 @@ Seed set (R7.1):
 - **todo**: turn "add 'call the doctor' to my todos"; `outcome_assert`
   = `todos.md` gained the item. Drives the `todo_*` feature (built
   test-first against this scenario).
+- **memory_recall** (Phase 9): multi-turn — turn 1 states a fact
+  ("the deploy uses docker compose on the hub"); a later turn asks
+  about it ("how do we deploy?"). Between turns the driver drains the
+  async indexer (`app.state.memory_indexer.drain()`) so the fact is
+  indexed. `outcome_assert` = `memory_search` appears in the
+  tool_sequence AND its result excerpt matches turn 1 (ground truth =
+  the indexed doc); rubric judges whether the answer is grounded in the
+  recalled fact. This is the scenario that closes Phase 9's one
+  unproven link — the real model's *decision* to call `memory_search`
+  (the provider + indexer→index→tool chain are already proven with real
+  `nomic-embed-text` embeddings, 2026-07-02).
 
 ## Design decisions
 
