@@ -79,20 +79,21 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase D — Seed scenarios
 
-- [ ] 9. `e2e_scenarios.py` — **reminder**: turn "remind me … tomorrow
-  at 9am"; `outcome_assert` = a one-shot cron with `at_ts` within
-  tolerance of tomorrow 09:00 in the tz. (R7.1, R3.2)
-- [ ] 10. **news_summary**: existing news scenario; light objective
-  layer (substantive reply + web_search in tool_sequence) + a **rubric
-  that judges summary quality** (grounded, on-topic, substantive).
-  (R7.1, R4.4)
-- [ ] 11. **memory_recall** (Phase 9): multi-turn scenario (state a
-  fact, drain the indexer, ask about it); `outcome_assert` =
-  `memory_search` in the tool_sequence AND its excerpt matches turn 1;
-  rubric judges groundedness. Closes Phase 9's one unproven link (does
-  the real model decide to call `memory_search`). (R7.1)
-- [ ] 12. Tests: each scenario's `outcome_assert` passes on a crafted
-  good snapshot and fails on a bad one (fake snapshots — no live run).
+- [x] 9. `e2e_scenarios.py` — **reminder**: assert a future one-shot
+  (`at`) cron mentioning the subject within ~36h (tz-robust; the judge
+  rubric checks the precise "9am tomorrow"). (R7.1, R3.2) DONE
+  2026-07-02.
+- [x] 10. **news_summary**: objective = web_search fired + a
+  substantive (>80-char) reply; rubric judges quality (grounded,
+  on-topic, not a refusal). (R7.1, R4.4) DONE 2026-07-02.
+- [x] 11. **memory_recall** (Phase 9): multi-turn (state a fact, then
+  ask); objective = `memory_search` in the tool_sequence AND the
+  recalled keyword surfaces in the reply; rubric judges groundedness.
+  Closes Phase 9's one unproven link. (R7.1) DONE 2026-07-02.
+- [x] 12. Tests: each scenario's `outcome_assert` passes on a crafted
+  good trajectory and fails on bad ones (past/wrong-subject cron,
+  no-search, short reply, no-memory_search, fact-not-recalled). DONE
+  2026-07-02: `test_e2e_scenarios.py`, 10 tests.
 
 ## Phase E — Todo feature, test-first
 
