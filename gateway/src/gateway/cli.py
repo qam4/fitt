@@ -1739,6 +1739,172 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
         sys.exit(1)
 
 
+@eval_group.command("e2e")
+@click.option("--dut", required=True, help="Alias of the model under test (the DUT).")
+@click.option(
+    "--judge/--no-judge",
+    "use_judge",
+    default=False,
+    help=(
+        "Also score reply *quality* with a frontier judge (off by "
+        "default; the objective side-effect checks always run). "
+        "Requires --judge-command."
+    ),
+)
+@click.option(
+    "--judge-command",
+    default=None,
+    help=(
+        "Headless judge command (argv, shell-split). The judge prompt "
+        "is fed on stdin; a JSON verdict is read from stdout. E.g. a "
+        "kiro-cli one-shot invocation at temperature 0."
+    ),
+)
+@click.option(
+    "--judge-alias",
+    default="cli-judge",
+    help=(
+        "Label for the judge, used only for the self-judge guard: it "
+        "must differ from --dut (a model can't grade its own output)."
+    ),
+)
+@click.option(
+    "--samples",
+    type=int,
+    default=1,
+    help="Runs of the full scenario set (>1 for a pass-rate on a noisy DUT).",
+)
+@click.option(
+    "--tunnel-url",
+    default=None,
+    help=(
+        "If set, ensure this health URL is reachable before running, "
+        "starting the tunnel via $FITT_TUNNEL_CMD when it isn't (e.g. "
+        "http://localhost:11435 for an EC2-tunnelled Ollama)."
+    ),
+)
+@click.option(
+    "--min-objective-rate",
+    type=float,
+    default=None,
+    help="Exit 1 if the objective pass-rate falls below this fraction (0.0-1.0).",
+)
+@click.option(
+    "--out",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write the full report to this path (default: $FITT_HOME/eval/e2e-<ts>.md).",
+)
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def eval_e2e_cmd(
+    dut: str,
+    use_judge: bool,
+    judge_command: str | None,
+    judge_alias: str,
+    samples: int,
+    tunnel_url: str | None,
+    min_objective_rate: float | None,
+    out: Path | None,
+    config_file: Path | None,
+) -> None:
+    """Run the judged end-to-end scenarios against a live DUT.
+
+    Drives each seed scenario (reminder / news / memory-recall / todo)
+    through the real chat pipeline over the in-process ASGI app, then
+    verifies the *objective* side effect (a cron got set, the todo
+    landed, memory_search fired and recalled the fact). With --judge, a
+    frontier CLI additionally scores reply quality; the two pass-rates
+    are reported separately. Objective is primary; the judge is the
+    fuzzy remainder.
+
+    Non-deterministic by nature (a live model + optionally a tunnel) —
+    this is a dev/debug driver, not a CI gate."""
+    import asyncio
+    import shlex
+    from datetime import UTC, datetime
+
+    from .config import fitt_home
+    from .e2e_driver import build_http_dispatch, snapshot_app
+    from .e2e_eval import aggregate, ensure_distinct_judge, run_scenario
+    from .e2e_judge import CliJudge
+    from .e2e_scenarios import seed_scenarios
+    from .tunnel import ensure_tunnel
+
+    cfg = load_config(config_file or default_config_path(), default_secrets_path())
+    if dut not in cfg.aliases:
+        _console.print(
+            f"[red]unknown DUT alias[/red] {dut!r}. Configured aliases: {sorted(cfg.aliases)}"
+        )
+        sys.exit(2)
+    if samples < 1:
+        _console.print("[red]--samples must be >= 1[/red]")
+        sys.exit(2)
+
+    judge = None
+    if use_judge:
+        if not judge_command:
+            _console.print("[red]--judge requires --judge-command[/red]")
+            sys.exit(2)
+        try:
+            ensure_distinct_judge(dut, judge_alias)
+        except ValueError as e:
+            _console.print(f"[red]{e}[/red]")
+            sys.exit(2)
+        judge = CliJudge(shlex.split(judge_command))
+
+    if not cfg.secrets or not cfg.secrets.allowed_tokens:
+        _console.print("[red]no allowed_tokens in secrets.yaml[/red] — cannot drive the app")
+        sys.exit(2)
+    token = cfg.secrets.allowed_tokens[0].token
+
+    if tunnel_url:
+        status = ensure_tunnel(tunnel_url)
+        colour = "green" if status.reachable else "red"
+        _console.print(f"[{colour}]tunnel {status.action}[/{colour}]: {status.detail}")
+        if not status.reachable:
+            _console.print("[red]DUT endpoint unreachable — aborting[/red]")
+            sys.exit(2)
+
+    from .app import create_app
+
+    app = create_app(cfg)
+    scenarios = seed_scenarios()
+
+    async def _run() -> Any:
+        results = []
+        for s in range(samples):
+            for scen in scenarios:
+                session_id = f"e2e-{scen.name}-{s}"
+                dispatch = build_http_dispatch(app, alias=dut, token=token, session_id=session_id)
+                results.append(
+                    await run_scenario(
+                        scen,
+                        dispatch=dispatch,
+                        snapshot=lambda: snapshot_app(app),
+                        judge=judge,
+                    )
+                )
+        return aggregate(results)
+
+    report = asyncio.run(_run())
+    rendered = report.render()
+    _console.print(rendered)
+
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    out_path = out or (fitt_home() / "eval" / f"e2e-{ts}.md")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    header = f"# Judged e2e report — dut=`{dut}` samples={samples} judge={use_judge}\n\n"
+    out_path.write_text(header + "```\n" + rendered + "\n```\n", encoding="utf-8")
+    _console.print(f"[cyan]report[/cyan] → {out_path}")
+
+    if min_objective_rate is not None and report.objective_rate < min_objective_rate:
+        _console.print(
+            f"[red]objective pass-rate below threshold[/red] "
+            f"{report.objective_rate * 100:.0f}% < {min_objective_rate * 100:.0f}%"
+        )
+        sys.exit(1)
+
+
 # --------------------------------------------------------------- scenario
 
 

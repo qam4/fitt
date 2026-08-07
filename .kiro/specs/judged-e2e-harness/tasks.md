@@ -68,7 +68,7 @@ Status legend: `[x]` done, `[ ]` not yet.
   2026-07-02: `e2e_driver.snapshot_app` (+ `cron_at_ts_matches` /
   `todos_contain` assertion helpers); tested against a real in-process
   app with a seeded cron. 3 tests.
-- [ ] 8. Guards + mechanics: refuse DUT==judge (P6); `--judge` off by
+- [x] 8. Guards + mechanics: refuse DUT==judge (P6); `--judge` off by
   default; `--samples`, `--out`, `--judge-command` configurable; ensure
   the tunnel before a live run. (R4.2, R4.3, R5, R6)
   - Tunnel-ensure helper DONE 2026-07-02 (`tunnel.py`, `ensure_tunnel`
@@ -76,6 +76,14 @@ Status legend: `[x]` done, `[ ]` not yet.
     of an operator-configured command (kept out of the repo — shareable);
     the driver calls it before a live run (already-up / started /
     failed / no-cmd). 6 tests, fakes only.
+  - `fitt eval e2e` CLI DONE 2026-08-07 (`cli.py`): loads config,
+    validates the `--dut` alias, optionally `ensure_tunnel(--tunnel-url)`,
+    builds the app + per-scenario `build_http_dispatch` + `snapshot_app`,
+    runs `seed_scenarios()` x `--samples`, `aggregate`s, prints +
+    writes a report. `--judge`/`--no-judge` (off by default),
+    `--judge-command` (shlex-split into a `CliJudge`), `--judge-alias`
+    guarded distinct from `--dut` (`ensure_distinct_judge`), `--out`,
+    `--min-objective-rate` gate.
 
 ## Phase D — Seed scenarios
 
@@ -118,9 +126,13 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase F — Smoke, docs, first live run
 
-- [ ] 16. CI-safe smoke: one scenario through the Phase 4.6 e2e app
+- [x] 16. CI-safe smoke: one scenario through the Phase 4.6 e2e app
   (stubbed LLM) + a fake judge — proves driver wiring without a live
-  model. (R8.3)
+  model. (R8.3) DONE 2026-08-07: `tests/e2e/test_e2e_smoke.py` drives the
+  todo scenario through the real pipeline (stubbed LLM calls the real
+  todo_add) + a fake judge, asserting the objective check reads the
+  landed item and the judge pass runs; plus a narrate-only negative that
+  the objective check fails when nothing lands. 2 tests.
 - [ ] 17. Full `uv run pytest` / `mypy src` / `ruff check` / `ruff
   format --check` green in both packages. (R8.1)
 - [ ] 18. Docs note + kiro-monitor launch example; first live run
