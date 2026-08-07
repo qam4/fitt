@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import fitt_home
+from .e2e_eval import DispatchFn, RunResult
 
 
 def snapshot_app(app: Any, *, session_id: str = "main", event_tail: int = 20) -> dict[str, Any]:
@@ -83,3 +84,94 @@ def todos_contain(snap: dict[str, Any], substring: str) -> bool:
 
 def _todos_path() -> Path:
     return fitt_home() / "todos.md"
+
+
+# --------------------------------------------------------------- dispatch
+
+
+def _extract_reply(data: dict[str, Any]) -> str:
+    try:
+        msg = data["choices"][0]["message"]
+        content = msg.get("content")
+        return content if isinstance(content, str) else ""
+    except (KeyError, IndexError, TypeError):
+        return ""
+
+
+def _tools_from_last_turn(app: Any, session_id: str) -> tuple[str, ...]:
+    """Recover the tool names that fired on the most-recent persisted
+    turn, by reading the session's history (the ground truth of what the
+    loop did through the full pipeline). Reuses the memory parser."""
+    mem = getattr(app.state, "memory", None)
+    if mem is None:
+        return ()
+    try:
+        path = mem.history_path(session_id)
+    except Exception:
+        return ()
+    if not path.exists():
+        return ()
+    from .memory import _parse_turns
+
+    turns = _parse_turns(path.read_text(encoding="utf-8"))
+    if not turns:
+        return ()
+    last_ts = turns[-1].timestamp
+    return tuple(
+        t.role.split(" ", 1)[1]
+        for t in turns
+        if t.timestamp == last_ts and t.role.startswith("tool ")
+    )
+
+
+def build_http_dispatch(
+    app: Any,
+    *,
+    alias: str,
+    token: str,
+    session_id: str = "main",
+    drain_indexer: bool = True,
+) -> DispatchFn:
+    """Return a :data:`DispatchFn` that sends a scenario's turns through
+    the *real* chat pipeline (memory injection + tool loop + persistence
+    + the async indexer) over the in-process ASGI transport.
+
+    Each turn is a separate chat request in one session, so history
+    provides multi-turn continuity. Between turns the indexer is drained
+    so a fact stated in an earlier turn is retrievable in a later one
+    (the memory-recall scenario). ``tool_sequence`` is the tool names
+    that fired on the final turn, recovered from the persisted history."""
+    import httpx
+
+    async def _dispatch(turns: list[dict[str, Any]]) -> RunResult:
+        transport = httpx.ASGITransport(app=app)
+        reply = ""
+        error: str | None = None
+        loop_status = "ok"
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            headers={"Authorization": f"Bearer {token}", "X-FITT-Session": session_id},
+        ) as client:
+            for turn in turns:
+                body = {"model": alias, "messages": [turn], "tool_choice": "auto"}
+                try:
+                    r = await client.post("/v1/chat/completions", json=body, timeout=300.0)
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    loop_status = "dispatch_error"
+                    break
+                if r.status_code != 200:
+                    error = f"HTTP {r.status_code}: {r.text[:200]}"
+                    loop_status = "upstream_error"
+                    break
+                reply = _extract_reply(r.json())
+                idx = getattr(app.state, "memory_indexer", None)
+                if drain_indexer and idx is not None:
+                    await idx.drain()
+        tool_sequence = _tools_from_last_turn(app, session_id) if error is None else ()
+        return RunResult(
+            reply=reply, tool_sequence=tool_sequence, loop_status=loop_status, error=error
+        )
+
+    return _dispatch

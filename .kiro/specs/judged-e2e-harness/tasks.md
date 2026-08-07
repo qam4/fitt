@@ -53,10 +53,16 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase C — Driver
 
-- [ ] 6. `fitt eval e2e` (extend the `eval` CLI group): `dispatch`
-  sends scenario turns through the real pipeline against the DUT alias
-  reusing `scenario_eval`'s driver (+ transient handling + tunnel-down
-  skip); optional `RecordingRouter` cassette. (R1.1, R2.2, R6.2, R6.3)
+- [x] 6. Dispatch through the real chat pipeline. DONE 2026-07-02:
+  `e2e_driver.build_http_dispatch` sends each turn as a chat request
+  over the in-process ASGI transport against the DUT alias — full
+  pipeline (memory injection + tool loop + persistence + the async
+  indexer, drained between turns for multi-turn recall). `tool_sequence`
+  recovered from the persisted turn (`_tools_from_last_turn`). Chose the
+  HTTP path over `scenario_eval`'s `run_agent_loop` because the latter
+  skips memory injection + persistence (fatal for the memory scenario).
+  Tested against the Phase 4.6 stubbed app (2 e2e tests). Cassette +
+  live DUT wiring fold into the CLI (task 8) / live run (Phase F).
 - [x] 7. `snapshot`: read cron jobs (`app.state.cron`), `todos.md`,
   and recent event kinds into a plain dict at run end. (R3.1) DONE
   2026-07-02: `e2e_driver.snapshot_app` (+ `cron_at_ts_matches` /
