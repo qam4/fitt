@@ -17,22 +17,24 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase A — Pure core (no live deps)
 
-- [ ] 1. `gateway/src/gateway/e2e_eval.py`: value types (`RunResult`,
+- [x] 1. `gateway/src/gateway/e2e_eval.py`: value types (`RunResult`,
   `E2ETrajectory`, `OutcomeResult`, `JudgeVerdict`, `E2EResult`,
   `E2EReport`, `TaskScenario`) with `to_dict`/`from_dict`; the injected
   port types (`DispatchFn`, `SnapshotFn`, `OutcomeAssert`, `JudgeFn`).
-  (Design; R2.1, R6.1)
-- [ ] 2. `run_scenario(scenario, *, dispatch, snapshot, judge=None)`:
+  (Design; R2.1, R6.1) DONE 2026-07-02.
+- [x] 2. `run_scenario(scenario, *, dispatch, snapshot, judge=None)`:
   send turns via `dispatch`, capture `snapshot`, run
   `scenario.outcome_assert`, optionally judge; judge-optional +
   failure-isolated (a judge error → un-judged verdict). `aggregate`
-  computes objective and judge pass-rates *separately*. (R3, R4.3, R7;
-  Properties 1, 3, 5)
-- [ ] 3. Tests (fakes only): P1 run faithfulness (single + multi-turn,
-  turns in order), P2 trajectory round-trip (+ property), P3
-  judge-off and judge-raises → un-judged not aborted, P4 objective
-  assertion runs with no LLM, P5 aggregate separates objective vs
-  judge pass-rate. ruff/mypy/pytest green.
+  computes objective and judge pass-rates *separately*. Plus
+  `ensure_distinct_judge` (P6 guard). (R3, R4.3, R7; Properties 1, 3, 5)
+  DONE 2026-07-02.
+- [x] 3. Tests (fakes only): P1 run faithfulness (single + multi-turn,
+  turns in order), P2 trajectory round-trip, P3 judge-off and
+  judge-raises → un-judged not aborted, P4 objective assertion runs
+  with no LLM (+ exception → fail), P5 aggregate separates objective vs
+  judge pass-rate, P6 self-judge guard. DONE 2026-07-02: 11 tests,
+  ruff/mypy/pytest green (gateway 1783).
 
 ## Phase B — Judge provider
 
