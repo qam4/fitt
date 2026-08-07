@@ -57,9 +57,11 @@ Status legend: `[x]` done, `[ ]` not yet.
   sends scenario turns through the real pipeline against the DUT alias
   reusing `scenario_eval`'s driver (+ transient handling + tunnel-down
   skip); optional `RecordingRouter` cassette. (R1.1, R2.2, R6.2, R6.3)
-- [ ] 7. `snapshot`: read cron jobs (`app.state.cron`), `todos.md`,
-  memory/history, and the event log into a plain dict at run end.
-  (R3.1)
+- [x] 7. `snapshot`: read cron jobs (`app.state.cron`), `todos.md`,
+  and recent event kinds into a plain dict at run end. (R3.1) DONE
+  2026-07-02: `e2e_driver.snapshot_app` (+ `cron_at_ts_matches` /
+  `todos_contain` assertion helpers); tested against a real in-process
+  app with a seeded cron. 3 tests.
 - [ ] 8. Guards + mechanics: refuse DUT==judge (P6); `--judge` off by
   default; `--samples`, `--out`, `--judge-command` configurable; ensure
   the tunnel before a live run. (R4.2, R4.3, R5, R6)
