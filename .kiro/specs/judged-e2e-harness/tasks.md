@@ -61,8 +61,13 @@ Status legend: `[x]` done, `[ ]` not yet.
   memory/history, and the event log into a plain dict at run end.
   (R3.1)
 - [ ] 8. Guards + mechanics: refuse DUT==judge (P6); `--judge` off by
-  default; `--samples`, `--out`, `--judge-command` configurable; warn
-  cleanly when the tunnel is down. (R4.2, R4.3, R5, R6)
+  default; `--samples`, `--out`, `--judge-command` configurable; ensure
+  the tunnel before a live run. (R4.2, R4.3, R5, R6)
+  - Tunnel-ensure helper DONE 2026-07-02 (`tunnel.py`, `ensure_tunnel`
+    + `FITT_TUNNEL_CMD`): reachability check + optional detached start
+    of an operator-configured command (kept out of the repo — shareable);
+    the driver calls it before a live run (already-up / started /
+    failed / no-cmd). 6 tests, fakes only.
 
 ## Phase D — Seed scenarios
 
