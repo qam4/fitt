@@ -67,6 +67,13 @@ class ModelConfig(BaseModel):
     cost_per_mtok_in: Decimal = Decimal("0")
     cost_per_mtok_out: Decimal = Decimal("0")
     fallback: str | None = None  # Another model id in this config
+    num_ctx: int | None = None
+    """Ollama context window (num_ctx). Ollama defaults to a small
+    window (4096) that FITT's ~4k-token system prompt fills entirely,
+    leaving no room to answer — the model emits one token and stops
+    (observed with gemma4, 2026-08-10). Set this comfortably above the
+    prompt size (e.g. 16384) for any ollama model whose Modelfile
+    doesn't already. Ignored by non-ollama backends."""
 
     @model_validator(mode="after")
     def _endpoint_required_for_local_backends(self) -> ModelConfig:

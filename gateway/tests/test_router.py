@@ -95,6 +95,30 @@ async def test_dispatch_routes_ollama(tmp_path: Path, monkeypatch: pytest.Monkey
     await r.dispatch("fitt-default", {"messages": [{"role": "user", "content": "hi"}]})
     assert captured["model"] == "ollama_chat/qwen2.5-coder:14b"
     assert captured["api_base"] == "http://laptop.tailnet:11434"
+    # No num_ctx configured on this model → not forwarded (ollama default).
+    assert "num_ctx" not in captured
+
+
+async def test_dispatch_ollama_forwards_num_ctx(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A configured num_ctx is forwarded to LiteLLM so ollama loads the
+    model with an adequate context window (gemma4 4096-ceiling fix)."""
+    cfg = build_test_config(tmp_path)
+    for m in cfg.models:
+        if m.id == "qwen-big":
+            m.num_ctx = 16384
+    r = AliasRouter(cfg)
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any) -> _FakeModelResponse:
+        captured.update(kwargs)
+        return _FakeModelResponse()
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake_acompletion)
+
+    await r.dispatch("fitt-default", {"messages": [{"role": "user", "content": "hi"}]})
+    assert captured["num_ctx"] == 16384
 
 
 async def test_dispatch_falls_back_on_connection_error(

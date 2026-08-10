@@ -60,6 +60,12 @@ def _litellm_kwargs(model: ModelConfig, secrets_key: str | None) -> dict[str, An
             kwargs["model"] = f"ollama_chat/{model.model}"
             assert model.endpoint
             kwargs["api_base"] = model.endpoint
+            # Explicitly request a context window when configured, rather
+            # than trusting ollama's small default (4096), which FITT's
+            # ~4k prompt fills entirely (gemma4 → output_tokens=1). LiteLLM
+            # forwards num_ctx into the ollama options.
+            if model.num_ctx is not None:
+                kwargs["num_ctx"] = model.num_ctx
         case "openrouter":
             kwargs["model"] = f"openrouter/{model.model}"
             if secrets_key:

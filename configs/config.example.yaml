@@ -118,6 +118,13 @@ models:
     endpoint: http://100.x.y.z:11434
     model: qwen2.5-coder:14b
     fallback: qwen-coder-small
+    # num_ctx: 16384
+    # ^ Ollama defaults to a small context window (4096). FITT's system
+    # prompt is ~4k tokens, so on the default the prompt fills the whole
+    # window and the model can emit only ~1 token (observed: gemma4
+    # returned empty replies, 0/6, until num_ctx was raised). Set this
+    # comfortably above the prompt size for any model whose Ollama
+    # Modelfile doesn't already. Only applies to the ollama backend.
 
   # --- Local: Ollama on the desktop (always-on fallback) ---
   - id: qwen-coder-small
