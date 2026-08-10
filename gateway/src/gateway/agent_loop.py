@@ -61,6 +61,43 @@ _log = logging.getLogger(__name__)
 # giving a runaway loop room to fester.
 _MAX_TOOL_CALL_ITERATIONS = 10
 
+# Loop brake (2026-08-10). A model that never registers a tool result
+# re-emits the SAME call every iteration until the cap: 10 slow
+# round-trips, a context blown out by accumulated history, an empty
+# reply to the user — and, worst, N duplicate side effects (gemma4 wrote
+# "call the doctor" into the todo list 10 times). No-progress detection
+# is standard in agent loops, so we apply it generically: a call whose
+# (name, args) already SUCCEEDED this turn is not executed again;
+# instead the model is handed a corrective tool result telling it the
+# work is done and to answer. That preserves the chance to recover into
+# a good reply (a hard stop would just truncate the turn). If the model
+# keeps repeating past this many corrections, we stop the loop.
+_MAX_REPEATED_CALLS = 3
+
+_REPEAT_NOTICE = (
+    "You already called {tool} with these exact arguments earlier in this "
+    "turn and it SUCCEEDED. It was not run again (repeating it would "
+    "duplicate the effect). Its result was: {result}\n"
+    "Do not call this tool again. Reply to the user now with your final "
+    "answer, based on what you have."
+)
+
+
+def call_signature(call: dict[str, Any]) -> str:
+    """Stable identity for a tool call: name + canonicalised args.
+
+    ``sort_keys`` so argument order from the model can't disguise a
+    duplicate; ``default=str`` so an exotic value can't raise here."""
+    name = ""
+    fn = call.get("function")
+    if isinstance(fn, dict):
+        name = str(fn.get("name", ""))
+    try:
+        args_json = json.dumps(tool_call_args(call), sort_keys=True, default=str)
+    except Exception:  # pragma: no cover - defensive
+        args_json = "<unserialisable>"
+    return f"{name}:{args_json}"
+
 
 # --------------------------------------------------------------- result
 
@@ -74,6 +111,11 @@ class AgentLoopResult:
       memory).
     * ``"tool_loop_exhausted"`` — hit the iteration cap; consumer
       should surface as an error to the user and probably log.
+    * ``"tool_loop_repeated"`` — the loop brake stopped a model that
+      kept re-emitting an already-successful call despite corrections.
+      Treated like ``ok`` by consumers (deliver whatever
+      ``assistant_text`` we have): the work was done, the model just
+      wouldn't stop asking for it, so salvaging beats a 504.
     * ``"upstream_error"`` — the upstream model dispatch raised;
       ``error`` carries the exception for translation.
 
@@ -442,6 +484,8 @@ async def run_agent_loop(
     session_key: str,
     max_iterations: int = _MAX_TOOL_CALL_ITERATIONS,
     artifact_store: ArtifactStore | None = None,
+    loop_brake: bool = True,
+    max_repeated_calls: int = _MAX_REPEATED_CALLS,
 ) -> AgentLoopResult:
     """Run the tool-use loop to a natural stop.
 
@@ -498,6 +542,10 @@ async def run_agent_loop(
     iterations = 0
     turns = getattr(tool_ctx, "turns", None)
     turn_id = getattr(tool_ctx, "turn_id", None)
+    # Loop brake state: signatures of calls that already succeeded this
+    # turn (-> their result), and how many corrections we've issued.
+    succeeded_calls: dict[str, str] = {}
+    repeated_calls = 0
 
     for iteration in range(max_iterations):
         iterations = iteration + 1
@@ -572,6 +620,33 @@ async def run_agent_loop(
             working_messages.append(assistant_msg)
 
         for call in tool_calls:
+            # --- loop brake: don't re-run a call that already worked ---
+            signature = call_signature(call) if loop_brake else ""
+            if loop_brake and signature in succeeded_calls:
+                repeated_calls += 1
+                fn = call.get("function")
+                dup_name = str(fn.get("name", "?")) if isinstance(fn, dict) else "?"
+                _log.info(
+                    "tool.repeat_suppressed",
+                    extra={
+                        "tool": dup_name,
+                        "session_id": session_key,
+                        "iteration": iteration,
+                        "repeats": repeated_calls,
+                    },
+                )
+                working_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": str(call.get("id") or f"repeat-{repeated_calls}"),
+                        "content": _REPEAT_NOTICE.format(
+                            tool=dup_name,
+                            result=succeeded_calls[signature][:300],
+                        ),
+                    }
+                )
+                continue
+
             tool_started = time.perf_counter()
             call_id, result, decision, tool = await execute_tool_call(
                 call,
@@ -628,6 +703,27 @@ async def run_agent_loop(
                     tool=tool,
                     result=result,
                 )
+            )
+            # Remember successful calls so a repeat is suppressed rather
+            # than duplicating its effect. Errors are NOT recorded: a
+            # retry after a failure is legitimate progress.
+            if loop_brake and not result.is_error:
+                succeeded_calls[signature] = result.payload
+
+        # The model ignored our corrections and keeps repeating. Stop
+        # rather than burn the remaining iterations.
+        if loop_brake and repeated_calls >= max_repeated_calls:
+            return AgentLoopResult(
+                status="tool_loop_repeated",
+                assistant_text=extract_assistant_text(response_obj),
+                response_obj=response_obj,
+                model_used=model_used,
+                fallback_used=fallback_used,
+                in_tokens=in_tok_total,
+                out_tokens=out_tok_total,
+                iterations=iterations,
+                messages=working_messages,
+                tool_calls_for_memory=tool_calls_for_memory,
             )
     else:
         return AgentLoopResult(

@@ -59,6 +59,17 @@ aliases:
 # comfortable. Tune both together.
 upstream_timeout_secs: 300
 
+# ------------------------------------------------------------------
+# Agent-loop no-progress detection (loop brake)
+# ------------------------------------------------------------------
+# When a model re-emits a tool call that ALREADY SUCCEEDED this turn,
+# don't run it again - repeating it duplicates the side effect (a model
+# whose template can't render tool results wrote the same todo 10
+# times). Instead the model gets a corrective tool result telling it the
+# work is done, and the loop stops if it keeps repeating. Standard
+# agent-loop hygiene; leave it on. Set false only to measure its effect.
+loop_brake_enabled: true
+
 models:
 
   # --- Cloud: OpenRouter (primary cloud backend) ---

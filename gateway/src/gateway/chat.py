@@ -671,6 +671,9 @@ async def _run_tool_loop(
             tool_ctx=tool_ctx,
             session_key=session_id,
             artifact_store=artifact_store,
+            # Loop brake on by default; `loop_brake_enabled: false` in
+            # config turns it off (used to A/B its effect).
+            loop_brake=(config.loop_brake_enabled if config is not None else True),
         )
 
     async def _on_detach(task: Any) -> None:

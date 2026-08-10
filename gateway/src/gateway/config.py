@@ -294,6 +294,16 @@ class Config(BaseModel):
     # silent error, recreating the bug this knob was added to
     # fix. Documented invariant; v1 doesn't enforce it at boot.
     upstream_timeout_secs: float = 300.0
+
+    loop_brake_enabled: bool = True
+    """No-progress detection in the agent loop (2026-08-10). When a model
+    re-emits a tool call that already SUCCEEDED this turn, don't run it
+    again (that duplicates the side effect — gemma4 wrote the same todo
+    10 times); hand back a corrective tool result instead, and stop the
+    loop if it keeps repeating. Standard agent-loop hygiene, so it's on
+    by default. Set false to A/B its effect or restore the old
+    behaviour."""
+
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     # Phase 4.11 — web search backend selection. Operator picks
