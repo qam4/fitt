@@ -124,3 +124,79 @@ async def evict_others(
         if await unload(endpoint, m.name, client=client, timeout_s=timeout_s):
             evicted.append(m.name)
     return evicted
+
+
+# --------------------------------------------------------------- template check
+
+DEFAULT_SHOW_TIMEOUT_S = 20.0
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateCheck:
+    """Whether a model's chat template can actually carry a tool loop.
+
+    ``capabilities`` is what the model *claims*; ``renders_messages`` /
+    ``mentions_tools`` are what its template can mechanically *do*. When
+    a model claims tools but its template does neither, tool results can
+    never reach it — it will re-emit the same call until the loop cap
+    (observed with gemma4:12b-it-qat, whose template is the 13-character
+    stub ``{{ .Prompt }}``, 2026-08-10)."""
+
+    model: str
+    template_len: int
+    renders_messages: bool
+    mentions_tools: bool
+    claims_tools: bool
+    detail: str | None = None
+
+    @property
+    def tool_capable(self) -> bool:
+        """Can this template mechanically carry a tool exchange?"""
+        return self.renders_messages and self.mentions_tools
+
+    @property
+    def mismatch(self) -> bool:
+        """Claims tool support its template can't deliver — the
+        dangerous case, because declared capabilities look fine."""
+        return self.claims_tools and not self.tool_capable
+
+
+async def check_template(
+    endpoint: str,
+    model: str,
+    *,
+    client: httpx.AsyncClient | None = None,
+    timeout_s: float = DEFAULT_SHOW_TIMEOUT_S,
+) -> TemplateCheck:
+    """Inspect ``model``'s chat template via ollama ``/api/show``.
+
+    A cheap, no-inference pre-flight: strictly more trustworthy than the
+    declared ``capabilities`` list, which can advertise ``tools`` for a
+    model whose template cannot render them. Never raises — an
+    unreachable host yields a check with ``detail`` set and everything
+    False (the caller decides whether "can't tell" blocks a run)."""
+    url = f"{endpoint.rstrip('/')}/api/show"
+
+    async def _do(c: httpx.AsyncClient) -> TemplateCheck:
+        try:
+            r = await c.post(url, json={"model": model})
+            if r.status_code >= 400:
+                return TemplateCheck(model, 0, False, False, False, detail=f"HTTP {r.status_code}")
+            data = r.json()
+        except (httpx.RequestError, ValueError) as e:
+            return TemplateCheck(model, 0, False, False, False, detail=str(e))
+        template = str(data.get("template") or "")
+        caps = data.get("capabilities") or []
+        lowered = template.lower()
+        return TemplateCheck(
+            model=model,
+            template_len=len(template),
+            renders_messages=".messages" in lowered,
+            mentions_tools="tool" in lowered,
+            claims_tools=any(str(c).lower() == "tools" for c in caps),
+        )
+
+    if client is not None:
+        return await _do(client)
+    async with httpx.AsyncClient(timeout=timeout_s) as c:
+        return await _do(c)

@@ -115,3 +115,60 @@ async def test_evict_others_keeps_dut() -> None:
         evicted = await evict_others(ENDPOINT, "gemma4:12b-it-qat", client=c)
     assert set(evicted) == {"qwen3:14b", "hermes3:8b"}
     assert "gemma4:12b-it-qat" not in unloaded  # DUT preserved
+
+
+# --------------------------------------------------------------- template check
+
+
+def _show_handler(template: str, caps: list[str]) -> Any:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/show"
+        return httpx.Response(200, json={"template": template, "capabilities": caps})
+
+    return handler
+
+
+async def test_template_check_flags_stub_template_mismatch() -> None:
+    """The gemma4 case: claims `tools` but the template is a raw prompt
+    passthrough, so tool results can never reach the model."""
+    from gateway.warm_status import check_template
+
+    async with _client(_show_handler("{{ .Prompt }}", ["completion", "tools"])) as c:
+        tc = await check_template(ENDPOINT, "gemma4:12b-it-qat", client=c)
+    assert tc.claims_tools is True
+    assert tc.renders_messages is False
+    assert tc.mentions_tools is False
+    assert tc.tool_capable is False
+    assert tc.mismatch is True  # the dangerous combination
+
+
+async def test_template_check_passes_real_tool_template() -> None:
+    """The hermes/qwen3 case: template renders messages and tool calls."""
+    from gateway.warm_status import check_template
+
+    tmpl = "{{ range .Messages }}{{ if .ToolCalls }}<tool_call>{{ end }}{{ end }}"
+    async with _client(_show_handler(tmpl, ["completion", "tools"])) as c:
+        tc = await check_template(ENDPOINT, "hermes3:8b", client=c)
+    assert tc.tool_capable is True
+    assert tc.mismatch is False
+
+
+async def test_template_check_no_tool_claim_is_not_a_mismatch() -> None:
+    """A model that doesn't claim tools isn't misrepresenting itself."""
+    from gateway.warm_status import check_template
+
+    async with _client(_show_handler("{{ .Prompt }}", ["completion"])) as c:
+        tc = await check_template(ENDPOINT, "some-embed", client=c)
+    assert tc.mismatch is False
+
+
+async def test_template_check_never_raises() -> None:
+    from gateway.warm_status import check_template
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down")
+
+    async with _client(handler) as c:
+        tc = await check_template(ENDPOINT, "x", client=c)
+    assert tc.detail is not None
+    assert tc.tool_capable is False

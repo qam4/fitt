@@ -1755,9 +1755,14 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
     "--judge-command",
     default=None,
     help=(
-        "Headless judge command (argv, shell-split). The judge prompt "
-        "is fed on stdin; a JSON verdict is read from stdout. E.g. a "
-        "kiro-cli one-shot invocation at temperature 0."
+        "Headless judge command (argv, shell-split). The judge prompt is "
+        "fed on stdin; a JSON verdict is read from stdout. PIN THE MODEL "
+        "— a judge on 'auto' can silently change between runs, which "
+        "invalidates any before/after comparison. Recommended: "
+        '"kiro-cli chat --no-interactive --model claude-sonnet-4.5" '
+        "(strong reasoning for root-cause work, reliable JSON, and it "
+        "out-classes a local 8-14B DUT); use --model claude-haiku-4.5 for "
+        "cheap high-volume runs."
     ),
 )
 @click.option(
@@ -1929,6 +1934,28 @@ def eval_e2e_cmd(
     # auditable. --no-exclusive skips this (e.g. a shared box you don't
     # want to disturb).
     dut_model = next((m for m in cfg.models if m.id == cfg.aliases.get(dut)), None)
+
+    # Template pre-flight: a model can advertise `tools` while shipping a
+    # stub template that cannot render tool results at all, in which case
+    # every tool turn spirals to the iteration cap (gemma4:12b-it-qat,
+    # 2026-08-10). Declared capabilities are not trustworthy; the template
+    # is. Warn loudly rather than abort — the operator may be measuring
+    # exactly this.
+    if dut_model is not None and dut_model.backend == "ollama" and dut_model.endpoint:
+        from .warm_status import check_template
+
+        tc = asyncio.run(check_template(dut_model.endpoint, dut_model.model))
+        if tc.mismatch:
+            _console.print(
+                f"[red]template warning[/red]: {tc.model} advertises tool support but its "
+                f"chat template ({tc.template_len} chars, renders_messages="
+                f"{tc.renders_messages}, mentions_tools={tc.mentions_tools}) cannot carry a "
+                f"tool exchange — tool results will never reach the model and tool turns "
+                f"will loop to the cap. Expect tool scenarios to fail for this reason."
+            )
+        elif tc.detail:
+            _console.print(f"[dim]template check unavailable: {tc.detail}[/dim]")
+
     if exclusive and dut_model is not None and dut_model.backend == "ollama" and dut_model.endpoint:
         from .warm_status import evict_others, list_loaded
 
