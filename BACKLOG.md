@@ -29,23 +29,24 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- Executor-loop robustness guard (model-agnostic) — `agent_loop.py` has
-  only a hard `max_iterations` cap: no stop-on-repeated-tool-call, no
-  nudge. A weak model can spiral (qwen3 called `todo_add` 10x to the cap;
-  see observed-issues), which wastes a turn and blows the context. A
-  small guard (stop when a tool call exactly repeats, or when a
-  side-effecting tool has already succeeded this turn) helps ANY weak
-  model, not one DUT — unlike per-model prompt/nudge patches, which
-  (Principle 5 + "ablation doesn't scale") we'd rather avoid in favour of
-  model choice. Scope check first: is this worth it for a not-a-coding-
-  agent, or do we just pick capable models? Decide before building.
-- Raise `num_ctx` for `gemma4-12b-it-qat-ec2` (config, ~5 min) — the
-  e2e harness caught it loaded at ctx 4096 while FITT's prompt is ~4095
-  tokens, so it emits `output_tokens=1` (empty replies, 0/6). gemma4
-  supports 262k; bump num_ctx like granite, then re-run
-  `fitt eval e2e --dut fitt-ec2-gemma4` to see if it becomes a usable
-  tool-caller. (See observed-issues "three-model tool-driving
-  comparison".)
+- **Executor-loop brake (model-agnostic) — NEXT BUILD, scope confirmed.**
+  `agent_loop.py` has only a hard `max_iterations` cap: no
+  stop-on-repeated-tool-call, no nudge. Now well-evidenced: with VRAM +
+  num_ctx confounds removed, gemma4:12b hits `tool_loop_exhausted` on
+  EVERY tool turn (calls tools repeatedly, can't stop) — it's the single
+  thing blocking a fast, capable model (see observed-issues "Resolution +
+  fair re-run"). A small guard (stop when a tool call exactly repeats,
+  or when a side-effecting tool already succeeded this turn) helps ANY
+  spiraling model, unlike per-model prompt patches (Principle 5). Do it
+  scientifically: measure gemma4 (and qwen3/hermes as controls) on the
+  e2e harness before, add the guard, measure after — clean A/B.
+- num_ctx: per-model `ModelConfig.num_ctx` SHIPPED (router forwards to
+  ollama). Remaining: a **boot-time warning** when a model's num_ctx is
+  below FITT's prompt budget (Principle 11 — turn the silent
+  `output_tokens=1` into a loud startup error). Small follow-up.
+- Eval VRAM hygiene SHIPPED — `warm_status.py` + `fitt eval e2e
+  --exclusive` evict co-resident models + warm the DUT + report VRAM/ctx,
+  so contention can't silently pollute a measurement.
 - Judged e2e harness — **SHIPPED 2026-08-07**
   ([`judged-e2e-harness`](.kiro/specs/judged-e2e-harness/tasks.md)).
   `fitt eval e2e` drives seed scenarios (reminder / news / memory-recall

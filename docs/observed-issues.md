@@ -84,6 +84,46 @@ three different actionable levers (model choice / loop design / config).
 The Tier-1 judge grounding made each diagnosis specific ("only
 `todo_add` executed, not `todo_done`"; "output_tokens=1, no room").
 
+### Resolution + fair re-run (2026-08-10, same day)
+
+Two fixes landed and a confound was removed; the picture changed a lot.
+
+1. **Per-model `num_ctx` (shipped).** `ModelConfig.num_ctx` + the router
+   forwarding it to ollama. Setting all three EC2 models to 16384 was
+   transformative — and revealed the "qwen3 loops" diagnosis above was
+   partly wrong: with adequate context qwen3 does NOT spiral. It went
+   **0/6 -> 5/6** (the best), setting the cron reminder correctly.
+   hermes went to **4/6**. So the starved default window, not a model
+   defect, was a big part of qwen3's looping.
+
+2. **VRAM contention was faking gemma4's badness.** gemma4's "0/6 then
+   impractically slow / stalls" was TWO stacked problems. First the
+   4096 ctx (fixed by #1). Then, once it could respond, it was
+   **67s per chitchat** — because during the ranking run qwen3 (~9GB)
+   was still resident and gemma4 (~7.6GB) + KV caches exceeded the A10G
+   24GB, forcing CPU offload. `/api/ps` showed `size_vram` dropping.
+   Shipped **eval VRAM hygiene** (`warm_status.py` + `fitt eval e2e
+   --exclusive`): evict co-resident models, warm the DUT, and report the
+   warm state (VRAM GB / ctx / offload flag). Evicting qwen3 and warming
+   gemma4 alone dropped chitchat **67s -> 7s**.
+
+3. **Fair, contention-free ranking (all num_ctx 16384):**
+   - **qwen3:14b — 5/6.** Best; clean (no exhaustion); slower.
+   - **hermes3:8b — 4/6.** Fast; clean.
+   - **gemma4:12b — 3/6.** Fast per-call now, but **tool_loop_exhausted
+     on every tool turn** — it calls tools repeatedly and can't stop.
+     It still passed reminder + todo because the side effect landed
+     mid-spiral before the 10-iteration cap. So gemma4's real blocker is
+     **loop control**, not VRAM or capability.
+
+**Net:** two levers, both now evidenced. (a) a `num_ctx` floor + a
+boot-time warning when a model is configured below FITT's prompt budget
+(config + Principle 11 — turns the silent `output_tokens=1` into a loud
+startup error). (b) the **executor-loop brake** (stop-on-repeated-call /
+side-effect-done) — model-agnostic, and the single change most likely to
+lift gemma4 (and any spiraling model). Both are in BACKLOG; the loop
+brake is the next build, to be measured before/after with this harness.
+
 ---
 
 ## Judged e2e harness: first live run findings (session/isolation bugs + model tool-driving)
