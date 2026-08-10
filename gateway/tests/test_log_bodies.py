@@ -114,8 +114,12 @@ async def test_log_bodies_on_logs_body_with_client_tag(
         "chat.request_body was NOT logged despite log_bodies=true; the debug-logging path is broken"
     )
     # The log entry should carry the client tag (default-untagged
-    # test token resolves to 'webui').
-    assert "client=webui" in combined, (
+    # test token resolves to 'webui'). Assert on the value rather than a
+    # specific rendering: the global structlog renderer may be console
+    # (client=webui) or JSON ("client": "webui") depending on what other
+    # tests configured earlier in a full-suite run — this test pins
+    # behaviour (is the tag present?), not log formatting.
+    assert "webui" in combined, (
         "chat.request_body log entry missing client tag; "
         "operators need it to diff one interface against another"
     )
