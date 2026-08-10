@@ -38,10 +38,12 @@ The curated ordering - the judgment call a tool can't make for you.
   four harness bugs and showed hermes3:8b hallucinating success on 3/4
   (see observed-issues). The frontier judge is wired + validated live via
   `--judge --judge-command "kiro-cli chat --no-interactive"` (it agreed
-  with the objective layer). Follow-ups: configure web_search + retrieval
-  so the news / memory-recall scenarios can pass, and add the
-  cron-cancel / todo-lifecycle / learn-a-lesson scenarios (needs a small
-  lessons slice in `snapshot_app`).
+  with the objective layer). Seed set now: chitchat, reminder,
+  news_summary, memory_recall, todo, todo_lifecycle. Follow-ups:
+  configure web_search + retrieval so the news / memory-recall scenarios
+  can pass; add a learn-a-lesson scenario (needs a small lessons slice in
+  `snapshot_app`); a trustworthy cron-cancel needs a per-scenario setup
+  hook (cancelled vs never-created look identical in the end state).
 - Phase 9 (Memory v1) — **SHIPPED 2026-07-02 (9a–9g)**. Home-grown
   SQLite FTS5 + embeddings behind a `RetrievalProvider` ABC (Honcho
   rejected by the 9a spike); async indexer, `memory_search` tool,

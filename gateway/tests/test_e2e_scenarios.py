@@ -6,10 +6,12 @@ from datetime import UTC, datetime
 
 from gateway.e2e_eval import E2ETrajectory, RunResult
 from gateway.e2e_scenarios import (
+    chitchat_scenario,
     memory_recall_scenario,
     news_scenario,
     reminder_scenario,
     seed_scenarios,
+    todo_lifecycle_scenario,
     todo_scenario,
 )
 
@@ -110,18 +112,61 @@ def test_todo_fails_with_empty_snapshot() -> None:
     assert not todo_scenario().outcome_assert(_traj(snapshot={})).passed
 
 
+# --------------------------------------------------------------- chitchat
+
+
+def test_chitchat_passes_on_reply_with_no_tool() -> None:
+    scen = chitchat_scenario()
+    assert scen.outcome_assert(_traj(reply="Doing well, thanks for asking!")).passed
+
+
+def test_chitchat_fails_on_empty_reply() -> None:
+    assert not chitchat_scenario().outcome_assert(_traj(reply="   ")).passed
+
+
+def test_chitchat_fails_when_a_tool_fired() -> None:
+    scen = chitchat_scenario()
+    res = scen.outcome_assert(_traj(reply="hi", tools=("web_search:ok",)))
+    assert not res.passed
+
+
+# --------------------------------------------------------------- todo lifecycle
+
+
+def test_todo_lifecycle_passes_when_item_done() -> None:
+    scen = todo_lifecycle_scenario(item="buy milk")
+    snap = {"todos_text": "## Open\n- [x] buy milk\n"}
+    assert scen.outcome_assert(_traj(snapshot=snap)).passed
+
+
+def test_todo_lifecycle_fails_when_present_but_open() -> None:
+    scen = todo_lifecycle_scenario(item="buy milk")
+    snap = {"todos_text": "## Open\n- [ ] buy milk\n"}
+    res = scen.outcome_assert(_traj(snapshot=snap))
+    assert not res.passed
+    assert "not marked done" in res.reason
+
+
+def test_todo_lifecycle_fails_when_absent() -> None:
+    scen = todo_lifecycle_scenario(item="buy milk")
+    assert not scen.outcome_assert(_traj(snapshot={"todos_text": "- [x] walk dog"})).passed
+
+
 # --------------------------------------------------------------- set
 
 
 def test_seed_scenarios_have_rubrics_and_turns() -> None:
     scens = seed_scenarios()
     assert {s.name for s in scens} == {
+        "chitchat",
         "reminder",
         "news_summary",
         "memory_recall",
         "todo",
+        "todo_lifecycle",
     }
     for s in scens:
         assert s.turns and s.rubric  # all judged + non-empty
-    # memory_recall is multi-turn.
+    # memory_recall and todo_lifecycle are multi-turn.
     assert len(memory_recall_scenario().turns) == 2
+    assert len(todo_lifecycle_scenario().turns) == 2

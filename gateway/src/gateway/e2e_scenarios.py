@@ -127,11 +127,76 @@ def todo_scenario(*, item: str = "call the doctor") -> TaskScenario:
     )
 
 
+def _chitchat_assert() -> object:
+    def _a(traj: E2ETrajectory) -> OutcomeResult:
+        reply = traj.run.reply.strip()
+        if not reply:
+            return OutcomeResult(False, "empty reply")
+        if traj.run.tool_sequence:
+            return OutcomeResult(
+                False, f"called tool(s) on plain chitchat: {list(traj.run.tool_sequence)}"
+            )
+        return OutcomeResult(True, "replied conversationally with no tool call")
+
+    return _a
+
+
+def chitchat_scenario() -> TaskScenario:
+    """The easiest possible turn: a friendly greeting, no tool needed. The
+    objective check is that a reply came back AND no tool fired (a weak
+    model shouldn't hallucinate a tool call for small talk); the rubric
+    judges whether it's a coherent, friendly reply."""
+    return TaskScenario(
+        name="chitchat",
+        turns=[{"role": "user", "content": "Hey, how's it going today?"}],
+        outcome_assert=_chitchat_assert(),  # type: ignore[arg-type]
+        rubric=(
+            "Is the reply a friendly, coherent conversational response — not a "
+            "refusal, not empty, not an error message, and not a spurious tool "
+            "call or JSON blob?"
+        ),
+    )
+
+
+def _todo_done_assert(item: str):  # type: ignore[no-untyped-def]
+    def _a(traj: E2ETrajectory) -> OutcomeResult:
+        text = str(traj.snapshot.get("todos_text", ""))
+        for line in text.splitlines():
+            if item.lower() in line.lower() and "[x]" in line.lower():
+                return OutcomeResult(True, f"todos.md has {item!r} marked done")
+        if item.lower() in text.lower():
+            return OutcomeResult(False, f"{item!r} is present but not marked done")
+        return OutcomeResult(False, f"todos.md does not contain {item!r}")
+
+    return _a
+
+
+def todo_lifecycle_scenario(*, item: str = "buy milk") -> TaskScenario:
+    """Two turns: add an item, then mark it done. Objective = the item
+    exists in todos.md AND is checked off (tests todo_add + todo_done, not
+    just the add). Uses a distinct item from ``todo_scenario`` so the two
+    don't collide in a shared run's todos.md."""
+    return TaskScenario(
+        name="todo_lifecycle",
+        turns=[
+            {"role": "user", "content": f"Add '{item}' to my todo list."},
+            {"role": "user", "content": f"I've done that now — mark '{item}' as done."},
+        ],
+        outcome_assert=_todo_done_assert(item),
+        rubric=(
+            f"Across the two turns, did the assistant add '{item}' and then "
+            "confirm it marked it done/complete?"
+        ),
+    )
+
+
 def seed_scenarios() -> list[TaskScenario]:
     """The scenarios available today."""
     return [
+        chitchat_scenario(),
         reminder_scenario(),
         news_scenario(),
         memory_recall_scenario(),
         todo_scenario(),
+        todo_lifecycle_scenario(),
     ]
