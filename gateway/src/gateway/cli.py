@@ -1795,6 +1795,15 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
     default=None,
     help="Write the full report to this path (default: $FITT_HOME/eval/e2e-<ts>.md).",
 )
+@click.option(
+    "--exclusive/--no-exclusive",
+    default=True,
+    help=(
+        "For an ollama DUT: evict other models from the endpoint's VRAM "
+        "and warm the DUT before running, so co-resident models can't "
+        "cause CPU offload that silently pollutes results. On by default."
+    ),
+)
 @click.option("--config-file", type=click.Path(path_type=Path), default=None)
 def eval_e2e_cmd(
     dut: str,
@@ -1805,6 +1814,7 @@ def eval_e2e_cmd(
     tunnel_url: str | None,
     min_objective_rate: float | None,
     out: Path | None,
+    exclusive: bool,
     config_file: Path | None,
 ) -> None:
     """Run the judged end-to-end scenarios against a live DUT.
@@ -1896,6 +1906,49 @@ def eval_e2e_cmd(
     # list is still enforced by the wrapper. Same posture as the cron
     # runner and profile runner.
     app.state.approval = _AutoApproveWrapper(app.state.approval)
+
+    # VRAM hygiene (Principle: clean measurement). On an ollama DUT,
+    # evict any other models resident on its endpoint and warm the DUT,
+    # so a co-resident model can't force CPU offload that silently
+    # pollutes latency (gemma4 looked terrible only because it was
+    # sharing VRAM with qwen3). Report the warm state so the run is
+    # auditable. --no-exclusive skips this (e.g. a shared box you don't
+    # want to disturb).
+    dut_model = next((m for m in cfg.models if m.id == cfg.aliases.get(dut)), None)
+    if exclusive and dut_model is not None and dut_model.backend == "ollama" and dut_model.endpoint:
+        from .warm_status import evict_others, list_loaded
+
+        endpoint = dut_model.endpoint
+        model_name = dut_model.model
+
+        async def _warm() -> tuple[list[str], Any]:
+            evicted = await evict_others(endpoint, model_name)
+            # Warm the DUT via one real turn so it loads at the
+            # configured num_ctx (build_http_dispatch registers the
+            # throwaway session for us).
+            warm_dispatch = build_http_dispatch(app, alias=dut, token=token, session_id="e2e-warm")
+            await warm_dispatch([{"role": "user", "content": "hi"}])
+            return evicted, await list_loaded(endpoint)
+
+        evicted, loaded = asyncio.run(_warm())
+        if evicted:
+            _console.print(f"[dim]evicted from VRAM: {', '.join(evicted)}[/dim]")
+        warm = next((m for m in loaded if m.name == model_name), None)
+        if warm is not None:
+            vram_gb = warm.size_vram / 1e9
+            offloaded = warm.size_vram == 0
+            colour = "red" if offloaded else "green"
+            _console.print(
+                f"[{colour}]warm:[/{colour}] {model_name} "
+                f"ctx={warm.context_length} vram={vram_gb:.1f}GB"
+                + ("  [red](CPU-offloaded — results may be slow)[/red]" if offloaded else "")
+            )
+            others = [m.name for m in loaded if m.name != model_name]
+            if others:
+                _console.print(f"[yellow]still co-resident: {', '.join(others)}[/yellow]")
+        else:
+            _console.print(f"[yellow]DUT {model_name} not reported warm after warmup[/yellow]")
+
     scenarios = seed_scenarios()
 
     async def _run() -> Any:
