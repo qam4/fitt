@@ -164,21 +164,76 @@ def build_judge_prompt(ji: JudgeInput) -> str:
     return prompt + "## Your verdict (JSON only)\n"
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI colour/escape sequences.
+
+    A chatty CLI judge (kiro-cli) colourises its output; those bytes end
+    up inside the stored ``reasoning`` and can also sit between the
+    prompt marker and the JSON. Strip them before parsing."""
+    return _ANSI_RE.sub("", text)
+
+
+def _extract_json_object(text: str) -> str | None:
+    """Return the first *complete* brace-matched {...} object, or None.
+
+    Brace-matches (respecting string literals + escapes) instead of a
+    greedy ``\\{.*\\}`` regex so a truncated tail doesn't produce a
+    half-object that fails to parse, and a ``}`` inside a reason string
+    doesn't cut the object short."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
 def parse_verdict(raw: str) -> JudgeVerdict:
     """Parse a judge's stdout into a verdict.
 
     Prefers a JSON object ``{passed, score, reasoning}`` (tolerating
-    surrounding prose / code fences by extracting the first {...} block);
-    falls back to a PASS/FAIL keyword scan. Raises when nothing
-    parseable is found (the caller turns that into an un-judged
-    verdict)."""
-    text = raw.strip()
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
+    surrounding prose, code fences, and ANSI colour codes).
+
+    **A detected-but-unparseable JSON verdict raises** rather than
+    falling through to the keyword scan. That fallback inverted a real
+    verdict once (2026-08-10): a truncated reply whose JSON said
+    ``"passed": false`` was scored PASS because the prose contained the
+    word "PASS" ("the objective outcome is PASS"). A false pass is the
+    worst failure mode for an eval, so when the judge clearly *tried* to
+    emit JSON we refuse to guess — the caller records it un-judged. The
+    keyword scan survives only for judges that never emit JSON at all."""
+    text = strip_ansi(raw).strip()
+    candidate = _extract_json_object(text)
+    if candidate is not None:
         try:
-            obj = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            obj = None
+            obj = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"judge emitted JSON that failed to parse (refusing to guess "
+                f"from prose): {exc}: {candidate[:120]!r}"
+            ) from exc
         if isinstance(obj, dict) and "passed" in obj:
             score = obj.get("score")
             return JudgeVerdict(
@@ -186,7 +241,11 @@ def parse_verdict(raw: str) -> JudgeVerdict:
                 score=float(score) if isinstance(score, int | float) else None,
                 reasoning=str(obj.get("reasoning", "")),
             )
-    # Lenient fallback: a bare PASS/FAIL somewhere in the output.
+        raise ValueError(f"judge JSON has no 'passed' field: {candidate[:120]!r}")
+    if "{" in text:
+        # An opening brace with no complete object == truncated JSON.
+        raise ValueError(f"judge output has truncated JSON: {text[-120:]!r}")
+    # Lenient fallback, only for output with no JSON attempt at all.
     upper = text.upper()
     if "PASS" in upper and "FAIL" not in upper:
         return JudgeVerdict(passed=True, score=None, reasoning=text[:200])

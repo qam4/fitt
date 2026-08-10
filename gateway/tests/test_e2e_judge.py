@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from gateway.e2e_eval import JudgeInput
 from gateway.e2e_judge import CliJudge, build_judge_prompt, parse_verdict
 
@@ -175,6 +177,33 @@ def test_prompt_surfaces_loop_status_when_not_ok() -> None:
 
 
 # --------------------------------------------------------------- parse
+
+
+def test_parse_truncated_json_does_not_invert_verdict() -> None:
+    """Regression (2026-08-10): a truncated JSON verdict whose text says
+    `"passed": false` must NEVER be scored PASS because the surrounding
+    prose contains the word "PASS". A false pass is the worst eval bug —
+    we refuse to guess and the caller records it un-judged."""
+    raw = '> {"passed": false, "score": 0.2, "reasoning": "The objective outcome is PASS but the'
+    with pytest.raises(ValueError):
+        parse_verdict(raw)
+
+
+def test_parse_strips_ansi_colour_codes() -> None:
+    """kiro-cli colourises stdout; those bytes must not land in the
+    reasoning or block the JSON parse."""
+    raw = '\x1b[38;5;141m> \x1b[0m{"passed": true, "score": 0.8, "reasoning": "fine"}'
+    v = parse_verdict(raw)
+    assert v.passed is True
+    assert v.score == 0.8
+    assert "\x1b" not in v.reasoning
+
+
+def test_parse_json_with_brace_in_reason() -> None:
+    """A `}` inside a reason string must not truncate the object."""
+    v = parse_verdict('{"passed": true, "score": 1.0, "reasoning": "saw a } brace"}')
+    assert v.passed is True
+    assert "brace" in v.reasoning
 
 
 def test_parse_clean_json() -> None:
