@@ -29,6 +29,13 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
+- Raise `num_ctx` for `gemma4-12b-it-qat-ec2` (config, ~5 min) — the
+  e2e harness caught it loaded at ctx 4096 while FITT's prompt is ~4095
+  tokens, so it emits `output_tokens=1` (empty replies, 0/6). gemma4
+  supports 262k; bump num_ctx like granite, then re-run
+  `fitt eval e2e --dut fitt-ec2-gemma4` to see if it becomes a usable
+  tool-caller. (See observed-issues "three-model tool-driving
+  comparison".)
 - Judged e2e harness — **SHIPPED 2026-08-07**
   ([`judged-e2e-harness`](.kiro/specs/judged-e2e-harness/tasks.md)).
   `fitt eval e2e` drives seed scenarios (reminder / news / memory-recall

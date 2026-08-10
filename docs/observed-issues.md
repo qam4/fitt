@@ -33,6 +33,50 @@ doc.
 
 ---
 
+## e2e harness: three-model tool-driving comparison (+ gemma4 starved by a 4096 ctx)
+
+**First observed:** 2026-08-10, `fitt eval e2e` (Tier-1 judge) run against
+all three EC2 aliases.
+**Tag:** model-fit / prompt budget / eval / tool-call discipline.
+
+Ran the six seed scenarios (chitchat / reminder / news / memory_recall /
+todo / todo_lifecycle) against each tunnelled DUT. Three models, three
+*distinct* failure modes — each pointing at a different lever:
+
+- **hermes3:8b** — the only one useful out of the box, and only
+  marginally. Reliably does chitchat + a single `todo_add`, fires
+  `web_search` ~half the time. Fails on precision: reaches for
+  `todo_add` when a timed `cron_add` was needed, and adds a todo but
+  never `todo_done` (multi-step). Lever: sharper tool descriptions /
+  loop nudges, or accept it as a marginal tool-caller.
+- **qwen3:14b** — tool-loops to exhaustion. On a plain "add a todo" it
+  called `todo_add` on every iteration and hit the 10-iteration cap
+  (prompt grew ~4k -> ~41k, its ceiling, purely from accumulated
+  `reasoning_content`). Thinking-model loop-control problem. Lever: the
+  reasoning-model loop nudge (already exists for the planner).
+- **gemma4:12b-it-qat** — **0/6, every reply empty.** The smoking gun:
+  `input_tokens=4095, output_tokens=1` on every scenario. `/api/ps`
+  showed the model loaded with **`context_length: 4096`** while FITT's
+  system prompt is **~4095 tokens** — the prompt consumes the entire
+  window, leaving one token to answer. NOT a capability failure; a
+  config one. gemma4 supports 262k context but is loaded at 4096. This
+  is the "Prompt-size budget" entry below caught red-handed by the
+  harness: the `output_tokens=1` signature is an unambiguous
+  no-headroom tell. Lever: raise `num_ctx` for the gemma4 model (as was
+  done for granite) and re-run.
+
+Why hermes/qwen3 had room and gemma4 didn't, all at the same ~4095-token
+prompt: hermes3 was loaded at 131k ctx and qwen3 at 40k, so 4095 left
+plenty of output space; only gemma4 was pinned at 4096. Per-model
+`num_ctx` is the variable.
+
+The larger point: the harness earned its keep — one run, three models,
+three different actionable levers (model choice / loop design / config).
+The Tier-1 judge grounding made each diagnosis specific ("only
+`todo_add` executed, not `todo_done`"; "output_tokens=1, no room").
+
+---
+
 ## Judged e2e harness: first live run findings (session/isolation bugs + model tool-driving)
 
 **First observed:** 2026-08-07, first live run of `fitt eval e2e`
