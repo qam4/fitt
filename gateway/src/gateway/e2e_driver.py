@@ -99,29 +99,30 @@ def _extract_reply(data: dict[str, Any]) -> str:
 
 
 def _tools_from_last_turn(app: Any, session_id: str) -> tuple[str, ...]:
-    """Recover the tool names that fired on the most-recent persisted
-    turn, by reading the session's history (the ground truth of what the
-    loop did through the full pipeline). Reuses the memory parser."""
-    mem = getattr(app.state, "memory", None)
-    if mem is None:
+    """Recover every tool the loop actually executed this run, as
+    ``"<tool>:<ok|err>"`` in call order.
+
+    Sourced from the TurnLog's ``tool_call_executed`` events (the
+    authoritative per-call record, complete across *all* loop iterations
+    and both turns of a multi-turn scenario) rather than the markdown
+    history's last-timestamp group — the latter silently dropped tools
+    that fired in an earlier iteration (the todo case), which then made
+    the judge wrongly conclude "no tools were called". Since e2e sessions
+    are unique per scenario+run, every tool event for the session belongs
+    to this run. Falls back to () when no turn log is wired."""
+    turns_log = getattr(app.state, "turns", None)
+    if turns_log is None:
         return ()
     try:
-        path = mem.history_path(session_id)
-    except Exception:
+        events = turns_log.read(session_id, kind="tool_call_executed")
+    except Exception:  # pragma: no cover - defensive
         return ()
-    if not path.exists():
-        return ()
-    from .memory import _parse_turns
-
-    turns = _parse_turns(path.read_text(encoding="utf-8"))
-    if not turns:
-        return ()
-    last_ts = turns[-1].timestamp
-    return tuple(
-        t.role.split(" ", 1)[1]
-        for t in turns
-        if t.timestamp == last_ts and t.role.startswith("tool ")
-    )
+    seq: list[str] = []
+    for e in events:
+        name = e.meta.get("tool_name", "?")
+        ok = e.meta.get("ok", True)
+        seq.append(f"{name}:{'ok' if ok else 'err'}")
+    return tuple(seq)
 
 
 def build_http_dispatch(

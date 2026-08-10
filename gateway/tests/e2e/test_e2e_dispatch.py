@@ -28,7 +28,7 @@ async def test_dispatch_captures_reply_and_tool_sequence(
     assert res.error is None
     assert res.loop_status == "ok"
     assert "no crons" in res.reply
-    assert "cron_list" in res.tool_sequence  # recovered from the persisted turn
+    assert any("cron_list" in t for t in res.tool_sequence)  # from the turn log
 
 
 async def test_dispatch_multi_turn_returns_last_reply(

@@ -103,7 +103,14 @@ class OutcomeResult:
 
 @dataclass(frozen=True)
 class JudgeInput:
-    """What the frontier judge sees for one scenario."""
+    """What the frontier judge sees for one scenario.
+
+    Beyond the user-facing ``reply``, the judge is handed the system
+    *internals* — the tools that actually executed and the resulting
+    side-effect ``snapshot`` (cron jobs, todos, recent events) — so it
+    can grade the reply against what really happened, not just what the
+    reply claims. This is the chess-coach pattern: ground the judge in
+    the objective record."""
 
     intent: str
     rubric: str
@@ -111,6 +118,7 @@ class JudgeInput:
     tool_sequence: tuple[str, ...]
     outcome_passed: bool
     outcome_reason: str
+    snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -187,6 +195,7 @@ async def run_scenario(
             tool_sequence=run.tool_sequence,
             outcome_passed=outcome.passed,
             outcome_reason=outcome.reason,
+            snapshot=traj.snapshot,
         )
         try:
             verdict = await judge(judge_input)

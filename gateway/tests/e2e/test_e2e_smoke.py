@@ -66,7 +66,7 @@ async def test_todo_scenario_smoke(
 
     # Objective: the tool actually wrote the item to todos.md.
     assert result.outcome.passed, result.outcome.reason
-    assert "todo_add" in result.trajectory.run.tool_sequence
+    assert any("todo_add" in t for t in result.trajectory.run.tool_sequence)
     # Judge: the fuzzy reply-quality pass ran and passed.
     assert result.verdict.judged
     assert result.verdict.passed

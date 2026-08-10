@@ -6,7 +6,7 @@ from gateway.e2e_eval import JudgeInput
 from gateway.e2e_judge import CliJudge, build_judge_prompt, parse_verdict
 
 
-def _ji(reply: str = "a reply") -> JudgeInput:
+def _ji(reply: str = "a reply", *, snapshot: dict | None = None) -> JudgeInput:
     return JudgeInput(
         intent="news_summary",
         rubric="Is the summary grounded and on-topic?",
@@ -14,6 +14,7 @@ def _ji(reply: str = "a reply") -> JudgeInput:
         tool_sequence=("web_search:ok",),
         outcome_passed=True,
         outcome_reason="web_search fired",
+        snapshot=snapshot or {},
     )
 
 
@@ -41,6 +42,36 @@ def test_prompt_includes_rubric_reply_tools_outcome() -> None:
     assert "the market rose 2%" in p
     assert "web_search:ok" in p
     assert "PASS" in p  # objective outcome context
+
+
+def test_prompt_grounds_judge_in_internals() -> None:
+    """The judge prompt must carry the side-effect snapshot as ground
+    truth (cron/todos/events) and instruct the judge to trust it over the
+    reply's claims — so a reply that lies about what it did scores low."""
+    snap = {
+        "cron_jobs": [
+            {"name": "reminder", "schedule_kind": "at", "message": "call doctor", "enabled": True}
+        ],
+        "todos_text": "## Open\n- [x] buy milk\n",
+        "event_kinds": ["tool_call_executed", "turn_finished"],
+    }
+    p = build_judge_prompt(_ji(snapshot=snap))
+    assert "GROUND TRUTH" in p
+    assert "buy milk" in p  # todos side effect
+    assert "call doctor" in p  # cron side effect
+    assert "tool_call_executed" in p  # events
+
+
+def test_prompt_marks_no_tools_when_empty() -> None:
+    ji = JudgeInput(
+        intent="chitchat",
+        rubric="friendly?",
+        reply="hi there",
+        tool_sequence=(),
+        outcome_passed=True,
+        outcome_reason="no tool, replied",
+    )
+    assert "(no tools executed)" in build_judge_prompt(ji)
 
 
 # --------------------------------------------------------------- parse

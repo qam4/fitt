@@ -28,23 +28,67 @@ JudgeRunner = Callable[[list[str], str], Awaitable[str]]
 _JUDGE_INSTRUCTIONS = (
     "You are grading an AI assistant's reply against a rubric. Reply with "
     'ONLY a JSON object: {"passed": true|false, "score": 0.0-1.0, '
-    '"reasoning": "<one or two sentences>"}. Judge the reply quality per '
-    "the rubric; the objective outcome below is provided as context "
-    "(it was checked deterministically, not by you)."
+    '"reasoning": "<one or two sentences>"}.\n\n'
+    "You are given the SYSTEM INTERNALS — the tools that actually executed "
+    "and the resulting side effects (cron jobs, todo list, recent events), "
+    "captured from the gateway's logs. TREAT THESE AS GROUND TRUTH about "
+    "what really happened, over whatever the reply claims. A reply that "
+    "claims it did something the internals don't support (e.g. 'I set a "
+    "reminder' with no cron created, or fabricated search results with no "
+    "web_search executed) should score LOW even if it reads well. The "
+    "deterministic objective outcome is also provided; it was checked by "
+    "code, not by you."
 )
+
+_MAX_FIELD = 1200
+
+
+def _truncate(s: str, n: int = _MAX_FIELD) -> str:
+    s = s.strip()
+    return s if len(s) <= n else s[:n] + "…(truncated)"
+
+
+def _render_internals(ji: JudgeInput) -> str:
+    """Render the tools + side-effect snapshot as the ground-truth block."""
+    tools = ", ".join(ji.tool_sequence) or "(no tools executed)"
+    lines = [f"Tools actually executed (in order): {tools}"]
+    snap = ji.snapshot or {}
+
+    crons = snap.get("cron_jobs")
+    if isinstance(crons, list):
+        if crons:
+            rendered = "; ".join(
+                f"{c.get('name', '?')} [{c.get('schedule_kind', '?')}]"
+                f" msg={c.get('message', '')!r} enabled={c.get('enabled', '?')}"
+                for c in crons[:10]
+            )
+            lines.append(f"Cron jobs ({len(crons)}): {rendered}")
+        else:
+            lines.append("Cron jobs: none")
+
+    if "todos_text" in snap:
+        lines.append(f"todos.md:\n{_truncate(str(snap['todos_text'])) or '(empty)'}")
+
+    kinds = snap.get("event_kinds")
+    if isinstance(kinds, list) and kinds:
+        lines.append(f"Recent event kinds: {', '.join(str(k) for k in kinds[-20:])}")
+
+    return "\n".join(lines)
 
 
 def build_judge_prompt(ji: JudgeInput) -> str:
-    """Compose the judge prompt from the scenario's rubric + the run."""
-    tools = ", ".join(ji.tool_sequence) or "(none)"
+    """Compose the judge prompt: rubric + the reply + the system internals
+    (ground truth) the judge grades against."""
     outcome = "PASS" if ji.outcome_passed else "FAIL"
     return (
         f"{_JUDGE_INSTRUCTIONS}\n\n"
         f"## Task\n{ji.intent}\n\n"
         f"## Rubric\n{ji.rubric}\n\n"
-        f"## Objective outcome (deterministic)\n{outcome} — {ji.outcome_reason}\n\n"
-        f"## Tools the assistant called\n{tools}\n\n"
-        f"## Assistant reply\n{ji.reply}\n\n"
+        f"## System internals (GROUND TRUTH — what actually happened)\n"
+        f"{_render_internals(ji)}\n\n"
+        f"## Objective outcome (deterministic, checked by code)\n"
+        f"{outcome} — {ji.outcome_reason}\n\n"
+        f"## Assistant reply to the user\n{_truncate(ji.reply)}\n\n"
         "## Your verdict (JSON only)\n"
     )
 
