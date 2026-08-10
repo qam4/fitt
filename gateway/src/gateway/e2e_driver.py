@@ -134,6 +134,7 @@ def _tool_calls_from_turns(app: Any, session_id: str) -> tuple[dict[str, Any], .
 
 
 _TIMELINE_KINDS = (
+    "llm_request",
     "llm_call_completed",
     "tool_call_planned",
     "tool_call_executed",
@@ -176,6 +177,7 @@ def _timeline_from_turns(app: Any, session_id: str) -> tuple[dict[str, Any], ...
             "tool_calls_count",
             "decision",
             "status",
+            "messages",
         ):
             if key in e.meta:
                 entry[key] = e.meta[key]

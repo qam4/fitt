@@ -674,6 +674,7 @@ async def _run_tool_loop(
             # Loop brake on by default; `loop_brake_enabled: false` in
             # config turns it off (used to A/B its effect).
             loop_brake=(config.loop_brake_enabled if config is not None else True),
+            record_requests=(config.record_llm_requests if config is not None else False),
         )
 
     async def _on_detach(task: Any) -> None:

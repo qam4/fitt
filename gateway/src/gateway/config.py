@@ -295,6 +295,14 @@ class Config(BaseModel):
     # fix. Documented invariant; v1 doesn't enforce it at boot.
     upstream_timeout_secs: float = 300.0
 
+    record_llm_requests: bool = False
+    """Record the conversation FITT sends to the model, per iteration, into
+    the turn log (kind ``llm_request``). OFF by default and not for normal
+    operation — message content includes user prompts and tool output. Its
+    purpose is diagnostics: the behavioural timeline shows what the loop
+    *did*, never what the model was *sent*, so a malformed replay is
+    invisible without this. Enabled by `fitt eval e2e --judge-detail max`."""
+
     loop_brake_enabled: bool = True
     """No-progress detection in the agent loop (2026-08-10). When a model
     re-emits a tool call that already SUCCEEDED this turn, don't run it

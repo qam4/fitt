@@ -108,6 +108,15 @@ def _render_timeline(ji: JudgeInput) -> str:
     ]
     for i, e in enumerate(ji.timeline, start=1):
         kind = e.get("kind", "?")
+        if kind == "llm_request" and "messages" in e:
+            # Verbatim JSON: this is the conversation as SENT, and the
+            # exact wire shape (not a summary of it) is the evidence.
+            body = json.dumps(e["messages"], ensure_ascii=False, default=str)
+            lines.append(
+                f"{i:>3}. llm_request  iteration={e.get('iteration')}  "
+                f"messages_sent={_truncate(body, 2000)}"
+            )
+            continue
         bits: list[str] = []
         for key in (
             "iteration",

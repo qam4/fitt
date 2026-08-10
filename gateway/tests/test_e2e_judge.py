@@ -153,6 +153,43 @@ def test_prompt_tier2_renders_timeline_and_asks_for_root_cause() -> None:
     assert "out_tokens=900" in p
 
 
+def test_prompt_tier3_renders_sent_messages_verbatim() -> None:
+    """Tier 3: the judge must see the conversation as SENT, with tool_call
+    arguments byte-for-byte — a malformed replay (e.g. arguments as a JSON
+    string where the backend wants an object) is invisible otherwise."""
+    ji = JudgeInput(
+        intent="todo",
+        rubric="did it add the todo?",
+        reply="",
+        tool_sequence=("todo_add:ok",),
+        outcome_passed=True,
+        outcome_reason="added",
+        timeline=(
+            {
+                "kind": "llm_request",
+                "iteration": 1,
+                "messages": [
+                    {"role": "user", "content": "add a todo"},
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        # The smoking gun: a JSON STRING, not an object.
+                        "tool_calls": [
+                            {"name": "todo_add", "arguments": '{"text": "call the doctor"}'}
+                        ],
+                    },
+                    {"role": "tool", "content": "added todo: call the doctor"},
+                ],
+            },
+        ),
+    )
+    p = build_judge_prompt(ji)
+    assert "llm_request" in p
+    assert "messages_sent=" in p
+    # The string-vs-object distinction must survive into the prompt.
+    assert '\\"text\\": \\"call the doctor\\"' in p or '"arguments": "{' in p
+
+
 def test_prompt_tier1_omits_timeline_section() -> None:
     """Standard detail stays lean — no timeline, no root-cause ask."""
     p = build_judge_prompt(_ji())

@@ -1802,15 +1802,18 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
 )
 @click.option(
     "--judge-detail",
-    type=click.Choice(["standard", "verbose"]),
+    type=click.Choice(["standard", "verbose", "max"]),
     default="standard",
     help=(
-        "How much of the turn's internals the judge sees. 'standard' "
-        "(Tier 1) = tools with args/results + side-effect snapshot. "
-        "'verbose' (Tier 2) adds the per-iteration turn timeline and asks "
-        "the judge to diagnose the root cause — use it when a failure's "
-        "cause isn't obvious (e.g. a loop that exhausts). Costs prompt "
-        "tokens, so it isn't the default."
+        "How much of the turn's internals the judge sees; each level adds "
+        "to the previous. 'standard' (Tier 1) = tools with args/results + "
+        "side-effect snapshot. 'verbose' (Tier 2) adds the per-iteration "
+        "turn timeline and requires a root-cause hypothesis. 'max' "
+        "(Tier 3) additionally records the conversation FITT SENDS each "
+        "iteration — the timeline shows what the loop did, never what the "
+        "model was given, so a malformed replay is only visible here. "
+        "Higher levels cost prompt tokens (and can degrade the judge), so "
+        "reach for them when a cause isn't obvious."
     ),
 )
 @click.option(
@@ -1907,6 +1910,10 @@ def eval_e2e_cmd(
 
     iso_home = Path(tempfile.mkdtemp(prefix="fitt-e2e-"))
     os.environ["FITT_HOME"] = str(iso_home)
+    if judge_detail == "max":
+        # Tier 3: capture the outgoing conversation per iteration. Safe
+        # here because this run is fully isolated under a scratch home.
+        cfg.record_llm_requests = True
     cfg.memory = cfg.memory.model_copy(
         update={
             "identity_dir": iso_home / "identity",
@@ -1935,23 +1942,24 @@ def eval_e2e_cmd(
     # want to disturb).
     dut_model = next((m for m in cfg.models if m.id == cfg.aliases.get(dut)), None)
 
-    # Template pre-flight: a model can advertise `tools` while shipping a
-    # stub template that cannot render tool results at all, in which case
-    # every tool turn spirals to the iteration cap (gemma4:12b-it-qat,
-    # 2026-08-10). Declared capabilities are not trustworthy; the template
-    # is. Warn loudly rather than abort — the operator may be measuring
-    # exactly this.
+    # Template metadata note. NB (2026-08-10): a stub template does NOT
+    # predict tool-loop failure. Verified experimentally — ollama stores a
+    # model's template but does NOT use it for /api/chat (a model built
+    # with a template hard-coding "reply BANANA" answered the real
+    # question instead), so it renders messages/tools itself. An earlier
+    # version of this check claimed a stub template meant "tool results
+    # never reach the model"; that was wrong and sent us chasing a red
+    # herring. Kept only as a low-key packaging observation.
     if dut_model is not None and dut_model.backend == "ollama" and dut_model.endpoint:
         from .warm_status import check_template
 
         tc = asyncio.run(check_template(dut_model.endpoint, dut_model.model))
         if tc.mismatch:
             _console.print(
-                f"[red]template warning[/red]: {tc.model} advertises tool support but its "
-                f"chat template ({tc.template_len} chars, renders_messages="
-                f"{tc.renders_messages}, mentions_tools={tc.mentions_tools}) cannot carry a "
-                f"tool exchange — tool results will never reach the model and tool turns "
-                f"will loop to the cap. Expect tool scenarios to fail for this reason."
+                f"[dim]note: {tc.model} advertises tool support but its stored chat template "
+                f"({tc.template_len} chars) doesn't render messages/tools. Cosmetic only — "
+                f"ollama does its own rendering for /api/chat, so this does NOT predict "
+                f"tool-call failure.[/dim]"
             )
         elif tc.detail:
             _console.print(f"[dim]template check unavailable: {tc.detail}[/dim]")
@@ -2008,7 +2016,7 @@ def eval_e2e_cmd(
                         dispatch=dispatch,
                         snapshot=lambda: snapshot_app(app),
                         judge=judge,
-                        judge_timeline=(judge_detail == "verbose"),
+                        judge_timeline=(judge_detail in ("verbose", "max")),
                     )
                 )
         return aggregate(results)

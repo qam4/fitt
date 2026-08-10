@@ -486,6 +486,7 @@ async def run_agent_loop(
     artifact_store: ArtifactStore | None = None,
     loop_brake: bool = True,
     max_repeated_calls: int = _MAX_REPEATED_CALLS,
+    record_requests: bool = False,
 ) -> AgentLoopResult:
     """Run the tool-use loop to a natural stop.
 
@@ -552,7 +553,11 @@ async def run_agent_loop(
         working_body["messages"] = working_messages
         # Phase 4.8: emit llm_call_started before dispatch so the
         # renderer knows "thinking" is in flight.
-        from .turn_events import record_llm_call_completed, record_llm_call_started
+        from .turn_events import (
+            record_llm_call_completed,
+            record_llm_call_started,
+            record_llm_request,
+        )
 
         record_llm_call_started(
             turns,
@@ -561,6 +566,14 @@ async def run_agent_loop(
             alias=alias,
             iteration=iteration,
         )
+        if record_requests:
+            record_llm_request(
+                turns,
+                turn_id,
+                session_key,
+                iteration=iteration,
+                messages=working_messages,
+            )
         dispatch_started = time.perf_counter()
         try:
             dispatch = await alias_router.dispatch(alias, working_body)

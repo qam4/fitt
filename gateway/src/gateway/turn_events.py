@@ -225,6 +225,60 @@ def record_llm_call_completed(
     )
 
 
+def record_llm_request(
+    turns: TurnLog | None,
+    turn_id: str | None,
+    session_key: str,
+    *,
+    iteration: int,
+    messages: list[dict[str, Any]],
+    max_content_chars: int = 200,
+) -> None:
+    """Record the conversation FITT is about to SEND (opt-in, debug).
+
+    Off by default and never enabled in normal operation: message content
+    can carry user prompts and tool output, so this is for a deliberate
+    diagnostic run only (``record_llm_requests``).
+
+    Content is truncated but **structure is preserved verbatim** — roles in
+    order, and each ``tool_calls`` entry's ``arguments`` exactly as it will
+    go on the wire. That fidelity is the point: a malformed replay (e.g.
+    an argument payload the backend can't reconstruct) is invisible in the
+    behavioural timeline and only shows up here."""
+
+    def _shrink(m: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {"role": m.get("role")}
+        content = m.get("content")
+        if isinstance(content, str) and content:
+            out["content"] = (
+                content if len(content) <= max_content_chars else content[:max_content_chars] + "…"
+            )
+        elif content is None:
+            out["content"] = None
+        calls = m.get("tool_calls")
+        if calls:
+            # Keep `arguments` byte-for-byte as sent; do not normalise.
+            out["tool_calls"] = [
+                {
+                    "name": (c.get("function") or {}).get("name"),
+                    "arguments": (c.get("function") or {}).get("arguments"),
+                }
+                for c in calls
+                if isinstance(c, dict)
+            ]
+        if "tool_call_id" in m:
+            out["tool_call_id"] = m["tool_call_id"]
+        return out
+
+    _emit(
+        turns,
+        turn_id=turn_id,
+        kind="llm_request",
+        session_key=session_key,
+        meta={"iteration": iteration, "messages": [_shrink(m) for m in messages]},
+    )
+
+
 # --------------------------------------------------------------- tool calls
 
 
