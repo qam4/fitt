@@ -116,13 +116,56 @@ Two fixes landed and a confound was removed; the picture changed a lot.
      mid-spiral before the 10-iteration cap. So gemma4's real blocker is
      **loop control**, not VRAM or capability.
 
-**Net:** two levers, both now evidenced. (a) a `num_ctx` floor + a
-boot-time warning when a model is configured below FITT's prompt budget
-(config + Principle 11 — turns the silent `output_tokens=1` into a loud
-startup error). (b) the **executor-loop brake** (stop-on-repeated-call /
-side-effect-done) — model-agnostic, and the single change most likely to
-lift gemma4 (and any spiraling model). Both are in BACKLOG; the loop
-brake is the next build, to be measured before/after with this harness.
+### Root cause of gemma4's spiral: a stub chat template (not FITT, not capability)
+
+Rather than guess, we built **Tier 2** judge detail (the per-iteration
+turn timeline + a required root-cause hypothesis) and let the judge
+diagnose it. Its verdicts, unprompted and consistent across scenarios:
+
+> "the model spiraled, re-emitting the same `todo_add` tool call every
+> iteration (0–9) instead of stopping after the first successful
+> execution"; "called `web_search` 10 times with near-identical
+> queries... never producing a `finish_reason=stop`".
+
+That pointed at "the model never registers the tool result", which
+`/api/show` confirmed:
+
+| model | template | `.Messages`? | "tool" mentions | e2e |
+|---|---|---|---|---|
+| gemma4:12b-it-qat | `{{ .Prompt }}` (13 chars) | **no** | **0** | 3/6, spirals every tool turn |
+| hermes3:8b | 1874 chars | yes | 13 | 4/6 clean |
+| qwen3:14b | 1723 chars | yes | 16 | 5/6 clean |
+
+**This ollama build of gemma4 ships a stub template** — a raw prompt
+passthrough with no role markers and no tool-call/tool-result rendering
+— while still advertising `tools` in its capabilities. So FITT's
+tool-result message cannot be represented to the model at all: it never
+learns the tool succeeded and re-emits the call until the iteration cap.
+It also explains why chitchat worked (a single-shot prompt renders fine
+as raw text) but *every* tool turn spiraled.
+
+Consequences:
+- **Not a FITT bug and not a gemma4 capability limit.** Don't "fix" this
+  in the loop. The fix is a model package with a real chat template (a
+  different tag/build, or a local Modelfile supplying one).
+- **`capabilities: tools` is not trustworthy** as a readiness signal —
+  this model advertises tools and cannot mechanically do them. A cheap
+  template check (`has .Messages` / mentions tools) is a much better
+  pre-flight than a declared capability, and is a candidate for the
+  capability ladder's tool-check rung.
+- The **executor-loop brake** is therefore *defence in depth*, not the
+  fix: it would cap the waste (10 slow iterations, a blown context, an
+  empty reply) for any model that can't terminate, but it would not make
+  gemma4 usable.
+
+**Net:** levers now evidenced. (a) a `num_ctx` floor + a boot-time
+warning when a model is configured below FITT's prompt budget (config +
+Principle 11 — turns the silent `output_tokens=1` into a loud startup
+error). (b) a **template pre-flight check** (does the model's template
+actually render messages/tools?) — cheap, and catches a whole class of
+"advertises tools, can't do tools" packaging problems. (c) the
+**executor-loop brake**, reframed as damage limitation rather than a
+cure. All three in BACKLOG.
 
 ---
 

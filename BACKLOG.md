@@ -29,17 +29,26 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
-- **Executor-loop brake (model-agnostic) — NEXT BUILD, scope confirmed.**
+- **Template pre-flight check (cheap, high value).** gemma4:12b-it-qat
+  advertises `capabilities: tools` but ships a stub template
+  (`{{ .Prompt }}`) with no message roles and no tool-result rendering —
+  so tool results can never reach the model and every tool turn spirals
+  to the iteration cap (see observed-issues "Root cause of gemma4's
+  spiral"). Declared capabilities are therefore NOT trustworthy. A cheap
+  `/api/show` check ("does the template reference .Messages / tools?")
+  catches this whole class of packaging bug before a model is bound to an
+  alias. Natural fit for the capability ladder's tool-check rung.
+- **Executor-loop brake — damage limitation, not a cure (reframed).**
   `agent_loop.py` has only a hard `max_iterations` cap: no
-  stop-on-repeated-tool-call, no nudge. Now well-evidenced: with VRAM +
-  num_ctx confounds removed, gemma4:12b hits `tool_loop_exhausted` on
-  EVERY tool turn (calls tools repeatedly, can't stop) — it's the single
-  thing blocking a fast, capable model (see observed-issues "Resolution +
-  fair re-run"). A small guard (stop when a tool call exactly repeats,
-  or when a side-effecting tool already succeeded this turn) helps ANY
-  spiraling model, unlike per-model prompt patches (Principle 5). Do it
-  scientifically: measure gemma4 (and qwen3/hermes as controls) on the
-  e2e harness before, add the guard, measure after — clean A/B.
+  stop-on-repeated-tool-call, no nudge. A model that can't see tool
+  results burns 10 slow iterations, blows its context, and returns an
+  empty reply (gemma4, every tool turn). A guard (stop when a tool call
+  exactly repeats, or when a side-effecting tool already succeeded this
+  turn) would cap that waste for ANY such model — but note it would NOT
+  make gemma4 usable, since the root cause is its template. Decide
+  whether capping the waste is worth core-loop risk; if built, A/B it on
+  the e2e harness (gemma4 as the spiral case, qwen3/hermes as
+  no-regression controls).
 - num_ctx: per-model `ModelConfig.num_ctx` SHIPPED (router forwards to
   ollama). Remaining: a **boot-time warning** when a model's num_ctx is
   below FITT's prompt budget (Principle 11 — turn the silent
