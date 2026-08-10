@@ -108,6 +108,48 @@ The curated ordering - the judgment call a tool can't make for you.
   tests; see roadmap.)
 
 **Later**
+- **Self-improving loop: e2e harness -> coding agent -> FITT (IDEA ONLY,
+  2026-08-10).** Product-owner idea: let the judged e2e harness feed a
+  coding agent so FITT improves over time without the operator driving
+  each fix. Not scheduled; captured so the reasoning isn't re-derived.
+  Today's session is the evidence base for what each layer can actually
+  do:
+  1. **Regression gate (autonomous today).** The *objective* scenario
+     layer is deterministic and needs no LLM. It already caught real
+     defects (10 duplicate todo writes; num_ctx starvation). Running just
+     this on a cron with `--samples` is genuine unattended value and does
+     not depend on the judge getting smarter. **Start here if we ever
+     start.**
+  2. **Triage (judge).** Good at *behaviour* ("finish_reason=tool_calls
+     every iteration, never terminates"), and Tier 2/3 make that specific.
+     Output should be a hypothesis + evidence bundle, not a fix.
+  3. **Investigation (agent, the missing piece).** The judge **missed the
+     real root cause while holding the smoking gun verbatim** and blamed
+     the model instead. Finding it took five *constructed* experiments:
+     minimal working repro outside FITT -> step it toward FITT one
+     variable at a time -> the step that breaks localises it -> factorial
+     confirm. That is differential debugging, an *agent* capability
+     (write + run new probes), NOT something a judge reading trajectories
+     can do. Any real loop needs this layer.
+  4. **Gated change.** Agent must ship fix + a NEW test that fails before
+     and passes after. The loop-brake A/B (`tests/e2e/test_loop_brake.py`)
+     is the template.
+
+  Hard-won preconditions for unattended operation, all learned the hard
+  way today:
+  - **Fail closed on verdicts.** A truncated judge reply inverted a FAIL
+    into a PASS; a loop acting on that "fixes" phantoms. (Fixed, but the
+    class of bug is the point.)
+  - **Kill confounds or chase ghosts.** Three stacked at once (num_ctx,
+    VRAM contention, a template red herring). Needs the hygiene now built:
+    isolated `FITT_HOME`, `--exclusive` VRAM, and a **pinned** judge model
+    (on `auto` the grader itself drifts between runs, invalidating A/Bs).
+  - **Never decide on one run.** news_summary passed one run and failed
+    the next; use `--samples` + pass-rate thresholds.
+  - Beware teaching-to-the-test: keep generic reasoning prompts separate
+    from known-failure-mode checklists, or we mistake recall for
+    discovery.
+
 - Render the profile baseline-diff in the Capability card (folds into
   the 12.5b surface).
 - Liveness bullet: fresh-shallow vs stale-deep + no auto-refresh

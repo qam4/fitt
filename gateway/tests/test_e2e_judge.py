@@ -188,6 +188,30 @@ def test_prompt_tier3_renders_sent_messages_verbatim() -> None:
     assert "messages_sent=" in p
     # The string-vs-object distinction must survive into the prompt.
     assert '\\"text\\": \\"call the doctor\\"' in p or '"arguments": "{' in p
+    # The judge must be told to treat the HARNESS as a suspect — with the
+    # data alone it blamed the model (2026-08-10).
+    assert "do not assume the model is at fault" in p
+    # The generic framing must NOT name a specific defect (that would be
+    # teaching to the test); concrete defects live in a labelled checklist.
+    audit_para = p.split("Known replay defects")[0]
+    assert "JSON-encoded STRING" not in audit_para
+    assert "checklist match, not a deduction" in p
+
+
+def test_audit_ask_absent_without_sent_messages() -> None:
+    """The replay-audit instruction only applies when we actually show the
+    outgoing conversation; Tier 2 alone shouldn't invite the speculation."""
+    ji = JudgeInput(
+        intent="todo",
+        rubric="r",
+        reply="x",
+        tool_sequence=(),
+        outcome_passed=True,
+        outcome_reason="ok",
+        timeline=({"kind": "llm_call_completed", "iteration": 0},),
+    )
+    p = build_judge_prompt(ji)
+    assert "do not assume the model is at fault" not in p
 
 
 def test_prompt_tier1_omits_timeline_section() -> None:

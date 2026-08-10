@@ -147,6 +147,37 @@ _DIAGNOSE_ASK = (
     "iterations). Be specific and mechanical, not generic."
 )
 
+# Given the outgoing messages but no framing, a judge still blamed the
+# model ("it should have stopped after the first success") while the real
+# cause sat verbatim in the data it held (2026-08-10). Data was necessary
+# but not sufficient — the judge has to be told the HARNESS is a suspect.
+#
+# Deliberately GENERIC: no specific defect is named. Naming one would be
+# teaching to the test — it would catch that bug forever and stay blind to
+# the next (a dropped system message, a wrong role, reordered history).
+# Known concrete defects belong in the separately-labelled checklist below,
+# so we never mistake recall for reasoning.
+_AUDIT_ASK = (
+    "IMPORTANT: do not assume the model is at fault. When "
+    "``messages_sent`` is present it shows the conversation the harness "
+    "REPLAYED back to the model. Treat that replay as a suspect: does it "
+    "faithfully convey everything the model needs — including that work it "
+    "already did succeeded? If the model repeats an action that already "
+    "succeeded, seriously consider that the replay failed to convey the "
+    "success, and say so rather than concluding the model simply misbehaved."
+)
+
+# Known failure modes: a checklist, NOT a reasoning test. Add a line only
+# after a defect has been confirmed in the wild. Kept explicitly separate
+# from _AUDIT_ASK so a hit here is understood as recall, not discovery.
+_KNOWN_ISSUES = (
+    "Known replay defects worth checking (a hit here is a checklist match, "
+    "not a deduction):\n"
+    "- a prior tool call's ``arguments`` carried as a JSON-encoded STRING "
+    "(escaped quotes) where the backend expects an object;\n"
+    "- a tool result present but not associated with the call it answers."
+)
+
 
 def build_judge_prompt(ji: JudgeInput) -> str:
     """Compose the judge prompt: rubric + the reply + the system internals
@@ -157,9 +188,11 @@ def build_judge_prompt(ji: JudgeInput) -> str:
     cause — that's what turns the harness from "it failed" into "it
     failed because iteration N re-emitted the same call"."""
     outcome = "PASS" if ji.outcome_passed else "FAIL"
+    has_sent_messages = any(e.get("kind") == "llm_request" for e in ji.timeline)
     prompt = (
         f"{_JUDGE_INSTRUCTIONS}\n"
         + (f"\n{_DIAGNOSE_ASK}\n" if ji.timeline else "")
+        + (f"\n{_AUDIT_ASK}\n\n{_KNOWN_ISSUES}\n" if has_sent_messages else "")
         + f"\n## Task\n{ji.intent}\n\n"
         f"## Rubric\n{ji.rubric}\n\n"
         f"## System internals (GROUND TRUTH — what actually happened)\n"
