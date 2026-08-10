@@ -265,18 +265,25 @@ def test_unknown_tool_produces_structured_error_not_500(
 
 
 def test_iteration_cap_returns_504(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Model never stops calling tools - we bail with 504 tool_loop_exhausted."""
+    """Model never stops calling tools - we bail with 504 tool_loop_exhausted.
+
+    Each call uses a DISTINCT path so this exercises the iteration cap
+    specifically. An identical repeated call is now handled earlier by the
+    loop brake (2026-08-10), which suppresses it and stops with
+    ``tool_loop_repeated`` — that path is covered in
+    ``tests/e2e/test_loop_brake.py``. Keeping the two concerns separate
+    means this test still pins the cap rather than the brake."""
     calls: list[dict[str, Any]] = []
 
     async def fake(**kwargs: Any) -> Any:
         calls.append(kwargs)
-        # Always ask for another tool call.
+        # Always ask for another tool call, each one distinct.
         return _fake_response(
             tool_calls=[
                 _tool_call(
                     f"c{len(calls)}",
                     "read_file",
-                    {"project": "hub", "path": "README.md"},
+                    {"project": "hub", "path": f"README-{len(calls)}.md"},
                 )
             ]
         )
