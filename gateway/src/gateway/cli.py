@@ -1796,6 +1796,19 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
     help="Write the full report to this path (default: $FITT_HOME/eval/e2e-<ts>.md).",
 )
 @click.option(
+    "--judge-detail",
+    type=click.Choice(["standard", "verbose"]),
+    default="standard",
+    help=(
+        "How much of the turn's internals the judge sees. 'standard' "
+        "(Tier 1) = tools with args/results + side-effect snapshot. "
+        "'verbose' (Tier 2) adds the per-iteration turn timeline and asks "
+        "the judge to diagnose the root cause — use it when a failure's "
+        "cause isn't obvious (e.g. a loop that exhausts). Costs prompt "
+        "tokens, so it isn't the default."
+    ),
+)
+@click.option(
     "--exclusive/--no-exclusive",
     default=True,
     help=(
@@ -1814,6 +1827,7 @@ def eval_e2e_cmd(
     tunnel_url: str | None,
     min_objective_rate: float | None,
     out: Path | None,
+    judge_detail: str,
     exclusive: bool,
     config_file: Path | None,
 ) -> None:
@@ -1967,6 +1981,7 @@ def eval_e2e_cmd(
                         dispatch=dispatch,
                         snapshot=lambda: snapshot_app(app),
                         judge=judge,
+                        judge_timeline=(judge_detail == "verbose"),
                     )
                 )
         return aggregate(results)

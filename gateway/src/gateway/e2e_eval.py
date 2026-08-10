@@ -46,6 +46,7 @@ class RunResult:
     reply: str
     tool_sequence: tuple[str, ...] = ()  # "<tool>:<result_status>" per call
     tool_calls: tuple[dict[str, Any], ...] = ()  # {name, args, ok, result} per call
+    timeline: tuple[dict[str, Any], ...] = ()  # Tier 2: per-iteration turn events
     loop_status: str = "ok"
     error: str | None = None
 
@@ -54,6 +55,7 @@ class RunResult:
             "reply": self.reply,
             "tool_sequence": list(self.tool_sequence),
             "tool_calls": [dict(c) for c in self.tool_calls],
+            "timeline": [dict(e) for e in self.timeline],
             "loop_status": self.loop_status,
             "error": self.error,
         }
@@ -64,6 +66,7 @@ class RunResult:
             reply=d["reply"],
             tool_sequence=tuple(d.get("tool_sequence", [])),
             tool_calls=tuple(d.get("tool_calls", [])),
+            timeline=tuple(d.get("timeline", [])),
             loop_status=d.get("loop_status", "ok"),
             error=d.get("error"),
         )
@@ -125,6 +128,12 @@ class JudgeInput:
     tool_calls: tuple[dict[str, Any], ...] = ()  # {name, args, ok, result} per call
     loop_status: str = "ok"
     error: str | None = None
+    timeline: tuple[dict[str, Any], ...] = ()
+    """Tier 2: the per-iteration turn timeline (LLM calls with
+    finish_reason/tokens, planned vs executed tool calls, approvals).
+    Empty at Tier 1. Included in the judge prompt only when the operator
+    asks for the deeper detail level — it's the evidence needed to
+    diagnose *why* a loop misbehaved, at the cost of prompt size."""
 
 
 @dataclass(frozen=True)
@@ -176,6 +185,7 @@ async def run_scenario(
     dispatch: DispatchFn,
     snapshot: SnapshotFn,
     judge: JudgeFn | None = None,
+    judge_timeline: bool = False,
 ) -> E2EResult:
     """Run one scenario end to end and grade it.
 
@@ -205,6 +215,7 @@ async def run_scenario(
             tool_calls=run.tool_calls,
             loop_status=run.loop_status,
             error=run.error,
+            timeline=run.timeline if judge_timeline else (),
         )
         try:
             verdict = await judge(judge_input)

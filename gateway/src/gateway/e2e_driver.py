@@ -133,6 +133,56 @@ def _tool_calls_from_turns(app: Any, session_id: str) -> tuple[dict[str, Any], .
     return tuple(calls)
 
 
+_TIMELINE_KINDS = (
+    "llm_call_completed",
+    "tool_call_planned",
+    "tool_call_executed",
+    "approval_requested",
+    "approval_decided",
+    "turn_finished",
+)
+
+
+def _timeline_from_turns(app: Any, session_id: str) -> tuple[dict[str, Any], ...]:
+    """Recover the per-iteration turn timeline (Tier 2).
+
+    The full shape of what the loop did: each LLM call (tokens,
+    finish_reason, how many tool calls it emitted), each planned call
+    (with args), each execution (ok + result), and approvals — in order.
+    This is what lets a judge diagnose *why* a turn went wrong (e.g. a
+    loop that re-emits the same call every iteration) rather than only
+    that it did. Returns () when no turn log is wired."""
+    turns_log = getattr(app.state, "turns", None)
+    if turns_log is None:
+        return ()
+    try:
+        events = turns_log.read(session_id)
+    except Exception:  # pragma: no cover - defensive
+        return ()
+    out: list[dict[str, Any]] = []
+    for e in events:
+        if e.kind not in _TIMELINE_KINDS:
+            continue
+        entry: dict[str, Any] = {"kind": e.kind}
+        for key in (
+            "iteration",
+            "tool_name",
+            "args",
+            "ok",
+            "result_summary",
+            "in_tokens",
+            "out_tokens",
+            "finish_reason",
+            "tool_calls_count",
+            "decision",
+            "status",
+        ):
+            if key in e.meta:
+                entry[key] = e.meta[key]
+        out.append(entry)
+    return tuple(out)
+
+
 def build_http_dispatch(
     app: Any,
     *,
@@ -198,6 +248,7 @@ def build_http_dispatch(
             reply=reply,
             tool_sequence=tool_sequence,
             tool_calls=tool_calls,
+            timeline=_timeline_from_turns(app, session_id),
             loop_status=loop_status,
             error=error,
         )

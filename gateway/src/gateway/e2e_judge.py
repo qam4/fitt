@@ -94,21 +94,74 @@ def _render_internals(ji: JudgeInput) -> str:
     return "\n".join(lines)
 
 
+def _render_timeline(ji: JudgeInput) -> str:
+    """Render the per-iteration turn timeline (Tier 2)."""
+    lines = [
+        "## Turn timeline (per-iteration trace of the agent loop)",
+        "",
+        "Each LLM call and tool call in order. Use this to diagnose the "
+        "loop's BEHAVIOUR — e.g. the same tool re-emitted every iteration "
+        "(a spiral), a tool that errored and was retried, huge out_tokens "
+        "(the model reasoning instead of acting), or a finish_reason that "
+        "explains an early stop.",
+        "",
+    ]
+    for i, e in enumerate(ji.timeline, start=1):
+        kind = e.get("kind", "?")
+        bits: list[str] = []
+        for key in (
+            "iteration",
+            "tool_name",
+            "ok",
+            "in_tokens",
+            "out_tokens",
+            "finish_reason",
+            "tool_calls_count",
+            "decision",
+        ):
+            if key in e:
+                bits.append(f"{key}={e[key]}")
+        if "args" in e:
+            bits.append(
+                "args=" + _truncate(json.dumps(e["args"], ensure_ascii=False, default=str), 200)
+            )
+        if "result_summary" in e:
+            bits.append("result=" + _truncate(str(e["result_summary"]), 200))
+        lines.append(f"{i:>3}. {kind}  " + "  ".join(bits))
+    return "\n".join(lines)
+
+
+_DIAGNOSE_ASK = (
+    "In addition to the verdict, the ``reasoning`` field MUST state your "
+    "best hypothesis for the ROOT CAUSE of any failure, citing the "
+    "timeline (which iteration, which tool, what changed between "
+    "iterations). Be specific and mechanical, not generic."
+)
+
+
 def build_judge_prompt(ji: JudgeInput) -> str:
     """Compose the judge prompt: rubric + the reply + the system internals
-    (ground truth) the judge grades against."""
+    (ground truth) the judge grades against.
+
+    When ``ji.timeline`` is populated (Tier 2) the per-iteration trace is
+    appended and the judge is additionally asked to diagnose the root
+    cause — that's what turns the harness from "it failed" into "it
+    failed because iteration N re-emitted the same call"."""
     outcome = "PASS" if ji.outcome_passed else "FAIL"
-    return (
-        f"{_JUDGE_INSTRUCTIONS}\n\n"
-        f"## Task\n{ji.intent}\n\n"
+    prompt = (
+        f"{_JUDGE_INSTRUCTIONS}\n"
+        + (f"\n{_DIAGNOSE_ASK}\n" if ji.timeline else "")
+        + f"\n## Task\n{ji.intent}\n\n"
         f"## Rubric\n{ji.rubric}\n\n"
         f"## System internals (GROUND TRUTH — what actually happened)\n"
         f"{_render_internals(ji)}\n\n"
         f"## Objective outcome (deterministic, checked by code)\n"
         f"{outcome} — {ji.outcome_reason}\n\n"
         f"## Assistant reply to the user\n{_truncate(ji.reply)}\n\n"
-        "## Your verdict (JSON only)\n"
     )
+    if ji.timeline:
+        prompt += f"{_render_timeline(ji)}\n\n"
+    return prompt + "## Your verdict (JSON only)\n"
 
 
 def parse_verdict(raw: str) -> JudgeVerdict:

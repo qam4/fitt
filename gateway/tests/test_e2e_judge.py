@@ -99,6 +99,65 @@ def test_prompt_renders_tool_call_args_and_results() -> None:
     assert "scheduled cron abc123" in p  # result visible
 
 
+def test_prompt_tier2_renders_timeline_and_asks_for_root_cause() -> None:
+    """Tier 2: with a timeline the judge sees the per-iteration trace AND
+    is asked to name the root cause — that's what turns 'it failed' into
+    'it failed because iteration N re-emitted the same call'."""
+    ji = JudgeInput(
+        intent="todo",
+        rubric="did it add the todo?",
+        reply="",
+        tool_sequence=("todo_add:ok", "todo_add:ok"),
+        outcome_passed=False,
+        outcome_reason="loop exhausted",
+        loop_status="tool_loop_exhausted",
+        timeline=(
+            {
+                "kind": "llm_call_completed",
+                "iteration": 0,
+                "out_tokens": 900,
+                "tool_calls_count": 1,
+            },
+            {
+                "kind": "tool_call_planned",
+                "iteration": 0,
+                "tool_name": "todo_add",
+                "args": {"text": "x"},
+            },
+            {
+                "kind": "tool_call_executed",
+                "tool_name": "todo_add",
+                "ok": True,
+                "result_summary": "added",
+            },
+            {
+                "kind": "llm_call_completed",
+                "iteration": 1,
+                "out_tokens": 900,
+                "tool_calls_count": 1,
+            },
+            {
+                "kind": "tool_call_planned",
+                "iteration": 1,
+                "tool_name": "todo_add",
+                "args": {"text": "x"},
+            },
+        ),
+    )
+    p = build_judge_prompt(ji)
+    assert "Turn timeline" in p
+    assert "ROOT CAUSE" in p
+    assert "tool_call_planned" in p
+    assert "out_tokens=900" in p
+
+
+def test_prompt_tier1_omits_timeline_section() -> None:
+    """Standard detail stays lean — no timeline, no root-cause ask."""
+    p = build_judge_prompt(_ji())
+    assert "Turn timeline" not in p
+    assert "ROOT CAUSE" not in p
+
+
 def test_prompt_surfaces_loop_status_when_not_ok() -> None:
     ji = JudgeInput(
         intent="todo",
