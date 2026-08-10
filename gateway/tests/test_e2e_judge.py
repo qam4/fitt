@@ -74,6 +74,47 @@ def test_prompt_marks_no_tools_when_empty() -> None:
     assert "(no tools executed)" in build_judge_prompt(ji)
 
 
+def test_prompt_renders_tool_call_args_and_results() -> None:
+    """Tier 1: the judge sees each tool's args + result, not just the
+    name — so it can check the RIGHT tool ran with the RIGHT args."""
+    ji = JudgeInput(
+        intent="reminder",
+        rubric="did it set a reminder?",
+        reply="done",
+        tool_sequence=("cron_add:ok",),
+        outcome_passed=True,
+        outcome_reason="cron set",
+        tool_calls=(
+            {
+                "name": "cron_add",
+                "args": {"message": "call the doctor", "when": "2026-08-11T09:00"},
+                "ok": True,
+                "result": "scheduled cron abc123",
+            },
+        ),
+    )
+    p = build_judge_prompt(ji)
+    assert "cron_add(" in p
+    assert "call the doctor" in p  # args visible
+    assert "scheduled cron abc123" in p  # result visible
+
+
+def test_prompt_surfaces_loop_status_when_not_ok() -> None:
+    ji = JudgeInput(
+        intent="todo",
+        rubric="did it add the todo?",
+        reply="",
+        tool_sequence=(),
+        outcome_passed=False,
+        outcome_reason="nothing added",
+        loop_status="tool_loop_exhausted",
+        error="did not terminate within 10 iterations",
+    )
+    p = build_judge_prompt(ji)
+    assert "tool_loop_exhausted" in p
+    assert "10 iterations" in p
+
+
 # --------------------------------------------------------------- parse
 
 

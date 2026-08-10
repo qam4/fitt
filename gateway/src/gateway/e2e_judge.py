@@ -48,10 +48,28 @@ def _truncate(s: str, n: int = _MAX_FIELD) -> str:
     return s if len(s) <= n else s[:n] + "…(truncated)"
 
 
+def _render_tool_calls(ji: JudgeInput) -> str:
+    """Render each tool call with its args + result (Tier 1). Falls back
+    to the bare name:status sequence when the structured detail isn't
+    available (e.g. fake-dispatch tests)."""
+    if not ji.tool_calls:
+        return "Tools actually executed (in order): " + (
+            ", ".join(ji.tool_sequence) or "(no tools executed)"
+        )
+    lines = ["Tools actually executed (in order, with args + result):"]
+    for c in ji.tool_calls:
+        status = "ok" if c.get("ok", True) else "ERROR"
+        args = _truncate(json.dumps(c.get("args", {}), ensure_ascii=False, default=str), 400)
+        result = _truncate(str(c.get("result", "")), 400)
+        lines.append(f"  - {c.get('name', '?')}({args}) -> {status}: {result or '(no result)'}")
+    return "\n".join(lines)
+
+
 def _render_internals(ji: JudgeInput) -> str:
     """Render the tools + side-effect snapshot as the ground-truth block."""
-    tools = ", ".join(ji.tool_sequence) or "(no tools executed)"
-    lines = [f"Tools actually executed (in order): {tools}"]
+    lines = [_render_tool_calls(ji)]
+    if ji.loop_status and ji.loop_status != "ok":
+        lines.append(f"Loop status: {ji.loop_status}" + (f" — {ji.error}" if ji.error else ""))
     snap = ji.snapshot or {}
 
     crons = snap.get("cron_jobs")

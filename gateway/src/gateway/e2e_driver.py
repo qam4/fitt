@@ -98,31 +98,39 @@ def _extract_reply(data: dict[str, Any]) -> str:
         return ""
 
 
-def _tools_from_last_turn(app: Any, session_id: str) -> tuple[str, ...]:
-    """Recover every tool the loop actually executed this run, as
-    ``"<tool>:<ok|err>"`` in call order.
+def _tool_calls_from_turns(app: Any, session_id: str) -> tuple[dict[str, Any], ...]:
+    """Recover every tool the loop actually executed this run, with its
+    args and result summary, in call order.
 
-    Sourced from the TurnLog's ``tool_call_executed`` events (the
-    authoritative per-call record, complete across *all* loop iterations
-    and both turns of a multi-turn scenario) rather than the markdown
-    history's last-timestamp group — the latter silently dropped tools
-    that fired in an earlier iteration (the todo case), which then made
-    the judge wrongly conclude "no tools were called". Since e2e sessions
-    are unique per scenario+run, every tool event for the session belongs
-    to this run. Falls back to () when no turn log is wired."""
+    Joins the TurnLog's ``tool_call_planned`` (carries ``args``) and
+    ``tool_call_executed`` (carries ``ok`` + ``result_summary``, capped
+    at 300 chars) events by ``call_id`` — the authoritative per-call
+    record, complete across *all* loop iterations and both turns of a
+    multi-turn scenario. (The old markdown last-timestamp parse dropped
+    tools that fired in an earlier iteration — the todo case — which made
+    the judge wrongly conclude "no tools were called".) Since e2e
+    sessions are unique per scenario+run, every tool event for the
+    session belongs to this run. Returns () when no turn log is wired."""
     turns_log = getattr(app.state, "turns", None)
     if turns_log is None:
         return ()
     try:
-        events = turns_log.read(session_id, kind="tool_call_executed")
+        planned = turns_log.read(session_id, kind="tool_call_planned")
+        executed = turns_log.read(session_id, kind="tool_call_executed")
     except Exception:  # pragma: no cover - defensive
         return ()
-    seq: list[str] = []
-    for e in events:
-        name = e.meta.get("tool_name", "?")
-        ok = e.meta.get("ok", True)
-        seq.append(f"{name}:{'ok' if ok else 'err'}")
-    return tuple(seq)
+    args_by_call = {e.meta.get("call_id"): e.meta.get("args", {}) for e in planned}
+    calls: list[dict[str, Any]] = []
+    for e in executed:
+        calls.append(
+            {
+                "name": e.meta.get("tool_name", "?"),
+                "args": args_by_call.get(e.meta.get("call_id"), {}),
+                "ok": bool(e.meta.get("ok", True)),
+                "result": e.meta.get("result_summary", ""),
+            }
+        )
+    return tuple(calls)
 
 
 def build_http_dispatch(
@@ -184,9 +192,14 @@ def build_http_dispatch(
                 idx = getattr(app.state, "memory_indexer", None)
                 if drain_indexer and idx is not None:
                     await idx.drain()
-        tool_sequence = _tools_from_last_turn(app, session_id) if error is None else ()
+        tool_calls = _tool_calls_from_turns(app, session_id) if error is None else ()
+        tool_sequence = tuple(f"{c['name']}:{'ok' if c['ok'] else 'err'}" for c in tool_calls)
         return RunResult(
-            reply=reply, tool_sequence=tool_sequence, loop_status=loop_status, error=error
+            reply=reply,
+            tool_sequence=tool_sequence,
+            tool_calls=tool_calls,
+            loop_status=loop_status,
+            error=error,
         )
 
     return _dispatch

@@ -45,6 +45,7 @@ class RunResult:
 
     reply: str
     tool_sequence: tuple[str, ...] = ()  # "<tool>:<result_status>" per call
+    tool_calls: tuple[dict[str, Any], ...] = ()  # {name, args, ok, result} per call
     loop_status: str = "ok"
     error: str | None = None
 
@@ -52,6 +53,7 @@ class RunResult:
         return {
             "reply": self.reply,
             "tool_sequence": list(self.tool_sequence),
+            "tool_calls": [dict(c) for c in self.tool_calls],
             "loop_status": self.loop_status,
             "error": self.error,
         }
@@ -61,6 +63,7 @@ class RunResult:
         return cls(
             reply=d["reply"],
             tool_sequence=tuple(d.get("tool_sequence", [])),
+            tool_calls=tuple(d.get("tool_calls", [])),
             loop_status=d.get("loop_status", "ok"),
             error=d.get("error"),
         )
@@ -119,6 +122,9 @@ class JudgeInput:
     outcome_passed: bool
     outcome_reason: str
     snapshot: dict[str, Any] = field(default_factory=dict)
+    tool_calls: tuple[dict[str, Any], ...] = ()  # {name, args, ok, result} per call
+    loop_status: str = "ok"
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -196,6 +202,9 @@ async def run_scenario(
             outcome_passed=outcome.passed,
             outcome_reason=outcome.reason,
             snapshot=traj.snapshot,
+            tool_calls=run.tool_calls,
+            loop_status=run.loop_status,
+            error=run.error,
         )
         try:
             verdict = await judge(judge_input)
