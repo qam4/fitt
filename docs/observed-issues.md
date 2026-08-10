@@ -47,13 +47,22 @@ todo / todo_lifecycle) against each tunnelled DUT. Three models, three
   marginally. Reliably does chitchat + a single `todo_add`, fires
   `web_search` ~half the time. Fails on precision: reaches for
   `todo_add` when a timed `cron_add` was needed, and adds a todo but
-  never `todo_done` (multi-step). Lever: sharper tool descriptions /
-  loop nudges, or accept it as a marginal tool-caller.
+  never `todo_done` (multi-step). Levers are UNDERSTOOD but NOT applied
+  on the live path: the narration->shape-check in `alias_probe` /
+  `alias_eval` was deliberately removed from live chat (2026-05-12
+  rollback), and the `todo_add`-vs-`cron_add` disambiguation is
+  prompt-tuning that hasn't been authored. Don't mistake "known category
+  of fix" for "wired fix" — or accept it as a marginal tool-caller.
 - **qwen3:14b** — tool-loops to exhaustion. On a plain "add a todo" it
   called `todo_add` on every iteration and hit the 10-iteration cap
   (prompt grew ~4k -> ~41k, its ceiling, purely from accumulated
-  `reasoning_content`). Thinking-model loop-control problem. Lever: the
-  reasoning-model loop nudge (already exists for the planner).
+  `reasoning_content`). Thinking-model loop-control problem. Lever:
+  NONE wired today — the general executor loop (`agent_loop.py`) has only
+  a hard `max_iterations` cap, no stop-on-repeated-call and no nudge. The
+  `_PLAN_NUDGE` that exists is planner-pass-only AND targets the opposite
+  failure (a model that *didn't* call a tool). So this needs new
+  loop-robustness work (see BACKLOG) — or the scalable answer, a model
+  that doesn't spiral.
 - **gemma4:12b-it-qat** — **0/6, every reply empty.** The smoking gun:
   `input_tokens=4095, output_tokens=1` on every scenario. `/api/ps`
   showed the model loaded with **`context_length: 4096`** while FITT's

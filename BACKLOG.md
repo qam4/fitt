@@ -29,6 +29,16 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
+- Executor-loop robustness guard (model-agnostic) — `agent_loop.py` has
+  only a hard `max_iterations` cap: no stop-on-repeated-tool-call, no
+  nudge. A weak model can spiral (qwen3 called `todo_add` 10x to the cap;
+  see observed-issues), which wastes a turn and blows the context. A
+  small guard (stop when a tool call exactly repeats, or when a
+  side-effecting tool has already succeeded this turn) helps ANY weak
+  model, not one DUT — unlike per-model prompt/nudge patches, which
+  (Principle 5 + "ablation doesn't scale") we'd rather avoid in favour of
+  model choice. Scope check first: is this worth it for a not-a-coding-
+  agent, or do we just pick capable models? Decide before building.
 - Raise `num_ctx` for `gemma4-12b-it-qat-ec2` (config, ~5 min) — the
   e2e harness caught it loaded at ctx 4096 while FITT's prompt is ~4095
   tokens, so it emits `output_tokens=1` (empty replies, 0/6). gemma4
