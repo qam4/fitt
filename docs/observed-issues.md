@@ -144,10 +144,65 @@ learns the tool succeeded and re-emits the call until the iteration cap.
 It also explains why chitchat worked (a single-shot prompt renders fine
 as raw text) but *every* tool turn spiraled.
 
+**FALSIFIED (2026-08-10, same day) — the template is irrelevant here.**
+Two experiments, the second decisive.
+
+*Experiment 1.* Built `gemma4-tools:12b` — same weights, a real
+Gemma-flavoured template with `.Messages` + tool_call/tool_response
+rendering — and re-measured under identical conditions (brake on,
+contention-free, num_ctx 16384):
+
+| | stub template | "fixed" template |
+|---|---|---|
+| score | 4/6 | **4/6 (identical)** |
+| failures | news (short), memory (exhausted t2) | *same two, same reasons* |
+
+*Experiment 2 (why).* Built a probe model whose template ignores the
+conversation entirely and hard-codes "reply with exactly one word:
+BANANA". Asked it "What is the capital of France?" It answered **"The
+capital of France is Paris."**
+
+So **ollama stores a model's template but does not use it for
+`/api/chat`** — `/api/show` faithfully reports whatever template you set,
+while inference uses ollama's own built-in message/tool rendering. That
+means (a) experiment 1 never actually changed what the model saw, and
+(b) the original stub `{{ .Prompt }}` was never the problem either: the
+model was receiving properly-rendered tool results all along.
+
+Practical rules learned:
+- **You cannot reliably override a chat template via `/api/create`** and
+  expect it to affect `/api/chat`. `/api/show` readback is NOT proof of
+  application; verify behaviourally.
+- **A stub template does NOT predict tool-call failure.** The pre-flight
+  check's original warning ("tool results will never reach the model")
+  was wrong and has been downgraded to a cosmetic packaging note.
+
+What actually earned its keep, ranked by evidence:
+- **`num_ctx`** — causal and large (qwen3 0/6 -> 5/6; gemma4 0/6 ->
+  responsive). Confirmed.
+- **VRAM contention** — causal for speed (67s -> 7s chitchat). Confirmed.
+- **Loop brake** — causal for duplicate side effects (10 -> 1 write) and
+  3/6 -> 4/6. Confirmed by A/B.
+- **Template** — NOT causal. Falsified by the A/B above.
+
+gemma4's remaining failures look like the model itself (over-iterates,
+thin summaries) — a model-choice lever, not a FITT bug.
+
+Lesson recorded because it nearly shipped: a mechanically-verified story
+("the template literally cannot render tool results") is still only a
+hypothesis until the A/B runs. The harness caught it.
+
 Consequences:
-- **Not a FITT bug and not a gemma4 capability limit.** Don't "fix" this
-  in the loop. The fix is a model package with a real chat template (a
-  different tag/build, or a local Modelfile supplying one).
+- **Not a FITT bug and not a gemma4 capability limit.**
+- **Do NOT hand-roll templates.** Beyond needing per-family turn markers
+  + tool wire format, it provably doesn't even take effect for
+  `/api/chat` (experiment 2), while creating a divergent local tag that
+  must be recreated per host, dies on `ollama pull`, and can't live in
+  the repo (Principle 10). Model packaging is upstream's concern.
+- gemma4's remaining two failures are therefore **still undiagnosed** —
+  the template was a red herring, so don't treat the model as
+  characterised yet. Next step is a Tier-2 judged run on the two failing
+  scenarios (news too-short, memory_recall loop exhaustion).
 - **`capabilities: tools` is not trustworthy** as a readiness signal —
   this model advertises tools and cannot mechanically do them. A cheap
   template check (`has .Messages` / mentions tools) is a much better

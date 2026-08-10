@@ -29,6 +29,27 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
+- **Per-model-family handling: keep it configuration, not code (framing,
+  2026-08-10).** Today's session shows some model behaviour genuinely
+  IS family-specific, so decide the shape before it leaks into `if
+  model == ...` branches. FITT already does per-model *configuration* —
+  `num_ctx` (the most decisive fix of the session), per-alias iteration
+  budgets (`AliasOrchestrationConfig`), per-(alias, step) system prompts
+  (the `prompts:` block), alias->model binding. Principle 7 names the
+  boundary: models are configuration, not architecture.
+  Family-specific needs observed so far, all candidates for config or a
+  thin metadata-keyed adapter rather than scattered branches:
+  - thinking models (`reasoning_content`; qwen3 needed a planner nudge,
+    gemma4's over-iteration may be related);
+  - tool-call dialects (models that narrate JSON instead of emitting
+    `tool_calls` — hermes3 does it intermittently); repair is
+    family-flavoured;
+  - prompt-size budget thresholds (granite degraded ~5k, gemma4 fine at
+    6k).
+  The capability ladder + reconciler is the intended mechanism: measure
+  the model, record the profile, let config adapt which features it can
+  drive. NOT: hand-rolled per-model templates (tried, falsified, see
+  observed-issues).
 - **Template pre-flight check (cheap, high value).** gemma4:12b-it-qat
   advertises `capabilities: tools` but ships a stub template
   (`{{ .Prompt }}`) with no message roles and no tool-result rendering —
