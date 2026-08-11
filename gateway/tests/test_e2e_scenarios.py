@@ -118,36 +118,37 @@ def test_cross_session_recall_requires_memory_search() -> None:
     assert with_tool.passed
 
 
-def test_cross_session_recall_is_inconclusive_when_a_lesson_leaked_the_fact() -> None:
-    """The live failure this encodes: the model stored the fact with
-    learn_add in session A, lessons go into every system prompt
-    regardless of session, so session B answered correctly with no
-    retrieval. Scoring that as a model failure had the judge accusing it
-    of hallucinating a 1-in-10,000 number."""
-    scen = memory_recall_cross_session_scenario(keyword="4821")
+def test_cross_session_recall_is_inconclusive_when_a_lesson_holds_the_fact() -> None:
+    """Twice-observed live failure: the fact ends up in the global
+    [Learned corrections] block (once via learn_add in the same
+    scenario, once leaked from a *different* scenario in the same run),
+    so the recall turn answers with no retrieval. Scored as a failure,
+    the judge accused a correct model of hallucinating a 4-digit
+    number."""
+    scen = memory_recall_cross_session_scenario(keyword="7391")
 
     res = scen.outcome_assert(
         _traj(
-            reply="Your bike lock combination is 4821.",
+            reply="Your gym locker number is 7391.",
             tools=(),
-            earlier_tool_calls=({"name": "learn_add", "ok": True},),
+            snapshot={"lessons_text": "[Learned corrections]\n- My gym locker number is 7391."},
         )
     )
 
     assert res.inconclusive
     assert not res.passed
-    assert "learn_add" in res.reason
+    assert "Learned corrections" in res.reason
 
 
-def test_cross_session_miss_is_a_failure_even_with_an_earlier_lesson() -> None:
+def test_cross_session_miss_is_a_failure_even_when_a_lesson_holds_the_fact() -> None:
     """A lesson only excuses a run that actually produced the fact."""
-    scen = memory_recall_cross_session_scenario(keyword="4821")
+    scen = memory_recall_cross_session_scenario(keyword="7391")
 
     res = scen.outcome_assert(
         _traj(
             reply="I have no record of that.",
             tools=(),
-            earlier_tool_calls=({"name": "learn_add", "ok": True},),
+            snapshot={"lessons_text": "- My gym locker number is 7391."},
         )
     )
 
@@ -155,12 +156,42 @@ def test_cross_session_miss_is_a_failure_even_with_an_earlier_lesson() -> None:
     assert not res.inconclusive
 
 
-def test_cross_session_first_turn_avoids_lesson_shaped_phrasing() -> None:
-    """ "Note this for later" invites learn_add, which would leave
-    retrieval untested on most runs."""
-    first = memory_recall_cross_session_scenario().turns[0]
+def test_the_two_recall_scenarios_use_different_facts() -> None:
+    """They share a run home, and the same-session scenario stores its
+    fact as a lesson — a shared fact would hand the cross-session run
+    its answer for free."""
+    same = memory_recall_scenario()
+    cross = memory_recall_cross_session_scenario()
 
-    assert "note this" not in str(first["content"]).lower()
+    same_text = " ".join(str(t["content"]) for t in same.turns)
+    cross_text = str(cross.rubric)
+
+    assert "4821" in same_text
+    assert "4821" not in cross_text
+    assert "7391" in cross_text
+
+
+async def test_cross_session_setup_plants_into_a_sibling_session() -> None:
+    """The hook derives its session the same way the dispatch does."""
+    import gateway.e2e_driver as driver
+    from gateway.e2e_eval import SetupContext
+
+    planted: list[dict[str, str]] = []
+
+    async def _fake_plant(app: object, **kwargs: str) -> None:
+        planted.append(dict(kwargs))
+
+    original = driver.plant_turn
+    driver.plant_turn = _fake_plant  # type: ignore[assignment]
+    try:
+        scen = memory_recall_cross_session_scenario()
+        assert scen.setup is not None
+        await scen.setup(SetupContext(app=object(), session_id="e2e-recall-0"))
+    finally:
+        driver.plant_turn = original  # type: ignore[assignment]
+
+    assert planted[0]["session_id"] == "e2e-recall-0-a"
+    assert "7391" in planted[0]["user_message"]
 
 
 def test_cross_session_scenario_declares_its_prerequisite() -> None:
@@ -169,9 +200,16 @@ def test_cross_session_scenario_declares_its_prerequisite() -> None:
     assert "embedding_alias" in scen.requires_hint
 
 
-def test_cross_session_turns_run_in_different_sessions() -> None:
-    turns = memory_recall_cross_session_scenario().turns
-    assert [t["session"] for t in turns] == ["a", "b"]
+def test_cross_session_plants_the_fact_instead_of_speaking_it() -> None:
+    """The model must not create the precondition: every model tried
+    stores a stated fact with learn_add, and lessons cross sessions, so
+    retrieval would never be exercised."""
+    scen = memory_recall_cross_session_scenario()
+
+    assert scen.setup is not None
+    assert len(scen.turns) == 1  # only the recall question
+    assert scen.turns[0]["session"] == "b"
+    assert "4821" not in str(scen.turns[0]["content"])
 
 
 def test_recall_fact_avoids_fitt_vocabulary() -> None:

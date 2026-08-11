@@ -91,18 +91,59 @@ pass/fail: **inconclusive**, excluded from both rates and never judged
 graded final turn's calls, which is precisely why a decisive turn-1 side
 effect was invisible.
 
-### Still not tested: cross-session retrieval
+### Cross-session retrieval: now measured, and qwen3:14b fails it
 
-Rewording turn 1 away from "note this for later" did NOT stop it —
-qwen3:14b stores any stated personal fact as a lesson, so the run is
-inconclusive rather than a retrieval test. Genuinely exercising
-`memory_search` needs the model out of the setup step: plant the fact in
-session A's history and index directly, then ask in session B. That's a
-per-scenario setup hook, which the BACKLOG already wanted for a
-trustworthy cron-cancel test. Until then Phase 9's cross-session recall
-is unverified end to end — the provider round-trips correctly in
-isolation (indexed, searched, 768-dim, backend reachable), but no live
-turn has been shown to use it.
+Getting to a trustworthy measurement took two more rounds, both of them
+the same shape as the ones above:
+
+- Rewording turn 1 away from "note this for later" did NOT stop
+  `learn_add` — qwen3 stores any stated personal fact as a lesson. So
+  the model had to come out of the setup step entirely: `TaskScenario.
+  setup` + `e2e_driver.plant_turn` write a completed turn straight into
+  another session's history through the real `MemoryStore.append_turn`
+  and drain the indexer, with no model call. A setup that raises yields
+  *inconclusive*, never a model verdict.
+- That still leaked, from a different direction: both recall scenarios
+  used the same fact, all scenarios in a run share one home, and the
+  same-session scenario legitimately `learn_add`s its fact — so scenario
+  4's side effect handed scenario 5 its answer. Fixed by giving the
+  cross-session scenario its own fact (gym locker 7391 vs bike lock
+  4821), and by making the detector read the actual `lessons_text` from
+  the snapshot instead of inferring from the current scenario's tool
+  calls, which was structurally blind to a cross-scenario leak.
+
+With that clean, the result: **qwen3:14b does not attempt retrieval.**
+Asked about the planted fact it replied "I don't have access to your gym
+locker number. You may need to check with the gym staff or your
+membership portal", with no tool call. Not a spiral, not a wrong search —
+it never considers `memory_search`. The provider itself is fine
+(indexed, searched, 768-dim, backend reachable in isolation).
+
+Two levers, neither pulled yet:
+
+1. **Prompt guidance** — nothing tells the model "when the user asks
+   about something you don't know, search memory first". It has 34 tools
+   and no cue that this one applies here. Note `memory_search` also
+   defaults to `scope="session"`, so even a model that reaches for it
+   must choose `scope="all"`.
+2. **Prefetch (Phase 9e)** — already built, off by default: inject the
+   most relevant excerpts as a `[Recalled context]` block each turn,
+   removing the need for the model to choose a tool at all. This is the
+   designed answer to exactly this failure.
+
+Caution if prefetch gets switched on: it is a **fourth recall channel**,
+and the cross-session assertion would need to detect it the same way it
+detects lessons, or the scenario will report a retrieval failure while
+the answer arrives correctly by another route. The channel-counting
+mistake has now been made three times; assume there's a fourth.
+
+### Scenario cross-talk (open)
+
+Scenarios in one run share mutable global state — lessons, todos, cron
+jobs, and the retrieval index — so any scenario's side effects can
+silently change what a later one measures. Distinct facts fix the
+instance above; they don't fix the class. The seed set is small enough
+that this is manageable today, but a growing set will hit it again.
 
 ### Also fixed here: the eval leaked into real memory
 

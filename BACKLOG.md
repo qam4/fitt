@@ -59,18 +59,30 @@ The curated ordering - the judgment call a tool can't make for you.
     objective / 6/6 judge on the seed set.
   - **One sample per model isn't enough to read a one-step move.** Use
     `--samples` for anything we intend to cite as a comparison.
-- **Per-scenario setup hook — now blocking a real measurement.** Two
-  scenarios need state planted *without* the model in the loop:
-  cross-session recall (put the fact in session A's history + index
-  directly, then ask in session B) and cron-cancel (cancelled vs
-  never-created look identical in the end state). Without it,
-  cross-session recall is permanently inconclusive: qwen3:14b stores any
-  stated fact via `learn_add`, and lessons cross sessions by design, so
-  the fact arrives without ever touching the retrieval index. **Phase 9's
-  cross-session recall therefore has no end-to-end verification** —
-  the provider round-trips in isolation, but no live turn has been shown
-  to use it. Smallest useful shape: an optional `setup(app)` callable on
-  `TaskScenario`, run before dispatch.
+- **Per-scenario setup hook — SHIPPED 2026-08-11.** `TaskScenario.setup`
+  + `e2e_driver.plant_turn` plant state with the model out of the loop
+  (real `append_turn`, indexer drained); a failing setup reports
+  *inconclusive*, never a model verdict. Cron-cancel is the next natural
+  user (cancelled vs never-created look identical in the end state).
+- **Make the model reach for `memory_search` — the live gap now.** With
+  a trustworthy cross-session scenario, qwen3:14b simply never attempts
+  retrieval: asked about a planted fact it says it has no access and
+  stops. Two levers, pick one and measure:
+  - **prompt guidance** — nothing tells the model to search memory when
+    asked about something it doesn't know; and `memory_search` defaults
+    to `scope="session"`, so it must also choose `scope="all"`;
+  - **prefetch (Phase 9e)** — built, off by default, injects a
+    `[Recalled context]` block and removes the tool choice entirely.
+    This is the designed answer to this exact failure.
+  If prefetch is switched on, teach the cross-session assertion about it
+  first: it's a *fourth* recall channel, and the harness has already
+  mis-scored three times by not knowing which channel carried a fact.
+- **Scenario cross-talk (small, will bite again).** Scenarios share one
+  run home, so lessons / todos / crons / the index carry side effects
+  between them — a `learn_add` in one scenario handed a later scenario
+  its answer. Distinct fixtures per scenario fixed the instance; the
+  class is open. Cheapest general fix is probably per-scenario lessons
+  isolation, since that's the global channel.
 - **A Windows CI leg — the missing observer (2026-08-10).** FITT deploys
   on Windows; both CI jobs are `ubuntu-latest`. That gap is why the
   cp1252 `UnicodeEncodeError` class recurred ~10 times: it can't fail on

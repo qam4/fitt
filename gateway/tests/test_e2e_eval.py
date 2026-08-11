@@ -18,6 +18,7 @@ from gateway.e2e_eval import (
     OutcomeResult,
     RunResult,
     SelfJudgeError,
+    SetupContext,
     TaskScenario,
     aggregate,
     ensure_distinct_judge,
@@ -44,6 +45,7 @@ def _scenario(
     assert_fn: Any = None,
     rubric: str = "",
     requires_tools: tuple[str, ...] = (),
+    setup: Any = None,
 ) -> TaskScenario:
     return TaskScenario(
         name=name,
@@ -51,6 +53,7 @@ def _scenario(
         outcome_assert=assert_fn or (lambda t: OutcomeResult(True, "ok")),
         rubric=rubric,
         requires_tools=requires_tools,
+        setup=setup,
     )
 
 
@@ -395,3 +398,106 @@ async def test_report_marks_inconclusive_distinctly_from_failure() -> None:
 
     assert "INCONCLUSIVE" in rendered
     assert "objective=FAIL" not in rendered
+
+
+# ------------------------------------------- setup hooks
+#
+# Some preconditions can't be created by the model without changing what
+# the scenario measures: asking a model to remember a fact makes it call
+# learn_add, whose global lessons reach every later system prompt, so a
+# cross-session recall test never touches the retrieval index.
+
+
+async def test_setup_runs_before_the_turns() -> None:
+    order: list[str] = []
+
+    async def _setup(ctx: SetupContext) -> None:
+        order.append("setup")
+
+    async def _dispatch_fn(turns: list[dict[str, Any]]) -> RunResult:
+        order.append("dispatch")
+        return RunResult(reply="ok")
+
+    res = await run_scenario(
+        _scenario(setup=_setup),
+        dispatch=_dispatch_fn,
+        snapshot=_snapshot({}),
+        setup_context=SetupContext(app=object(), session_id="e2e-x-0"),
+    )
+
+    assert order == ["setup", "dispatch"]
+    assert res.scored
+
+
+async def test_setup_receives_the_run_session_id() -> None:
+    seen: list[str] = []
+
+    async def _setup(ctx: SetupContext) -> None:
+        seen.append(ctx.session_id)
+
+    await run_scenario(
+        _scenario(setup=_setup),
+        dispatch=_dispatch("ok"),
+        snapshot=_snapshot({}),
+        setup_context=SetupContext(app=object(), session_id="e2e-recall-0"),
+    )
+
+    # Hooks derive sibling sessions the same way the dispatch does.
+    assert seen == ["e2e-recall-0"]
+
+
+async def test_failing_setup_is_inconclusive_not_a_model_failure() -> None:
+    dispatched: list[bool] = []
+
+    async def _setup(ctx: SetupContext) -> None:
+        raise RuntimeError("memory is disabled")
+
+    async def _dispatch_fn(turns: list[dict[str, Any]]) -> RunResult:
+        dispatched.append(True)
+        return RunResult(reply="should never run")
+
+    res = await run_scenario(
+        _scenario(setup=_setup, rubric="grade me"),
+        dispatch=_dispatch_fn,
+        snapshot=_snapshot({}),
+        setup_context=SetupContext(app=object(), session_id="e2e-x-0"),
+    )
+
+    assert not dispatched, "the turns ran on a precondition that never landed"
+    assert res.inconclusive is not None
+    assert "memory is disabled" in res.inconclusive
+    assert not res.verdict.judged
+
+
+async def test_missing_setup_context_is_inconclusive() -> None:
+    """A runner that forgets to pass the context is a wiring bug, and
+    must not read as a model result."""
+
+    async def _setup(ctx: SetupContext) -> None:  # pragma: no cover - never called
+        raise AssertionError("unreachable")
+
+    res = await run_scenario(
+        _scenario(setup=_setup), dispatch=_dispatch("ok"), snapshot=_snapshot({})
+    )
+
+    assert res.inconclusive is not None
+    assert "setup context" in res.inconclusive
+
+
+async def test_prerequisite_check_precedes_setup() -> None:
+    """No point planting state for a scenario that can't run."""
+    setup_ran: list[bool] = []
+
+    async def _setup(ctx: SetupContext) -> None:
+        setup_ran.append(True)
+
+    res = await run_scenario(
+        _scenario(setup=_setup, requires_tools=("memory_search",)),
+        dispatch=_dispatch("ok"),
+        snapshot=_snapshot({}),
+        available_tools=[],
+        setup_context=SetupContext(app=object(), session_id="e2e-x-0"),
+    )
+
+    assert not setup_ran
+    assert res.unsupported is not None

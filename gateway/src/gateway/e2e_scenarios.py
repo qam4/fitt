@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from .e2e_eval import E2ETrajectory, OutcomeResult, TaskScenario
+from .e2e_eval import E2ETrajectory, OutcomeResult, SetupContext, TaskScenario
 
 _REMINDER_WINDOW_S = 36 * 3600  # a "tomorrow ~9am" reminder is within ~1.5 days
 
@@ -95,18 +95,21 @@ def _recall_assert(keyword: str, *, require_search: bool):  # type: ignore[no-un
             how = "via memory_search" if called else "from conversation history"
             return OutcomeResult(True, f"recalled {keyword!r} {how}")
 
-        # Cross-session: retrieval should be the only path — unless an
-        # earlier turn stored the fact as a *lesson*, which is injected
-        # into every system prompt regardless of session. Then the run
-        # simply didn't test retrieval, and the model deserves neither
-        # credit nor blame.
-        learned = [c for c in traj.run.earlier_tool_calls if str(c.get("name", "")) == "learn_add"]
-        if not called and learned and recalled:
+        # Cross-session: retrieval should be the only path — unless the
+        # fact is sitting in the global [Learned corrections] block,
+        # which is injected into every system prompt regardless of
+        # session. Read the actual lessons state rather than inferring
+        # from this scenario's tool calls: the leak that bit us came from
+        # a *different* scenario earlier in the same run (they share one
+        # run home), so a within-scenario check couldn't see it.
+        lessons_text = str(traj.snapshot.get("lessons_text", ""))
+        leaked = keyword.lower() in lessons_text.lower()
+        if not called and leaked and recalled:
             return OutcomeResult(
                 False,
-                f"recalled {keyword!r}, but an earlier learn_add put it in the "
-                "global [Learned corrections] block, so it reached the model "
-                "without retrieval — this run didn't exercise memory_search",
+                f"recalled {keyword!r}, but it is in the global "
+                "[Learned corrections] block, so it reached the model without "
+                "retrieval — this run didn't exercise memory_search",
                 inconclusive=True,
             )
         if not called:
@@ -132,6 +135,15 @@ def _recall_assert(keyword: str, *, require_search: bool):  # type: ignore[no-un
 _RECALL_FACT = "My bike lock combination is 4821."
 _RECALL_QUESTION = "What's my bike lock combination again?"
 _RECALL_KEYWORD = "4821"
+
+# The cross-session scenario needs a DIFFERENT fact. All scenarios in a
+# run share one home, and the same-session scenario above legitimately
+# stores its fact with learn_add — which lands in the global lessons
+# block and would hand the cross-session run its answer for free. Two
+# facts, no coupling.
+_CROSS_FACT = "My gym locker number is 7391."
+_CROSS_QUESTION = "What's my gym locker number again?"
+_CROSS_KEYWORD = "7391"
 
 
 def memory_recall_scenario(
@@ -159,32 +171,52 @@ def memory_recall_scenario(
     )
 
 
+def _plant_prior_session_fact(fact: str):  # type: ignore[no-untyped-def]
+    """Setup hook: put ``fact`` in a *different* session's history and
+    index, with no model call.
+
+    Driving that first turn through the model doesn't work here: every
+    model tried stores a stated personal fact with ``learn_add``, and
+    lessons are injected into every system prompt regardless of session,
+    so the recall turn gets the fact for free and retrieval is never
+    exercised. Planting it directly is the only way to make
+    ``memory_search`` the sole path to it."""
+
+    async def _setup(ctx: SetupContext) -> None:
+        # Local import: keeps this module cheap to import (the driver
+        # pulls in httpx and app internals) and the dependency one-way.
+        from .e2e_driver import plant_turn
+
+        await plant_turn(
+            ctx.app,
+            session_id=f"{ctx.session_id}-a",
+            user_message=f"By the way, {fact[0].lower() + fact[1:]}",
+            assistant_message="Got it, I'll remember that.",
+        )
+
+    return _setup
+
+
 def memory_recall_cross_session_scenario(
     *,
-    fact: str = _RECALL_FACT,
-    question: str = _RECALL_QUESTION,
-    keyword: str = _RECALL_KEYWORD,
+    fact: str = _CROSS_FACT,
+    question: str = _CROSS_QUESTION,
+    keyword: str = _CROSS_KEYWORD,
 ) -> TaskScenario:
-    """Cross-session recall: state the fact in one session, ask in another.
+    """Cross-session recall: the fact lives in another session's history.
 
-    This is what ``memory_search`` is actually for (Phase 9). History
-    cannot carry the fact across a session boundary, so retrieval is the
-    only path — which makes requiring the tool call fair here, unlike in
-    the same-session scenario."""
+    This is what ``memory_search`` is actually for (Phase 9). The fact is
+    *planted* by the setup hook rather than spoken to the model, so
+    neither this session's history nor the global lessons block can
+    carry it — retrieval is the only path, which is what makes requiring
+    the tool call fair here (unlike the same-session scenario).
+
+    Note the model must also choose ``scope="all"``; the tool defaults to
+    the current session. A miss for that reason is a real model result."""
     return TaskScenario(
         name="memory_recall_cross_session",
+        setup=_plant_prior_session_fact(fact),
         turns=[
-            # Deliberately NOT "note this for later" — that phrasing
-            # invites learn_add, whose global lessons block would carry
-            # the fact across the session boundary and leave retrieval
-            # untested (the run then reports inconclusive). A plain
-            # aside is more likely to be persisted as ordinary history
-            # and reachable only through the index.
-            {
-                "role": "user",
-                "content": f"By the way, {fact[0].lower() + fact[1:]}",
-                "session": "a",
-            },
             {"role": "user", "content": question, "session": "b"},
         ],
         outcome_assert=_recall_assert(keyword, require_search=True),

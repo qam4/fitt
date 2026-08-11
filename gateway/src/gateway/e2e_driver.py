@@ -62,6 +62,19 @@ def snapshot_app(app: Any, *, session_id: str = "main", event_tail: int = 20) ->
         except Exception:  # pragma: no cover - defensive
             snap["event_kinds"] = []
 
+    # The global [Learned corrections] block. Not a scenario target —
+    # it's here because lessons are injected into EVERY system prompt
+    # regardless of session, which makes them a cross-scenario channel:
+    # a learn_add in one scenario can hand a later scenario the answer
+    # it was supposed to retrieve. An assertion that cares whether a
+    # fact was *retrieved* has to be able to see this.
+    lessons = getattr(app.state, "lessons", None)
+    if lessons is not None:
+        try:
+            snap["lessons_text"] = lessons.render_block()
+        except Exception:  # pragma: no cover - defensive
+            snap["lessons_text"] = ""
+
     return snap
 
 
@@ -185,6 +198,68 @@ def _timeline_from_turns(app: Any, session_id: str) -> tuple[dict[str, Any], ...
     return tuple(out)
 
 
+def ensure_session(app: Any, session_id: str) -> None:
+    """Register ``session_id`` if it isn't already.
+
+    The gateway rejects chat requests for unregistered sessions (HTTP
+    400 unknown_session), so both the dispatch and the setup hooks need
+    this. Idempotent. An InvalidSessionId (bad chars) is a caller bug
+    and must surface, not silently become an unknown_session later."""
+    registry = getattr(app.state, "session_registry", None)
+    if registry is None or session_id == "main" or registry.get(session_id) is not None:
+        return
+    from .sessions import DuplicateSessionId
+
+    try:
+        registry.create(session_id, name=f"e2e {session_id}")
+    except DuplicateSessionId:  # pragma: no cover - racy create
+        pass
+
+
+async def plant_turn(
+    app: Any,
+    *,
+    session_id: str,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    """Write a completed user/assistant turn into a session's history
+    and wait for it to reach the retrieval index — with no model call.
+
+    This is the substrate for scenario setup hooks. It goes through the
+    real ``MemoryStore.append_turn``, so the turn is persisted in the
+    same on-disk shape a live turn produces and the indexer sees it via
+    the same listener; the index stays a derivative of the markdown
+    rather than something the harness fabricates.
+
+    Why it exists: a precondition the model creates itself can change
+    what the scenario measures. Asking a model to remember a fact makes
+    it call ``learn_add``, whose lessons reach every later system prompt
+    regardless of session — so a cross-session recall test never touches
+    the retrieval index. Planting the fact directly leaves retrieval as
+    the only path to it.
+
+    Raises if memory is disabled, rather than quietly planting nothing:
+    a scenario that believes its precondition landed would otherwise
+    grade the model on an empty index."""
+    memory = getattr(app.state, "memory", None)
+    if memory is None or not getattr(memory, "enabled", False):
+        raise RuntimeError(
+            "cannot plant a turn: memory is disabled (set memory.enabled: true), "
+            "so the fact would never be persisted or indexed"
+        )
+
+    ensure_session(app, session_id)
+    memory.append_turn(session_id, user_message, assistant_message)
+
+    # The indexer is deliberately off the hot path, so the write is
+    # queued. Drain before the scenario's turns run, or the fact may not
+    # be searchable yet and the model gets blamed for the race.
+    indexer = getattr(app.state, "memory_indexer", None)
+    if indexer is not None:
+        await indexer.drain()
+
+
 def build_http_dispatch(
     app: Any,
     *,
@@ -211,26 +286,11 @@ def build_http_dispatch(
     scenario's own session, so existing scenarios are unaffected."""
     import httpx
 
-    def _ensure_session(sid: str) -> None:
-        """The gateway rejects chat requests for unregistered sessions
-        (HTTP 400 unknown_session), so register before driving.
-        Idempotent. An InvalidSessionId (bad chars) is a caller bug and
-        must surface, not silently become an unknown_session later."""
-        registry = getattr(app.state, "session_registry", None)
-        if registry is None or sid == "main" or registry.get(sid) is not None:
-            return
-        from .sessions import DuplicateSessionId
-
-        try:
-            registry.create(sid, name=f"e2e {sid}")
-        except DuplicateSessionId:  # pragma: no cover - racy create
-            pass
-
     def _session_for(turn: dict[str, Any]) -> str:
         sub = turn.get("session")
         return f"{session_id}-{sub}" if sub else session_id
 
-    _ensure_session(session_id)
+    ensure_session(app, session_id)
 
     async def _dispatch(turns: list[dict[str, Any]]) -> RunResult:
         transport = httpx.ASGITransport(app=app)
@@ -251,7 +311,7 @@ def build_http_dispatch(
         ) as client:
             for turn in turns:
                 turn_session = _session_for(turn)
-                _ensure_session(turn_session)
+                ensure_session(app, turn_session)
                 if turn is not turns[-1] and turn_session not in earlier_sessions:
                     earlier_sessions.append(turn_session)
                 final_session = turn_session

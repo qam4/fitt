@@ -1860,7 +1860,7 @@ def eval_e2e_cmd(
 
     from .config import fitt_home
     from .e2e_driver import build_http_dispatch, snapshot_app
-    from .e2e_eval import aggregate, ensure_distinct_judge, run_scenario
+    from .e2e_eval import SetupContext, aggregate, ensure_distinct_judge, run_scenario
     from .e2e_judge import CliJudge
     from .e2e_scenarios import seed_scenarios
     from .tunnel import ensure_tunnel
@@ -2040,6 +2040,7 @@ def eval_e2e_cmd(
                         judge=judge,
                         judge_timeline=(judge_detail in ("verbose", "max")),
                         available_tools=available_tools,
+                        setup_context=SetupContext(app=app, session_id=session_id),
                     )
                 )
         return aggregate(results)

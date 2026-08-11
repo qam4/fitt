@@ -34,6 +34,21 @@ SnapshotFn = Callable[[], dict[str, Any]]
 OutcomeAssert = Callable[["E2ETrajectory"], "OutcomeResult"]
 # judge input -> a verdict. Async (may shell out / call a model).
 JudgeFn = Callable[["JudgeInput"], Awaitable["JudgeVerdict"]]
+# setup context -> plant state before the turns run.
+SetupFn = Callable[["SetupContext"], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class SetupContext:
+    """What a scenario's setup hook gets to work with.
+
+    ``app`` is opaque here on purpose — this module stays I/O-free and
+    knows nothing about FastAPI or the stores. ``session_id`` is the
+    run's base session, so a hook can derive sibling session ids the
+    same way the dispatch does (``f"{session_id}-{suffix}"``)."""
+
+    app: Any
+    session_id: str
 
 
 # --------------------------------------------------------------- value types
@@ -206,6 +221,23 @@ class TaskScenario:
     unsupported reason, per Principle 8: when a capability is missing,
     say what's missing AND how to add it."""
 
+    setup: SetupFn | None = None
+    """Optional hook that plants state *before* the turns run, with the
+    model out of the loop.
+
+    Some things can't be measured if the model creates the precondition
+    itself. Cross-session recall is the case that forced this: asking
+    the model to remember a fact makes it call ``learn_add``, and
+    lessons reach every later system prompt regardless of session, so
+    the fact arrives without the retrieval index ever being touched.
+    Planting the fact directly leaves retrieval as the only path. The
+    cron-cancel scenario wants the same thing for the opposite reason:
+    cancelled and never-created look identical in the end state unless
+    something pre-creates the job.
+
+    A setup failure yields an *inconclusive* result, never a model
+    verdict — a broken precondition says nothing about the model."""
+
 
 @dataclass(frozen=True)
 class E2EResult:
@@ -243,6 +275,7 @@ async def run_scenario(
     judge: JudgeFn | None = None,
     judge_timeline: bool = False,
     available_tools: Collection[str] | None = None,
+    setup_context: SetupContext | None = None,
 ) -> E2EResult:
     """Run one scenario end to end and grade it.
 
@@ -266,17 +299,12 @@ async def run_scenario(
         )
         if scenario.requires_hint:
             reason = f"{reason}. To enable: {scenario.requires_hint}"
-        return E2EResult(
-            scenario=scenario.name,
-            trajectory=E2ETrajectory(
-                scenario=scenario.name,
-                turns=list(scenario.turns),
-                run=RunResult(reply="", loop_status="not_run"),
-            ),
-            outcome=OutcomeResult(passed=False, reason=reason),
-            verdict=JudgeVerdict.unjudged(reason),
-            unsupported=reason,
-        )
+        return _not_scored(scenario, reason, inconclusive=False)
+
+    if scenario.setup is not None:
+        problem = await _run_setup(scenario, setup_context)
+        if problem is not None:
+            return _not_scored(scenario, problem, inconclusive=True)
 
     run = await dispatch(scenario.turns)
     snap = snapshot()
@@ -321,6 +349,41 @@ async def run_scenario(
         verdict = JudgeVerdict.unjudged("judging disabled" if judge is None else "no rubric")
 
     return E2EResult(scenario=scenario.name, trajectory=traj, outcome=outcome, verdict=verdict)
+
+
+async def _run_setup(scenario: TaskScenario, ctx: SetupContext | None) -> str | None:
+    """Run the scenario's setup hook. Returns a reason on failure.
+
+    A missing context is a wiring bug in the runner, and a raising hook
+    is a broken precondition; either way the run can't test what it
+    claims, so both come back as reasons rather than exceptions."""
+    if ctx is None:
+        return (
+            "scenario declares a setup hook but the runner supplied no "
+            "setup context, so the precondition was never planted"
+        )
+    assert scenario.setup is not None
+    try:
+        await scenario.setup(ctx)
+    except Exception as exc:
+        return f"scenario setup failed ({type(exc).__name__}: {exc}) — precondition not planted"
+    return None
+
+
+def _not_scored(scenario: TaskScenario, reason: str, *, inconclusive: bool) -> E2EResult:
+    """An E2EResult that carries a reason instead of a model verdict."""
+    return E2EResult(
+        scenario=scenario.name,
+        trajectory=E2ETrajectory(
+            scenario=scenario.name,
+            turns=list(scenario.turns),
+            run=RunResult(reply="", loop_status="not_run"),
+        ),
+        outcome=OutcomeResult(passed=False, reason=reason, inconclusive=inconclusive),
+        verdict=JudgeVerdict.unjudged(reason),
+        unsupported=None if inconclusive else reason,
+        inconclusive=reason if inconclusive else None,
+    )
 
 
 def _missing_tools(

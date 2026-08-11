@@ -92,3 +92,44 @@ async def test_dispatch_strips_the_session_key_from_the_payload(
 
     assert res.error is None
     assert res.reply == "ok"
+
+
+async def test_plant_turn_persists_and_indexes_without_a_model(e2e_app: Any) -> None:
+    """The setup-hook substrate: state lands via the real persistence
+    path, so the index stays a derivative of the markdown."""
+    from gateway.e2e_driver import plant_turn
+
+    await plant_turn(
+        e2e_app,
+        session_id="e2e-planted-a",
+        user_message="By the way, my bike lock combination is 4821.",
+        assistant_message="Got it, I'll remember that.",
+    )
+
+    memory = e2e_app.state.memory
+    history = memory.history_path("e2e-planted-a").read_text(encoding="utf-8")
+    assert "4821" in history
+    # Registered, or a later chat request to this session would 400.
+    assert e2e_app.state.session_registry.get("e2e-planted-a") is not None
+
+
+async def test_plant_turn_refuses_when_memory_is_disabled(e2e_app: Any) -> None:
+    """Silently planting nothing would have the scenario grade the model
+    against an empty index."""
+    import pytest
+
+    from gateway.e2e_driver import plant_turn
+
+    memory = e2e_app.state.memory
+    original = memory._enabled
+    memory._enabled = False
+    try:
+        with pytest.raises(RuntimeError, match="memory is disabled"):
+            await plant_turn(
+                e2e_app,
+                session_id="e2e-planted-off",
+                user_message="fact",
+                assistant_message="ack",
+            )
+    finally:
+        memory._enabled = original
