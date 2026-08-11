@@ -50,26 +50,36 @@ The curated ordering - the judgment call a tool can't make for you.
   the model, record the profile, let config adapt which features it can
   drive. NOT: hand-rolled per-model templates (tried, falsified, see
   observed-issues).
-- **Template pre-flight check (cheap, high value).** gemma4:12b-it-qat
-  advertises `capabilities: tools` but ships a stub template
-  (`{{ .Prompt }}`) with no message roles and no tool-result rendering —
-  so tool results can never reach the model and every tool turn spirals
-  to the iteration cap (see observed-issues "Root cause of gemma4's
-  spiral"). Declared capabilities are therefore NOT trustworthy. A cheap
-  `/api/show` check ("does the template reference .Messages / tools?")
-  catches this whole class of packaging bug before a model is bound to an
-  alias. Natural fit for the capability ladder's tool-check rung.
-- **Executor-loop brake — damage limitation, not a cure (reframed).**
-  `agent_loop.py` has only a hard `max_iterations` cap: no
-  stop-on-repeated-tool-call, no nudge. A model that can't see tool
-  results burns 10 slow iterations, blows its context, and returns an
-  empty reply (gemma4, every tool turn). A guard (stop when a tool call
-  exactly repeats, or when a side-effecting tool already succeeded this
-  turn) would cap that waste for ANY such model — but note it would NOT
-  make gemma4 usable, since the root cause is its template. Decide
-  whether capping the waste is worth core-loop risk; if built, A/B it on
-  the e2e harness (gemma4 as the spiral case, qwen3/hermes as
-  no-regression controls).
+- **Re-measure post-litellm-fix — DONE 2026-08-10.** qwen3:14b 5/6
+  (unchanged), gemma4:12b-it-qat 4/6 -> **5/6** with no spirals, hermes3:8b
+  4/6 -> 3/6 (within its known `web_search` flakiness). Table in
+  observed-issues. Two follow-ups fell out:
+  - **`memory_recall` fails on all three** — `memory_search` never fires on
+    the recall turn, so 5/6 is the seed set's ceiling, not a model verdict.
+    FITT-side: either tool selection (the model doesn't reach for it) or
+    retrieval config in the isolated eval home. Cheapest next probe on the
+    ladder, and it blocks any honest claim about local-model usefulness.
+  - **One sample per model isn't enough to read a one-step move.** Use
+    `--samples` for anything we intend to cite as a comparison.
+- **Template pre-flight check — idea survives, its motivating example
+  does NOT.** gemma4:12b-it-qat ships a stub template (`{{ .Prompt }}`)
+  and that looked like the cause of its spiral; **falsified twice** (a
+  corrected template changed nothing, and a probe proved ollama ignores
+  the stored template for `/api/chat` entirely). Real cause was the
+  litellm bug above. A cheap `/api/show` sanity check on declared-vs-
+  actual capabilities may still be worth having in the capability
+  ladder's tool-check rung, but it is no longer "high value" and it has
+  no known failure it would have caught. Deprioritised.
+- **Executor-loop brake — SHIPPED 2026-08-10.**
+  `Config.loop_brake_enabled` (default on) suppresses re-execution of a
+  tool call whose (name, args) already succeeded this turn, injects a
+  corrective tool result, and stops with `tool_loop_repeated` after 3.
+  A/B'd in `tests/e2e/test_loop_brake.py` (off: 10 duplicate todos + 504;
+  on: 1 todo + 200). Worth keeping even now that the underlying transport
+  bug is fixed — a brake is standard, and it caps waste for any looping
+  model. Known limitation: exact-signature matching misses
+  near-duplicates (gemma4 slipped a second cron past it with slightly
+  different args).
 - num_ctx: per-model `ModelConfig.num_ctx` SHIPPED (router forwards to
   ollama). Remaining: a **boot-time warning** when a model's num_ctx is
   below FITT's prompt budget (Principle 11 — turn the silent

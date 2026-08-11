@@ -33,7 +33,119 @@ doc.
 
 ---
 
+## litellm `ollama_chat` drops assistant `tool_calls` on replay (fixed by upgrading)
+
+**First observed:** 2026-08-10, chasing gemma4:12b's tool spiral with
+`fitt eval e2e`.
+**Tag:** dependency bug / tool-call discipline / multi-step turns.
+**Status:** FIXED — floor raised to `litellm>=1.84`, regression test added
+(`gateway/tests/test_litellm_ollama_tool_replay.py`).
+
+gemma4 re-issued the same tool call on every iteration until the loop cap,
+on every multi-step scenario. Root cause was not the model: in litellm
+**< 1.84.0**, `OllamaChatConfig.transform_request` converted our assistant
+`tool_calls` into ollama's native shape, wrote them back onto the *input*
+dict, then built a **fresh** outgoing message copying only `role`,
+`thinking`, `content`, and `images`. The converted `tool_calls` were never
+copied onto the outgoing message, and `tool_call_id` was dropped from tool
+results too. A wire capture showed ollama receiving
+`{"role": "assistant", "content": ""}` followed by an orphan
+`{"role": "tool", ...}`: the model had no record of having called anything,
+so it called again. Forever.
+
+Only the `ollama_chat/` prefix was affected. Tested with a local capture
+server, all five litellm modes FITT uses:
+
+| backend | prefix | assistant `tool_calls` replayed |
+|---|---|---|
+| ollama chat | `ollama_chat/` | **dropped** (< 1.84.0) |
+| openai | `openai/` | preserved |
+| openrouter | `openrouter/` | preserved |
+| anthropic | `anthropic/` | preserved (as a `tool_use` block) |
+| ollama embeddings | `ollama/` | n/a (no tools) |
+
+Upstream fixed it in **1.84.0** (verified by diffing the tagged sources for
+1.83.14 → 1.84.0: the outgoing message now gets both `tool_calls` and
+`tool_call_id`). No FITT-side workaround was needed once we found it — the
+fix is a version bump. The lasting cost was diagnostic: five differential
+experiments, and two falsified hypotheses that looked convincing on the way
+(a "broken" gemma4 chat template, and JSON-string vs object `arguments` —
+the latter is the shape ollama really wants, and is what 1.84's transform
+now produces).
+
+Worth remembering as a class of bug: **we were treating a transport defect
+as a model-capability score.** Every local-model tool-calling grade recorded
+before this fix carried the handicap.
+
+### Post-fix re-measurement (2026-08-10, 13 min, all three EC2 aliases)
+
+Same six seed scenarios, same `--exclusive` warm-up, judge pinned to
+`claude-sonnet-4.5` at Tier 1 — so these are comparable to the pre-fix
+numbers in the entry below:
+
+| DUT | pre-fix | post-fix | scenario-level change |
+|---|---|---|---|
+| qwen3:14b | 5/6 | **5/6** | unchanged |
+| gemma4:12b-it-qat | 4/6 | **5/6** | now passes reminder + news_summary; no spirals |
+| hermes3:8b | 4/6 | **3/6** | gained todo_lifecycle, lost news_summary |
+
+gemma4 is the headline: it went from re-issuing the same call until the
+iteration cap on every multi-step turn to a clean 5/6, scenario-for-scenario
+identical to qwen3:14b — a model with more parameters and a thinking budget.
+That is the fail-before/pass-after evidence for the version bump.
+
+hermes3's 4->3 is not a regression to chase: `news_summary` has always fired
+`web_search` about half the time, and it *gained* `todo_lifecycle`, which the
+entry below records as a standing failure. One sample per model, so
+single-scenario flips are noise. Use `--samples` before reading anything
+into a one-step move.
+
+`memory_recall` now fails for **all three** (`memory_search` never fires on
+the recall turn), which makes 5/6 the current ceiling of the seed set rather
+than a model verdict. That's the next thing to look at, and it is a
+FITT-side question (tool selection or retrieval config), not a model one.
+
+---
+
+## `fitt eval e2e` crashed printing its own report path on a redirected stdout
+
+**First observed:** 2026-08-10, during the re-measurement above.
+**Tag:** CLI robustness / Windows encoding / silent exit-code loss.
+**Status:** FIXED — `cli._encoding_safe_stdout()`, test at
+`gateway/tests/test_cli_console_encoding.py`.
+
+With stdout redirected to a file (which is how anything under
+kiro-monitor runs), Python on Windows defaults the stream to the ANSI
+codepage. The eval ran all six scenarios, wrote the report, then died with
+`UnicodeEncodeError: 'charmap' codec can't encode character '\u2192'` on the
+final `report -> <path>` line.
+
+Two costs, one of them sneaky: the traceback looked like an eval failure
+when the run had actually succeeded, and because the crash happened *before*
+the `--min-objective-rate` check, the exit-code gate never ran — a wrapper
+script saw the harness's own last `echo` succeed and reported the batch
+clean. Worth noting for the "objective regression gate" idea in BACKLOG:
+that gate is only as trustworthy as the process exit code, so anything that
+can bypass the exit path is a correctness bug, not a cosmetic one.
+
+Fix reconfigures stdout to UTF-8 with `errors="replace"` when the shared
+rich `Console` is built, so no operator-facing glyph can take a command
+down.
+
+Diagnostic lever that would have caught it in one run: Tier-3 judging
+(`record_llm_requests`) captures the outgoing conversation verbatim. The
+data was there — the judge held the smoking gun and still blamed the model,
+which is why `e2e_judge` now carries a generic "the harness is a suspect"
+audit ask.
+
+---
+
 ## e2e harness: three-model tool-driving comparison (+ gemma4 starved by a 4096 ctx)
+
+> **Superseded for the grades.** Every number below was measured with the
+> litellm `tool_calls`-dropping bug in place (see the entry above for the
+> post-fix table). The *failure-mode analysis* still reads true; the scores
+> do not.
 
 **First observed:** 2026-08-10, `fitt eval e2e` (Tier-1 judge) run against
 all three EC2 aliases.

@@ -51,6 +51,33 @@ from .sessions import (
     SessionRegistry,
 )
 
+
+def _make_output_encoding_safe() -> None:
+    """Make stdout/stderr tolerate non-ASCII whatever the codepage is.
+
+    On Windows a redirected stdout defaults to the ANSI codepage
+    (cp1252), so printing a character we use freely in operator output
+    (an arrow, an em-dash) raises UnicodeEncodeError *after* the work is
+    done. Observed live: `fitt eval e2e > log` ran all six scenarios,
+    wrote the report, then died printing the report path — which also
+    skipped the --min-objective-rate exit-code gate.
+
+    Reconfigure the streams in place rather than binding them onto the
+    ``Console``: rich resolves ``sys.stdout`` per write, which is what
+    lets click's test runner capture output. ``errors="replace"`` is the
+    belt-and-braces part — if a stream can't be switched to UTF-8, a
+    stray glyph degrades to "?" instead of taking the command down.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # pragma: no cover - exotic streams
+            pass
+
+
 # Force a wide console width so long model names aren't truncated in
 # narrow terminals (and in CI/pytest runners where width is tiny).
 _console = Console(width=140, soft_wrap=False)
@@ -59,6 +86,7 @@ _console = Console(width=140, soft_wrap=False)
 @click.group()
 def main() -> None:
     """FITT Gateway CLI."""
+    _make_output_encoding_safe()
 
 
 # --------------------------------------------------------------- fitt cost
