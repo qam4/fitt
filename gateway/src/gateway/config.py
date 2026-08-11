@@ -178,6 +178,15 @@ class MemoryConfig(BaseModel):
     # rebuildable derivative of the markdown.
     embedding_alias: str | None = None
 
+    # Where that index file lives. ``None`` means the default
+    # ``$FITT_HOME/memory/index.db``. It exists as a field so a caller
+    # that redirects the other memory paths can redirect this one too:
+    # the e2e harness points identity_dir / sessions_dir at a temp run
+    # home, and without this the retrieval index still resolved from
+    # FITT_HOME, so eval turns were indexed into the operator's real
+    # memory and could surface in later recall.
+    index_path: Path | None = None
+
     # Phase 9e — automatic prefetch. When true (and retrieval is
     # configured), the most relevant prior excerpts for the current user
     # message are injected into a bounded ``[Recalled context]`` system
@@ -188,7 +197,7 @@ class MemoryConfig(BaseModel):
     # How many excerpts prefetch injects (kept small to bound the block).
     prefetch_k: int = 3
 
-    @field_validator("identity_dir", "sessions_dir", "skills_dir", mode="before")
+    @field_validator("identity_dir", "sessions_dir", "skills_dir", "index_path", mode="before")
     @classmethod
     def _expand(cls, v: object) -> object:
         if isinstance(v, str):

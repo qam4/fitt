@@ -327,3 +327,71 @@ async def test_requirements_unchecked_when_registry_unknown() -> None:
 
     assert res.unsupported is None
     assert res.trajectory.run.reply == "ran anyway"
+
+
+# ------------------------------------------- inconclusive scenarios
+#
+# Regression guard for the cross-session recall episode: the model stored
+# the fact with learn_add, lessons reach every system prompt regardless
+# of session, so the recall turn answered correctly without retrieval.
+# Scored as a failure, the judge accused a correct model of hallucinating
+# a 1-in-10,000 number. A run that didn't exercise the thing under test
+# must be reported as such, not graded.
+
+
+async def test_inconclusive_outcome_is_never_judged() -> None:
+    judged: list[bool] = []
+
+    async def _judge(ji: JudgeInput) -> JudgeVerdict:
+        judged.append(True)
+        return JudgeVerdict(False, 0.0, "hallucinated")
+
+    res = await run_scenario(
+        _scenario(
+            rubric="grade me",
+            assert_fn=lambda t: OutcomeResult(False, "a lesson leaked it", inconclusive=True),
+        ),
+        dispatch=_dispatch("4821"),
+        snapshot=_snapshot({}),
+        judge=_judge,
+    )
+
+    assert not judged, "the judge graded a run that didn't test what it claims to"
+    assert res.inconclusive == "a lesson leaked it"
+    assert not res.verdict.judged
+
+
+async def test_inconclusive_is_excluded_from_the_rates() -> None:
+    ok = await run_scenario(
+        _scenario(name="todo"), dispatch=_dispatch("added"), snapshot=_snapshot({})
+    )
+    undecided = await run_scenario(
+        _scenario(
+            name="memory_recall_cross_session",
+            assert_fn=lambda t: OutcomeResult(False, "lesson leaked", inconclusive=True),
+        ),
+        dispatch=_dispatch("4821"),
+        snapshot=_snapshot({}),
+    )
+
+    rep = aggregate([ok, undecided])
+
+    assert rep.total == 1  # not 2
+    assert rep.objective_rate == 1.0
+    assert [r.scenario for r in rep.inconclusive] == ["memory_recall_cross_session"]
+
+
+async def test_report_marks_inconclusive_distinctly_from_failure() -> None:
+    undecided = await run_scenario(
+        _scenario(
+            name="memory_recall_cross_session",
+            assert_fn=lambda t: OutcomeResult(False, "lesson leaked", inconclusive=True),
+        ),
+        dispatch=_dispatch("4821"),
+        snapshot=_snapshot({}),
+    )
+
+    rendered = aggregate([undecided]).render()
+
+    assert "INCONCLUSIVE" in rendered
+    assert "objective=FAIL" not in rendered

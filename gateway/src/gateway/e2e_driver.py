@@ -201,35 +201,63 @@ def build_http_dispatch(
     provides multi-turn continuity. Between turns the indexer is drained
     so a fact stated in an earlier turn is retrievable in a later one
     (the memory-recall scenario). ``tool_sequence`` is the tool names
-    that fired on the final turn, recovered from the persisted history."""
+    that fired on the final turn, recovered from the persisted history.
+
+    A turn may carry a ``"session"`` key to run in a *different*
+    session, suffixed onto the scenario's session id. That's what makes
+    a genuine cross-session recall test possible: state a fact in one
+    session, ask about it in another, where history cannot carry it and
+    only ``memory_search`` can. Turns without the key use the
+    scenario's own session, so existing scenarios are unaffected."""
     import httpx
 
-    # The gateway rejects chat requests for unregistered sessions
-    # (HTTP 400 unknown_session), so register a non-main scenario
-    # session before driving it. Idempotent: skip if it already exists.
-    registry = getattr(app.state, "session_registry", None)
-    if registry is not None and session_id != "main" and registry.get(session_id) is None:
+    def _ensure_session(sid: str) -> None:
+        """The gateway rejects chat requests for unregistered sessions
+        (HTTP 400 unknown_session), so register before driving.
+        Idempotent. An InvalidSessionId (bad chars) is a caller bug and
+        must surface, not silently become an unknown_session later."""
+        registry = getattr(app.state, "session_registry", None)
+        if registry is None or sid == "main" or registry.get(sid) is not None:
+            return
         from .sessions import DuplicateSessionId
 
         try:
-            registry.create(session_id, name=f"e2e {session_id}")
+            registry.create(sid, name=f"e2e {sid}")
         except DuplicateSessionId:  # pragma: no cover - racy create
             pass
-        # An InvalidSessionId (bad chars) is a caller bug and must
-        # surface, not silently become an unknown_session 400 later.
+
+    def _session_for(turn: dict[str, Any]) -> str:
+        sub = turn.get("session")
+        return f"{session_id}-{sub}" if sub else session_id
+
+    _ensure_session(session_id)
 
     async def _dispatch(turns: list[dict[str, Any]]) -> RunResult:
         transport = httpx.ASGITransport(app=app)
         reply = ""
         error: str | None = None
         loop_status = "ok"
+        # The last turn's session is where the graded reply lands, so
+        # that's the one we read tool calls and the timeline back from.
+        final_session = session_id
+        # Sessions touched by earlier turns, in order, so an assertion
+        # can see a side effect from turn 1 that changes what turn 2 is
+        # testing (a learn_add writes a global lesson).
+        earlier_sessions: list[str] = []
         async with httpx.AsyncClient(
             transport=transport,
             base_url="http://testserver",
-            headers={"Authorization": f"Bearer {token}", "X-FITT-Session": session_id},
+            headers={"Authorization": f"Bearer {token}"},
         ) as client:
             for turn in turns:
-                body = {"model": alias, "messages": [turn], "tool_choice": "auto"}
+                turn_session = _session_for(turn)
+                _ensure_session(turn_session)
+                if turn is not turns[-1] and turn_session not in earlier_sessions:
+                    earlier_sessions.append(turn_session)
+                final_session = turn_session
+                payload = {k: v for k, v in turn.items() if k != "session"}
+                body = {"model": alias, "messages": [payload], "tool_choice": "auto"}
+                client.headers["X-FITT-Session"] = turn_session
                 try:
                     r = await client.post("/v1/chat/completions", json=body, timeout=300.0)
                 except Exception as exc:
@@ -244,15 +272,21 @@ def build_http_dispatch(
                 idx = getattr(app.state, "memory_indexer", None)
                 if drain_indexer and idx is not None:
                     await idx.drain()
-        tool_calls = _tool_calls_from_turns(app, session_id) if error is None else ()
+        tool_calls = _tool_calls_from_turns(app, final_session) if error is None else ()
         tool_sequence = tuple(f"{c['name']}:{'ok' if c['ok'] else 'err'}" for c in tool_calls)
+        earlier: tuple[dict[str, Any], ...] = ()
+        if error is None:
+            for sid in earlier_sessions:
+                if sid != final_session:
+                    earlier = earlier + _tool_calls_from_turns(app, sid)
         return RunResult(
             reply=reply,
             tool_sequence=tool_sequence,
             tool_calls=tool_calls,
-            timeline=_timeline_from_turns(app, session_id),
+            timeline=_timeline_from_turns(app, final_session),
             loop_status=loop_status,
             error=error,
+            earlier_tool_calls=earlier,
         )
 
     return _dispatch

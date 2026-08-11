@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from gateway.e2e_eval import E2ETrajectory, RunResult
 from gateway.e2e_scenarios import (
     chitchat_scenario,
+    memory_recall_cross_session_scenario,
     memory_recall_scenario,
     news_scenario,
     reminder_scenario,
@@ -17,12 +18,20 @@ from gateway.e2e_scenarios import (
 
 
 def _traj(
-    *, reply: str = "", tools: tuple[str, ...] = (), snapshot: dict | None = None
+    *,
+    reply: str = "",
+    tools: tuple[str, ...] = (),
+    snapshot: dict | None = None,
+    earlier_tool_calls: tuple[dict, ...] = (),
 ) -> E2ETrajectory:
     return E2ETrajectory(
         scenario="t",
         turns=[],
-        run=RunResult(reply=reply, tool_sequence=tools),
+        run=RunResult(
+            reply=reply,
+            tool_sequence=tools,
+            earlier_tool_calls=earlier_tool_calls,
+        ),
         snapshot=snapshot or {},
     )
 
@@ -76,22 +85,103 @@ def test_news_fails_on_short_reply() -> None:
 # --------------------------------------------------------------- memory
 
 
-def test_memory_passes_when_search_fired_and_fact_recalled() -> None:
-    scen = memory_recall_scenario(keyword="docker compose")
-    res = scen.outcome_assert(
-        _traj(reply="You deploy with docker compose on the hub.", tools=("memory_search",))
-    )
+def test_same_session_recall_passes_from_history_without_a_tool() -> None:
+    """The fact is one turn back, so history carries it. Demanding
+    memory_search here punished the cheapest correct answer — and read
+    as a model defect when the tool wasn't even registered."""
+    scen = memory_recall_scenario(keyword="4821")
+    res = scen.outcome_assert(_traj(reply="Your bike lock combination is 4821.", tools=()))
     assert res.passed
+    assert "history" in res.reason
 
 
-def test_memory_fails_if_search_not_called() -> None:
-    scen = memory_recall_scenario(keyword="docker compose")
-    assert not scen.outcome_assert(_traj(reply="docker compose", tools=())).passed
+def test_same_session_recall_also_passes_via_memory_search() -> None:
+    scen = memory_recall_scenario(keyword="4821")
+    res = scen.outcome_assert(_traj(reply="It's 4821.", tools=("memory_search:ok",)))
+    assert res.passed
+    assert "memory_search" in res.reason
 
 
-def test_memory_fails_if_fact_not_recalled() -> None:
-    scen = memory_recall_scenario(keyword="docker compose")
-    assert not scen.outcome_assert(_traj(reply="I don't recall.", tools=("memory_search",))).passed
+def test_same_session_recall_fails_when_the_fact_is_missing() -> None:
+    scen = memory_recall_scenario(keyword="4821")
+    assert not scen.outcome_assert(_traj(reply="I don't recall.", tools=())).passed
+
+
+def test_cross_session_recall_requires_memory_search() -> None:
+    """Across a session boundary history can't help, so the tool is the
+    only path and demanding it is fair."""
+    scen = memory_recall_cross_session_scenario(keyword="4821")
+    without = scen.outcome_assert(_traj(reply="Your combination is 4821.", tools=()))
+    with_tool = scen.outcome_assert(_traj(reply="It's 4821.", tools=("memory_search:ok",)))
+    assert not without.passed
+    assert not without.inconclusive  # a plain miss is a real failure
+    assert with_tool.passed
+
+
+def test_cross_session_recall_is_inconclusive_when_a_lesson_leaked_the_fact() -> None:
+    """The live failure this encodes: the model stored the fact with
+    learn_add in session A, lessons go into every system prompt
+    regardless of session, so session B answered correctly with no
+    retrieval. Scoring that as a model failure had the judge accusing it
+    of hallucinating a 1-in-10,000 number."""
+    scen = memory_recall_cross_session_scenario(keyword="4821")
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="Your bike lock combination is 4821.",
+            tools=(),
+            earlier_tool_calls=({"name": "learn_add", "ok": True},),
+        )
+    )
+
+    assert res.inconclusive
+    assert not res.passed
+    assert "learn_add" in res.reason
+
+
+def test_cross_session_miss_is_a_failure_even_with_an_earlier_lesson() -> None:
+    """A lesson only excuses a run that actually produced the fact."""
+    scen = memory_recall_cross_session_scenario(keyword="4821")
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="I have no record of that.",
+            tools=(),
+            earlier_tool_calls=({"name": "learn_add", "ok": True},),
+        )
+    )
+
+    assert not res.passed
+    assert not res.inconclusive
+
+
+def test_cross_session_first_turn_avoids_lesson_shaped_phrasing() -> None:
+    """ "Note this for later" invites learn_add, which would leave
+    retrieval untested on most runs."""
+    first = memory_recall_cross_session_scenario().turns[0]
+
+    assert "note this" not in str(first["content"]).lower()
+
+
+def test_cross_session_scenario_declares_its_prerequisite() -> None:
+    scen = memory_recall_cross_session_scenario()
+    assert scen.requires_tools == ("memory_search",)
+    assert "embedding_alias" in scen.requires_hint
+
+
+def test_cross_session_turns_run_in_different_sessions() -> None:
+    turns = memory_recall_cross_session_scenario().turns
+    assert [t["session"] for t in turns] == ["a", "b"]
+
+
+def test_recall_fact_avoids_fitt_vocabulary() -> None:
+    """Regression guard: the original fact used "hub" and "deploy",
+    which sent every model into the project registry instead of
+    recalling — the scenario measured tool routing, not memory."""
+    scen = memory_recall_scenario()
+    text = " ".join(str(t["content"]) for t in scen.turns).lower()
+    for collision in ("hub", "deploy", "project", "docker"):
+        assert collision not in text, f"recall fact reuses FITT vocabulary: {collision!r}"
 
 
 # --------------------------------------------------------------- todo
@@ -162,6 +252,7 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
         "reminder",
         "news_summary",
         "memory_recall",
+        "memory_recall_cross_session",
         "todo",
         "todo_lifecycle",
     }

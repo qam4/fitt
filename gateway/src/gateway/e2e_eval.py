@@ -49,6 +49,16 @@ class RunResult:
     timeline: tuple[dict[str, Any], ...] = ()  # Tier 2: per-iteration turn events
     loop_status: str = "ok"
     error: str | None = None
+    earlier_tool_calls: tuple[dict[str, Any], ...] = ()
+    """Tool calls from the scenario's *earlier* turns (``tool_calls``
+    covers the graded final turn only).
+
+    Needed because a side effect from turn 1 can change what turn 2 is
+    even testing: a ``learn_add`` in the first session writes a global
+    lesson that reaches every later system prompt, so a cross-session
+    recall run can answer correctly without touching the retrieval
+    index. Without visibility of the earlier turn, that's
+    indistinguishable from the model inventing the answer."""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +68,7 @@ class RunResult:
             "timeline": [dict(e) for e in self.timeline],
             "loop_status": self.loop_status,
             "error": self.error,
+            "earlier_tool_calls": [dict(c) for c in self.earlier_tool_calls],
         }
 
     @classmethod
@@ -69,6 +80,7 @@ class RunResult:
             timeline=tuple(d.get("timeline", [])),
             loop_status=d.get("loop_status", "ok"),
             error=d.get("error"),
+            earlier_tool_calls=tuple(d.get("earlier_tool_calls", [])),
         )
 
 
@@ -105,6 +117,19 @@ class OutcomeResult:
 
     passed: bool
     reason: str
+    inconclusive: bool = False
+    """The run didn't exercise what the scenario is about, so there's
+    nothing to score — distinct from the model getting it wrong.
+
+    Earned the hard way: the cross-session recall scenario answered
+    correctly with no retrieval call, because the model had stored the
+    fact as a *lesson* in the first session and lessons are injected
+    into every system prompt regardless of session. FITT has three
+    recall channels (session history, global lessons, retrieval index);
+    a run that reached the answer through the wrong one tells us nothing
+    about the one under test. Reported as inconclusive, excluded from
+    the rates, and never sent to the judge — which had confidently
+    accused the model of hallucinating a 1-in-10,000 number."""
 
 
 @dataclass(frozen=True)
@@ -196,6 +221,16 @@ class E2EResult:
     missing. Such a result is excluded from both pass-rates: it says
     something about the *deployment*, nothing about the model."""
 
+    inconclusive: str | None = None
+    """Set when the scenario ran but didn't exercise what it tests (see
+    :attr:`OutcomeResult.inconclusive`). Also excluded from the rates
+    and from judging."""
+
+    @property
+    def scored(self) -> bool:
+        """Whether this result says anything about the model."""
+        return self.unsupported is None and self.inconclusive is None
+
 
 # --------------------------------------------------------------- run
 
@@ -251,6 +286,18 @@ async def run_scenario(
         outcome = scenario.outcome_assert(traj)
     except Exception as exc:
         outcome = OutcomeResult(passed=False, reason=f"outcome assertion raised: {exc}")
+
+    if outcome.inconclusive:
+        # Nothing to grade: the run didn't exercise the thing under
+        # test. Judging it anyway is how a correct model gets called a
+        # hallucinator.
+        return E2EResult(
+            scenario=scenario.name,
+            trajectory=traj,
+            outcome=outcome,
+            verdict=JudgeVerdict.unjudged(outcome.reason),
+            inconclusive=outcome.reason,
+        )
 
     if judge is not None and scenario.rubric:
         judge_input = JudgeInput(
@@ -319,6 +366,10 @@ class E2EReport:
     def unsupported(self) -> list[E2EResult]:
         return [r for r in self.results if r.unsupported]
 
+    @property
+    def inconclusive(self) -> list[E2EResult]:
+        return [r for r in self.results if r.inconclusive]
+
     def render(self) -> str:
         jr = f"{self.judge_rate * 100:.0f}%" if self.judge_rate is not None else "n/a"
         lines = [
@@ -334,9 +385,19 @@ class E2EReport:
                 f"Unsupported: {len(skipped)} not run and excluded from both "
                 f"rates ({names}) — a deployment gap, not a model result"
             )
+        undecided = self.inconclusive
+        if undecided:
+            names = ", ".join(r.scenario for r in undecided)
+            lines.append(
+                f"Inconclusive: {len(undecided)} ran but didn't exercise what "
+                f"they test, excluded from both rates ({names})"
+            )
         for r in self.results:
             if r.unsupported:
                 lines.append(f"  - {r.scenario}: SKIPPED  ({r.unsupported})")
+                continue
+            if r.inconclusive:
+                lines.append(f"  - {r.scenario}: INCONCLUSIVE  ({r.inconclusive})")
                 continue
             obj = "PASS" if r.outcome.passed else "FAIL"
             if not r.verdict.judged:
@@ -351,10 +412,10 @@ def aggregate(results: list[E2EResult]) -> E2EReport:
     """Fold scenario results into a report, tracking objective and judge
     pass-rates independently (Property 5).
 
-    Unsupported scenarios are kept in ``results`` (so the report can
-    show them) but excluded from ``total`` and from the judge counts:
-    they measure the deployment, not the model."""
-    scored = [r for r in results if not r.unsupported]
+    Unsupported and inconclusive scenarios are kept in ``results`` (so
+    the report can show them) but excluded from ``total`` and from the
+    judge counts: neither measures the model."""
+    scored = [r for r in results if r.scored]
     judged = [r for r in scored if r.verdict.judged]
     return E2EReport(
         total=len(scored),

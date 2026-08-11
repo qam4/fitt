@@ -222,6 +222,13 @@ memory:
   # existing history; `fitt memory status` shows counts + freshness.
   # embedding_alias: fitt-embed
 
+  # Where the index file lives. Defaults to
+  # $FITT_HOME/memory/index.db; set it only if you need the index
+  # somewhere else (a different disk, or a throwaway location so a test
+  # run's turns don't land in your real memory - that's what `fitt eval
+  # e2e` does with its isolated run home).
+  # index_path: /path/to/index.db
+
   # Automatic prefetch: when true (and retrieval is on), the most
   # relevant prior excerpts for the current user message are injected
   # into a bounded [Recalled context] system block each turn. Off by

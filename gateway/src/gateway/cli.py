@@ -1920,6 +1920,10 @@ def eval_e2e_cmd(
         update={
             "identity_dir": iso_home / "identity",
             "sessions_dir": iso_home / "sessions",
+            # Keep the retrieval index inside the run home too, or eval
+            # turns get indexed into the operator's real memory and can
+            # surface in later recall.
+            "index_path": iso_home / "memory" / "index.db",
         }
     )
     _console.print(f"[dim]isolated run home: {iso_home}[/dim]")

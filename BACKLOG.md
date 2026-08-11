@@ -54,13 +54,23 @@ The curated ordering - the judgment call a tool can't make for you.
   (unchanged), gemma4:12b-it-qat 4/6 -> **5/6** with no spirals, hermes3:8b
   4/6 -> 3/6 (within its known `web_search` flakiness). Table in
   observed-issues. Two follow-ups fell out:
-  - **`memory_recall` fails on all three** — `memory_search` never fires on
-    the recall turn, so 5/6 is the seed set's ceiling, not a model verdict.
-    FITT-side: either tool selection (the model doesn't reach for it) or
-    retrieval config in the isolated eval home. Cheapest next probe on the
-    ladder, and it blocks any honest claim about local-model usefulness.
+  - **`memory_recall` — FIXED 2026-08-11.** Was three harness defects,
+    no model defect (see observed-issues). qwen3:14b now scores 6/6
+    objective / 6/6 judge on the seed set.
   - **One sample per model isn't enough to read a one-step move.** Use
     `--samples` for anything we intend to cite as a comparison.
+- **Per-scenario setup hook — now blocking a real measurement.** Two
+  scenarios need state planted *without* the model in the loop:
+  cross-session recall (put the fact in session A's history + index
+  directly, then ask in session B) and cron-cancel (cancelled vs
+  never-created look identical in the end state). Without it,
+  cross-session recall is permanently inconclusive: qwen3:14b stores any
+  stated fact via `learn_add`, and lessons cross sessions by design, so
+  the fact arrives without ever touching the retrieval index. **Phase 9's
+  cross-session recall therefore has no end-to-end verification** —
+  the provider round-trips in isolation, but no live turn has been shown
+  to use it. Smallest useful shape: an optional `setup(app)` callable on
+  `TaskScenario`, run before dispatch.
 - **A Windows CI leg — the missing observer (2026-08-10).** FITT deploys
   on Windows; both CI jobs are `ubuntu-latest`. That gap is why the
   cp1252 `UnicodeEncodeError` class recurred ~10 times: it can't fail on

@@ -47,3 +47,48 @@ async def test_dispatch_multi_turn_returns_last_reply(
     assert res.error is None
     assert res.reply == "second answer"  # last turn's reply
     assert res.tool_sequence == ()  # no tools fired
+
+
+async def test_dispatch_per_turn_session_splits_sessions(
+    e2e_app: Any, stubbed_llm: StubbedLLM
+) -> None:
+    """A turn's ``session`` key runs it in its own session.
+
+    This is what makes cross-session recall testable: state a fact in
+    one session, ask in another, where history can't carry it and only
+    memory_search can. Without the split, the same-session history makes
+    the test pass for the wrong reason.
+    """
+    stubbed_llm.load([stub_reply("noted"), stub_reply("it was 4821")])
+    dispatch = build_http_dispatch(
+        e2e_app, alias="fitt-default", token=PERSONAL_TOKEN, session_id="e2e-recall-0"
+    )
+
+    res = await dispatch(
+        [
+            {"role": "user", "content": "note this: 4821", "session": "a"},
+            {"role": "user", "content": "what was it?", "session": "b"},
+        ]
+    )
+
+    assert res.error is None
+    assert res.reply == "it was 4821"
+
+    registry = e2e_app.state.session_registry
+    assert registry.get("e2e-recall-0-a") is not None
+    assert registry.get("e2e-recall-0-b") is not None
+
+
+async def test_dispatch_strips_the_session_key_from_the_payload(
+    e2e_app: Any, stubbed_llm: StubbedLLM
+) -> None:
+    """``session`` is harness routing, not part of the chat message."""
+    stubbed_llm.load([stub_reply("ok")])
+    dispatch = build_http_dispatch(
+        e2e_app, alias="fitt-default", token=PERSONAL_TOKEN, session_id="e2e-strip-0"
+    )
+
+    res = await dispatch([{"role": "user", "content": "hello", "session": "a"}])
+
+    assert res.error is None
+    assert res.reply == "ok"

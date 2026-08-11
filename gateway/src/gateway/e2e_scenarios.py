@@ -75,39 +75,126 @@ def news_scenario(*, topic: str = "technology") -> TaskScenario:
     )
 
 
-def _memory_assert(keyword: str):  # type: ignore[no-untyped-def]
+def _recall_assert(keyword: str, *, require_search: bool):  # type: ignore[no-untyped-def]
+    """Grade recall on the *outcome* — did the fact come back — and only
+    additionally on the mechanism when the mechanism is truly required.
+
+    Requiring ``memory_search`` within a single session was wrong: the
+    fact is one turn back in the same conversation, so history already
+    carries it and a correct model answers directly. The old check
+    punished the right behaviour and, worse, looked like a model defect.
+    ``memory_search`` is for *cross-session* recall, so only the
+    cross-session scenario demands it."""
+
     def _a(traj: E2ETrajectory) -> OutcomeResult:
-        called = any("memory_search" in t for t in traj.run.tool_sequence)
         recalled = keyword.lower() in traj.run.reply.lower()
+        called = any("memory_search" in t for t in traj.run.tool_sequence)
+        if not require_search:
+            if not recalled:
+                return OutcomeResult(False, f"reply didn't surface the recalled fact {keyword!r}")
+            how = "via memory_search" if called else "from conversation history"
+            return OutcomeResult(True, f"recalled {keyword!r} {how}")
+
+        # Cross-session: retrieval should be the only path — unless an
+        # earlier turn stored the fact as a *lesson*, which is injected
+        # into every system prompt regardless of session. Then the run
+        # simply didn't test retrieval, and the model deserves neither
+        # credit nor blame.
+        learned = [c for c in traj.run.earlier_tool_calls if str(c.get("name", "")) == "learn_add"]
+        if not called and learned and recalled:
+            return OutcomeResult(
+                False,
+                f"recalled {keyword!r}, but an earlier learn_add put it in the "
+                "global [Learned corrections] block, so it reached the model "
+                "without retrieval — this run didn't exercise memory_search",
+                inconclusive=True,
+            )
         if not called:
-            return OutcomeResult(False, "memory_search did not fire on the recall turn")
+            return OutcomeResult(
+                False,
+                "memory_search did not fire, and neither history nor a lesson "
+                "carried the fact across sessions — the fact was unreachable",
+            )
         if not recalled:
             return OutcomeResult(False, f"reply didn't surface the recalled fact {keyword!r}")
-        return OutcomeResult(True, f"memory_search fired and {keyword!r} was recalled")
+        return OutcomeResult(True, f"recalled {keyword!r} via memory_search")
 
     return _a
 
 
+# A recall fact has to avoid FITT's own vocabulary. The original
+# ("the deploy uses docker compose on the hub" / "how do we deploy the
+# hub again?") collided with the project registry on every model tried:
+# "hub" reads as a project name and "deploy" as an actionable request,
+# so models went to project_shell / spec_list / list_directory and
+# asked which project to register. They had the fact and still failed —
+# the scenario was measuring tool routing, not recall.
+_RECALL_FACT = "My bike lock combination is 4821."
+_RECALL_QUESTION = "What's my bike lock combination again?"
+_RECALL_KEYWORD = "4821"
+
+
 def memory_recall_scenario(
     *,
-    fact: str = "The deploy uses docker compose on the hub.",
-    question: str = "How do we deploy the hub again?",
-    keyword: str = "docker compose",
+    fact: str = _RECALL_FACT,
+    question: str = _RECALL_QUESTION,
+    keyword: str = _RECALL_KEYWORD,
 ) -> TaskScenario:
+    """Same-session recall: state a fact, then ask for it one turn later.
+
+    Tests that FITT's history injection puts the earlier turn in front
+    of the model. The mechanism is free — history, a lesson, or
+    memory_search all count — because only the outcome matters here."""
     return TaskScenario(
         name="memory_recall",
         turns=[
             {"role": "user", "content": f"Note this for later: {fact}"},
             {"role": "user", "content": question},
         ],
-        outcome_assert=_memory_assert(keyword),
+        outcome_assert=_recall_assert(keyword, require_search=False),
         rubric=(
             f"Is the answer grounded in the earlier fact the user stated ({fact!r})? "
             "It should reflect that fact, not guess or say it doesn't know."
         ),
+    )
+
+
+def memory_recall_cross_session_scenario(
+    *,
+    fact: str = _RECALL_FACT,
+    question: str = _RECALL_QUESTION,
+    keyword: str = _RECALL_KEYWORD,
+) -> TaskScenario:
+    """Cross-session recall: state the fact in one session, ask in another.
+
+    This is what ``memory_search`` is actually for (Phase 9). History
+    cannot carry the fact across a session boundary, so retrieval is the
+    only path — which makes requiring the tool call fair here, unlike in
+    the same-session scenario."""
+    return TaskScenario(
+        name="memory_recall_cross_session",
+        turns=[
+            # Deliberately NOT "note this for later" — that phrasing
+            # invites learn_add, whose global lessons block would carry
+            # the fact across the session boundary and leave retrieval
+            # untested (the run then reports inconclusive). A plain
+            # aside is more likely to be persisted as ordinary history
+            # and reachable only through the index.
+            {
+                "role": "user",
+                "content": f"By the way, {fact[0].lower() + fact[1:]}",
+                "session": "a",
+            },
+            {"role": "user", "content": question, "session": "b"},
+        ],
+        outcome_assert=_recall_assert(keyword, require_search=True),
+        rubric=(
+            f"Does the answer surface the fact stated in an earlier session ({fact!r})? "
+            "It should recall it, not guess and not claim it has no record."
+        ),
         # memory_search only exists when memory.embedding_alias is
-        # configured. Without this declaration the scenario scores as a
-        # model failure on any retrieval-off deployment.
+        # configured; without this the scenario would score a
+        # switched-off feature as a model failure.
         requires_tools=("memory_search",),
         requires_hint=(
             "set memory.enabled: true and bind memory.embedding_alias to an "
@@ -206,6 +293,7 @@ def seed_scenarios() -> list[TaskScenario]:
         reminder_scenario(),
         news_scenario(),
         memory_recall_scenario(),
+        memory_recall_cross_session_scenario(),
         todo_scenario(),
         todo_lifecycle_scenario(),
     ]

@@ -33,6 +33,99 @@ doc.
 
 ---
 
+## memory_recall failed on every model, and never once for a model reason
+
+**First observed:** 2026-08-10 (all three EC2 aliases), root-caused
+2026-08-11.
+**Tag:** eval design / harness honesty / recall channels.
+**Status:** same-session recall now PASSES live (6/6 objective, 6/6 judge
+on qwen3:14b). Cross-session recall is reported INCONCLUSIVE — see
+"still not tested" below.
+
+Three separate defects, all in the harness, all of which the frontier
+judge confidently blamed on the model:
+
+1. **The tool didn't exist.** `memory_search` is registered only when
+   `memory.embedding_alias` is configured; the dev config had
+   `memory.enabled: false` and no alias. The objective check reported
+   "memory_search did not fire", which is indistinguishable from a model
+   that had the tool and ignored it. Fixed by
+   `TaskScenario.requires_tools` + `requires_hint`: an unmet
+   prerequisite means not run, not scored, not judged.
+2. **The wording tested tool routing, not memory.** The fact was "the
+   deploy uses docker compose on the hub" and the question "how do we
+   deploy the hub again?". "hub" reads as a project name and "deploy" as
+   an actionable request, so every model went to `spec_list` /
+   `project_shell` / `list_directory` and asked which project to
+   register — while demonstrably holding the fact (one reply asked
+   "where is the Docker Compose configuration located?"). The fact is
+   now a bike lock combination, with a test that fails if it ever reuses
+   FITT vocabulary again.
+3. **The check demanded a mechanism the right answer doesn't need.**
+   Within one session the fact is one turn back, so history carries it —
+   `memory_search` is for *cross-session* recall. Requiring the tool
+   call punished the cheapest correct answer. Split into two scenarios:
+   `memory_recall` (same session, graded on outcome only, any channel
+   counts) and `memory_recall_cross_session` (fact in session A, question
+   in session B, where requiring the tool is fair). The driver grew
+   per-turn session support to make that possible.
+
+### FITT has three recall channels, and a test must name which one
+
+The lesson that cost the most: the cross-session run answered "4821"
+with no tool calls, and the judge called it a hallucinated
+1-in-10,000 guess. It wasn't. `identity/lessons.md` in the run home held
+the fact twice — the model had called `learn_add` in session A, and
+lessons are injected into **every** system prompt regardless of session.
+So the channels are:
+
+- **session history** — same session only;
+- **lessons** (`learn_add`) — global, cross-session, model-curated;
+- **retrieval index** (`memory_search`) — cross-session, Phase 9.
+
+A run that reaches the answer through a channel the scenario isn't
+testing proves nothing either way. Hence a third verdict beyond
+pass/fail: **inconclusive**, excluded from both rates and never judged
+(`OutcomeResult.inconclusive`). Detecting it required
+`RunResult.earlier_tool_calls` — the harness previously exposed only the
+graded final turn's calls, which is precisely why a decisive turn-1 side
+effect was invisible.
+
+### Still not tested: cross-session retrieval
+
+Rewording turn 1 away from "note this for later" did NOT stop it —
+qwen3:14b stores any stated personal fact as a lesson, so the run is
+inconclusive rather than a retrieval test. Genuinely exercising
+`memory_search` needs the model out of the setup step: plant the fact in
+session A's history and index directly, then ask in session B. That's a
+per-scenario setup hook, which the BACKLOG already wanted for a
+trustworthy cron-cancel test. Until then Phase 9's cross-session recall
+is unverified end to end — the provider round-trips correctly in
+isolation (indexed, searched, 768-dim, backend reachable), but no live
+turn has been shown to use it.
+
+### Also fixed here: the eval leaked into real memory
+
+`build_retrieval_provider` took its index path from `FITT_HOME` while
+the harness redirected only `identity_dir` and `sessions_dir`, so eval
+turns were indexed into the operator's real
+`~/.fitt/memory/index.db` and could surface in later recall. Now
+`memory.index_path` (config field, documented in the example) points at
+the isolated run home.
+
+### Meta
+
+Three harness defects in one scenario, and the judge agreed with the
+harness every time — including once while holding the contradicting
+evidence. The judge inherits the harness's framing, so it cannot be what
+catches harness bugs. The generic "the harness is a suspect" audit ask
+helps but did not fire here. Cheap habit that would have: when a verdict
+implies a model did something implausible (guessing a 4-digit number,
+ignoring a tool it was never given), check the run home before believing
+it.
+
+---
+
 ## litellm `ollama_chat` drops assistant `tool_calls` on replay (fixed by upgrading)
 
 **First observed:** 2026-08-10, chasing gemma4:12b's tool spiral with
