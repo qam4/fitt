@@ -2002,6 +2002,22 @@ def eval_e2e_cmd(
 
     scenarios = seed_scenarios()
 
+    # What the model will actually be offered. A scenario that needs a
+    # tool this deployment doesn't register is reported as unsupported
+    # rather than scored — otherwise a switched-off feature reads as a
+    # model failure (which is how memory_recall misled us for three
+    # models in a row).
+    available_tools = app.state.tool_registry.list_names()
+    registered = set(available_tools)
+    unsupported_names = [
+        scen.name for scen in scenarios if any(t not in registered for t in scen.requires_tools)
+    ]
+    if unsupported_names:
+        _console.print(
+            f"[yellow]unsupported on this deployment (not run, not scored): "
+            f"{', '.join(unsupported_names)}[/yellow]"
+        )
+
     async def _run() -> Any:
         results = []
         for s in range(samples):
@@ -2019,6 +2035,7 @@ def eval_e2e_cmd(
                         snapshot=lambda: snapshot_app(app),
                         judge=judge,
                         judge_timeline=(judge_detail in ("verbose", "max")),
+                        available_tools=available_tools,
                     )
                 )
         return aggregate(results)

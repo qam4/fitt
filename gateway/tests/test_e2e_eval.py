@@ -43,12 +43,14 @@ def _scenario(
     turns: list[dict[str, Any]] | None = None,
     assert_fn: Any = None,
     rubric: str = "",
+    requires_tools: tuple[str, ...] = (),
 ) -> TaskScenario:
     return TaskScenario(
         name=name,
         turns=turns or [{"role": "user", "content": "hi"}],
         outcome_assert=assert_fn or (lambda t: OutcomeResult(True, "ok")),
         rubric=rubric,
+        requires_tools=requires_tools,
     )
 
 
@@ -220,3 +222,108 @@ def test_ensure_distinct_judge_rejects_self_judging() -> None:
         ensure_distinct_judge("fitt-ec2-qwen3", "fitt-ec2-qwen3")
     # distinct is fine
     ensure_distinct_judge("fitt-ec2-qwen3", "fitt-smart")
+
+
+# ------------------------------------------- unsupported scenarios
+#
+# Regression guard for the memory_recall episode: memory_search is only
+# registered when memory.embedding_alias is configured, so on a
+# retrieval-off deployment the scenario reported "memory_search did not
+# fire" — identical to a model that had the tool and ignored it. Three
+# models were graded down for a missing feature, and the judge agreed
+# each time. A missing prerequisite must never look like a model result.
+
+
+async def test_missing_required_tool_is_not_dispatched() -> None:
+    dispatched: list[bool] = []
+
+    async def _dispatch_fn(turns: list[dict[str, Any]]) -> RunResult:
+        dispatched.append(True)
+        return RunResult(reply="should never run")
+
+    res = await run_scenario(
+        _scenario(requires_tools=("memory_search",)),
+        dispatch=_dispatch_fn,
+        snapshot=_snapshot({}),
+        available_tools=["todo_add", "cron_add"],
+    )
+
+    assert not dispatched, "a scenario with an unmet prerequisite still called the model"
+    assert res.unsupported is not None
+    assert "memory_search" in res.unsupported
+
+
+async def test_unsupported_scenario_is_never_judged() -> None:
+    judged: list[bool] = []
+
+    async def _judge(ji: JudgeInput) -> JudgeVerdict:
+        judged.append(True)
+        return JudgeVerdict(True, 1.0, "ok")
+
+    res = await run_scenario(
+        _scenario(rubric="grade me", requires_tools=("memory_search",)),
+        dispatch=_dispatch("x"),
+        snapshot=_snapshot({}),
+        judge=_judge,
+        available_tools=[],
+    )
+
+    assert not judged, "the judge was asked to grade a scenario that never ran"
+    assert not res.verdict.judged
+
+
+async def test_unsupported_scenarios_are_excluded_from_both_rates() -> None:
+    async def _judge(ji: JudgeInput) -> JudgeVerdict:
+        return JudgeVerdict(True, 1.0, "ok")
+
+    ran = await run_scenario(
+        _scenario(name="todo", rubric="r"),
+        dispatch=_dispatch("added"),
+        snapshot=_snapshot({}),
+        judge=_judge,
+        available_tools=["todo_add"],
+    )
+    skipped = await run_scenario(
+        _scenario(name="memory_recall", rubric="r", requires_tools=("memory_search",)),
+        dispatch=_dispatch("x"),
+        snapshot=_snapshot({}),
+        judge=_judge,
+        available_tools=["todo_add"],
+    )
+
+    rep = aggregate([ran, skipped])
+
+    # 1/1, not 1/2: the deployment gap must not dilute the model's score.
+    assert rep.total == 1
+    assert rep.objective_passed == 1
+    assert rep.objective_rate == 1.0
+    assert rep.judged == 1
+    assert [r.scenario for r in rep.unsupported] == ["memory_recall"]
+
+
+async def test_report_calls_out_unsupported_scenarios() -> None:
+    skipped = await run_scenario(
+        _scenario(name="memory_recall", requires_tools=("memory_search",)),
+        dispatch=_dispatch("x"),
+        snapshot=_snapshot({}),
+        available_tools=[],
+    )
+
+    rendered = aggregate([skipped]).render()
+
+    assert "SKIPPED" in rendered
+    assert "memory_search" in rendered
+    # It must not read as a model verdict.
+    assert "objective=FAIL" not in rendered
+
+
+async def test_requirements_unchecked_when_registry_unknown() -> None:
+    """Unit tests pass fake dispatches with no registry; don't guess."""
+    res = await run_scenario(
+        _scenario(requires_tools=("memory_search",)),
+        dispatch=_dispatch("ran anyway"),
+        snapshot=_snapshot({}),
+    )
+
+    assert res.unsupported is None
+    assert res.trajectory.run.reply == "ran anyway"

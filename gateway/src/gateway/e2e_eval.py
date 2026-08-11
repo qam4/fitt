@@ -20,7 +20,7 @@ unit-testable with fakes (no live model, no kiro-cli). The driver
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -163,6 +163,23 @@ class TaskScenario:
     turns: list[dict[str, Any]]
     outcome_assert: OutcomeAssert
     rubric: str = ""
+    requires_tools: tuple[str, ...] = ()
+    """Tools that must be registered for this scenario to be *possible*.
+
+    Without this, a scenario whose feature is switched off scores as a
+    model failure. That is exactly what happened to ``memory_recall``:
+    ``memory_search`` is only registered when ``memory.embedding_alias``
+    is configured, so on a retrieval-off deployment the objective check
+    reported "memory_search did not fire" — indistinguishable from a
+    model that had the tool and ignored it — and the judge blamed the
+    model, on three different models in a row. Declaring the
+    prerequisite lets the runner report *unsupported* instead of
+    grading."""
+
+    requires_hint: str = ""
+    """How an operator makes the missing tool exist. Appended to the
+    unsupported reason, per Principle 8: when a capability is missing,
+    say what's missing AND how to add it."""
 
 
 @dataclass(frozen=True)
@@ -174,6 +191,10 @@ class E2EResult:
     trajectory: E2ETrajectory
     outcome: OutcomeResult
     verdict: JudgeVerdict
+    unsupported: str | None = None
+    """Set when the scenario never ran because a required tool is
+    missing. Such a result is excluded from both pass-rates: it says
+    something about the *deployment*, nothing about the model."""
 
 
 # --------------------------------------------------------------- run
@@ -186,6 +207,7 @@ async def run_scenario(
     snapshot: SnapshotFn,
     judge: JudgeFn | None = None,
     judge_timeline: bool = False,
+    available_tools: Collection[str] | None = None,
 ) -> E2EResult:
     """Run one scenario end to end and grade it.
 
@@ -193,7 +215,34 @@ async def run_scenario(
     objective ``outcome_assert``, and — only when a ``judge`` is given
     AND the scenario has a rubric — scores the reply. Never raises: an
     assertion error becomes an objective fail; a judge error becomes an
-    un-judged verdict (Properties 3, 4)."""
+    un-judged verdict (Properties 3, 4).
+
+    When ``available_tools`` is supplied and the scenario declares
+    ``requires_tools`` that aren't in it, the scenario is *not run*: it
+    returns an unsupported result, unscored and unjudged. Grading a
+    model on a tool it was never offered produces a confident wrong
+    answer, which is worse than no answer."""
+    missing = _missing_tools(scenario, available_tools)
+    if missing:
+        reason = (
+            f"scenario needs {', '.join(missing)}, which "
+            f"{'is' if len(missing) == 1 else 'are'} not registered on this "
+            "deployment — not run, not scored"
+        )
+        if scenario.requires_hint:
+            reason = f"{reason}. To enable: {scenario.requires_hint}"
+        return E2EResult(
+            scenario=scenario.name,
+            trajectory=E2ETrajectory(
+                scenario=scenario.name,
+                turns=list(scenario.turns),
+                run=RunResult(reply="", loop_status="not_run"),
+            ),
+            outcome=OutcomeResult(passed=False, reason=reason),
+            verdict=JudgeVerdict.unjudged(reason),
+            unsupported=reason,
+        )
+
     run = await dispatch(scenario.turns)
     snap = snapshot()
     traj = E2ETrajectory(scenario=scenario.name, turns=list(scenario.turns), run=run, snapshot=snap)
@@ -227,6 +276,19 @@ async def run_scenario(
     return E2EResult(scenario=scenario.name, trajectory=traj, outcome=outcome, verdict=verdict)
 
 
+def _missing_tools(
+    scenario: TaskScenario, available_tools: Collection[str] | None
+) -> tuple[str, ...]:
+    """Required tools absent from the registry.
+
+    ``None`` means the caller didn't tell us what's registered (unit
+    tests with fake dispatches), so we can't check and don't guess."""
+    if available_tools is None or not scenario.requires_tools:
+        return ()
+    have = set(available_tools)
+    return tuple(t for t in scenario.requires_tools if t not in have)
+
+
 # --------------------------------------------------------------- aggregate
 
 
@@ -236,6 +298,10 @@ class E2EReport:
     pass the objective check but fail the judge, and vice versa."""
 
     total: int
+    """Scenarios actually run. Unsupported ones are excluded, so a
+    pass-rate is never diluted by a scenario the deployment can't
+    attempt."""
+
     objective_passed: int
     judged: int
     judge_passed: int
@@ -249,6 +315,10 @@ class E2EReport:
     def judge_rate(self) -> float | None:
         return self.judge_passed / self.judged if self.judged else None
 
+    @property
+    def unsupported(self) -> list[E2EResult]:
+        return [r for r in self.results if r.unsupported]
+
     def render(self) -> str:
         jr = f"{self.judge_rate * 100:.0f}%" if self.judge_rate is not None else "n/a"
         lines = [
@@ -257,7 +327,17 @@ class E2EReport:
             f"Judge: {self.judge_passed}/{self.judged} passed ({jr})"
             + ("" if self.judged else "  [judging off / no rubric]"),
         ]
+        skipped = self.unsupported
+        if skipped:
+            names = ", ".join(r.scenario for r in skipped)
+            lines.append(
+                f"Unsupported: {len(skipped)} not run and excluded from both "
+                f"rates ({names}) — a deployment gap, not a model result"
+            )
         for r in self.results:
+            if r.unsupported:
+                lines.append(f"  - {r.scenario}: SKIPPED  ({r.unsupported})")
+                continue
             obj = "PASS" if r.outcome.passed else "FAIL"
             if not r.verdict.judged:
                 jv = "unjudged"
@@ -269,11 +349,16 @@ class E2EReport:
 
 def aggregate(results: list[E2EResult]) -> E2EReport:
     """Fold scenario results into a report, tracking objective and judge
-    pass-rates independently (Property 5)."""
-    judged = [r for r in results if r.verdict.judged]
+    pass-rates independently (Property 5).
+
+    Unsupported scenarios are kept in ``results`` (so the report can
+    show them) but excluded from ``total`` and from the judge counts:
+    they measure the deployment, not the model."""
+    scored = [r for r in results if not r.unsupported]
+    judged = [r for r in scored if r.verdict.judged]
     return E2EReport(
-        total=len(results),
-        objective_passed=sum(1 for r in results if r.outcome.passed),
+        total=len(scored),
+        objective_passed=sum(1 for r in scored if r.outcome.passed),
         judged=len(judged),
         judge_passed=sum(1 for r in judged if r.verdict.passed),
         results=results,

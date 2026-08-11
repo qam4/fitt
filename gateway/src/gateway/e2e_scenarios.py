@@ -105,6 +105,15 @@ def memory_recall_scenario(
             f"Is the answer grounded in the earlier fact the user stated ({fact!r})? "
             "It should reflect that fact, not guess or say it doesn't know."
         ),
+        # memory_search only exists when memory.embedding_alias is
+        # configured. Without this declaration the scenario scores as a
+        # model failure on any retrieval-off deployment.
+        requires_tools=("memory_search",),
+        requires_hint=(
+            "set memory.enabled: true and bind memory.embedding_alias to an "
+            "alias backed by an embedding model (e.g. nomic-embed-text on "
+            "ollama) in config.yaml"
+        ),
     )
 
 
