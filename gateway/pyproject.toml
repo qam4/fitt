@@ -92,6 +92,13 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
+# Preview is enabled on the LINTER only - at [tool.ruff] level it also
+# switches the formatter to preview style, which reformats ~45 files.
+# It exists here purely to reach PLW1514 below, and
+# explicit-preview-rules stops it dragging in every other preview rule
+# (~250 unrelated findings).
+preview = true
+explicit-preview-rules = true
 select = [
     "E", "W",  # pycodestyle
     "F",       # pyflakes
@@ -99,6 +106,11 @@ select = [
     "B",       # bugbear
     "UP",      # pyupgrade
     "RUF",     # ruff-specific
+    # open() without encoding= silently uses the platform default,
+    # which is the ANSI codepage on Windows. We deploy on Windows and
+    # our CI is Linux, so this class of bug can only be caught by a
+    # linter. See gateway/src/gateway/stdio_encoding.py.
+    "PLW1514", # pylint: unspecified-encoding
 ]
 ignore = ["E501"]  # line length handled by formatter
 

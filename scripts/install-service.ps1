@@ -263,7 +263,13 @@ function Install-FittService {
     # Service environment. FITT_HOME pins the config/secrets
     # directory; PYTHONUNBUFFERED makes stdout/stderr flush promptly
     # so NSSM's capture files stay current.
-    $envBlock = "FITT_HOME=$FittHome`0" + "PYTHONUNBUFFERED=1`0"
+    # PYTHONUTF8=1 puts the whole process in UTF-8 mode. NSSM captures
+    # stdout/stderr to files, so without it Python falls back to the
+    # ANSI codepage and any non-ASCII log line raises
+    # UnicodeEncodeError. The entry point reconfigures its own streams
+    # too; this also covers third-party libraries and default file
+    # encodings.
+    $envBlock = "FITT_HOME=$FittHome`0" + "PYTHONUNBUFFERED=1`0" + "PYTHONUTF8=1`0"
     & $Nssm set $Name AppEnvironmentExtra $envBlock | Out-Null
 
     Write-Step "Starting service."

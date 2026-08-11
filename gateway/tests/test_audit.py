@@ -216,9 +216,9 @@ def test_verify_accepts_clean_chain(tmp_path: Path) -> None:
 
 def _overwrite_line(path: Path, line_num: int, new_line: str) -> None:
     """1-based line replacement. Keeps the rest intact."""
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     lines[line_num - 1] = new_line
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def test_verify_catches_edited_field(tmp_path: Path) -> None:

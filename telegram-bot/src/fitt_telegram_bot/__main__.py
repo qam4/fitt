@@ -7,12 +7,17 @@ import sys
 
 from gateway.errors import ConfigError
 from gateway.logging_config import configure_logging, get_logger
+from gateway.stdio_encoding import make_output_encoding_safe
 
 from .bot import build_application
 from .config import load_bot_config
 
 
 def main() -> int:
+    # Same reason as the gateway entry point: this runs as a service
+    # with captured stdout, and Telegram content is full of non-ASCII.
+    make_output_encoding_safe()
+
     try:
         cfg, bot_cfg = load_bot_config()
     except ConfigError as e:

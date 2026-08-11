@@ -107,12 +107,62 @@ FITT-side question (tool selection or retrieval config), not a model one.
 
 ---
 
-## `fitt eval e2e` crashed printing its own report path on a redirected stdout
+## UnicodeEncodeError on a redirected stdout — the recurring one, fixed at the class level
 
-**First observed:** 2026-08-10, during the re-measurement above.
-**Tag:** CLI robustness / Windows encoding / silent exit-code loss.
-**Status:** FIXED — `cli._encoding_safe_stdout()`, test at
-`gateway/tests/test_cli_console_encoding.py`.
+**First observed:** long-running annoyance; caught again 2026-08-10 during
+the re-measurement above, which is roughly the tenth time it has bitten.
+**Tag:** Windows encoding / CLI robustness / silent exit-code loss.
+**Status:** FIXED as a class — `gateway/stdio_encoding.py` wired into all
+three entry points, `PYTHONUTF8=1` in the launchers we own, and ruff
+`PLW1514` to guard file I/O. Tests:
+`gateway/tests/test_stdio_encoding.py` +
+`telegram-bot/tests/test_stdio_encoding.py`.
+
+### Why it kept coming back
+
+Not sloppiness in the modules — every `open` / `read_text` / `write_text`
+in both packages already passes `encoding="utf-8"`, and every subprocess
+decodes bytes explicitly. The recurrence is structural, and it's worth
+writing down because the same shape will hide other bugs:
+
+- **It only fires when stdout is not a terminal.** Python on Windows uses
+  UTF-8 for a console but falls back to the ANSI codepage (cp1252) for a
+  redirect, a pipe, an NSSM service capture, or a kiro-monitor log. Every
+  interactive test passes.
+- **CI can't see it.** Both jobs are `ubuntu-latest`, where UTF-8 is the
+  default. A Windows-only defect in a Windows-deployed project has no
+  automated observer.
+- **It fires after the real work,** so the traceback looks like a failure
+  of whatever just succeeded.
+- **Each occurrence looked like a one-line typo,** so each got a one-line
+  fix at the call site instead of a fix at the boundary.
+
+### What the fix actually covers
+
+- `make_output_encoding_safe()` reconfigures stdout *and* stderr to UTF-8
+  with `errors="replace"`, called first thing by all three entry points:
+  `fitt` (CLI), `fitt-gateway` (service), `fitt-telegram-bot` (service).
+  The two services matter most — they print config errors to a captured
+  stderr, so this is the difference between a readable boot error and a
+  traceback about an arrow.
+- `PYTHONUTF8=1` in both NSSM install scripts and both compose services.
+  The in-code call can't help third-party libraries that open files with
+  the default encoding; UTF-8 mode covers the whole process.
+- ruff `PLW1514` (preview, enabled via `explicit-preview-rules` so it
+  doesn't drag in ~250 other preview findings) fails the build on
+  `open()` without `encoding=`. It found two real cases in tests on the
+  first run.
+
+Note `preview` belongs under `[tool.ruff.lint]`, not `[tool.ruff]` — at
+the top level it also switches the *formatter* to preview style, which
+silently reformatted 45 files.
+
+### Still open
+
+The only gap left is the observer: nothing runs our Windows path
+automatically. A `windows-latest` CI leg would close it — see BACKLOG.
+
+### The instance that triggered this round
 
 With stdout redirected to a file (which is how anything under
 kiro-monitor runs), Python on Windows defaults the stream to the ANSI
@@ -128,9 +178,12 @@ clean. Worth noting for the "objective regression gate" idea in BACKLOG:
 that gate is only as trustworthy as the process exit code, so anything that
 can bypass the exit path is a correctness bug, not a cosmetic one.
 
-Fix reconfigures stdout to UTF-8 with `errors="replace"` when the shared
-rich `Console` is built, so no operator-facing glyph can take a command
-down.
+Worth recording how the first attempt at the fix failed: passing the
+stream into the shared rich `Console` at import time broke 51 CLI tests.
+Rich resolves `sys.stdout` on every write, and that late binding is what
+lets click's test runner (and any redirect) capture output. The stream has
+to be reconfigured in place. There's a test that fails if anyone binds it
+again.
 
 Diagnostic lever that would have caught it in one run: Tier-3 judging
 (`record_llm_requests`) captures the outgoing conversation verbatim. The

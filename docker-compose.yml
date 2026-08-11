@@ -54,6 +54,10 @@ services:
       # (QNAP's admin UI on 8080, for example).
       FITT_PORT: ${FITT_PORT:-8421}
       TZ: ${TZ:-UTC}
+      # Container logs are a pipe, not a terminal. Slim base images
+      # often carry a C/POSIX locale, so pin UTF-8 rather than relying
+      # on the interpreter's fallback.
+      PYTHONUTF8: "1"
     volumes:
       # One mount: /fitt inside the container == $FITT_HOME outside.
       # Holds config.yaml, secrets.yaml, identity/, sessions/, logs/.
@@ -103,6 +107,9 @@ services:
       # The port has to match the gateway's FITT_PORT.
       FITT_GATEWAY_URL: http://gateway:${FITT_PORT:-8421}
       TZ: ${TZ:-UTC}
+      # See the gateway service: logs are a pipe, and Telegram text is
+      # full of non-ASCII.
+      PYTHONUTF8: "1"
     volumes:
       - ${FITT_HOME:?set FITT_HOME in .env}:/fitt
     logging:

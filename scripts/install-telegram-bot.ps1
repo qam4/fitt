@@ -195,7 +195,10 @@ function Install-BotService {
     & $Nssm set $Name AppRotateOnline 1 | Out-Null
     & $Nssm set $Name AppRotateBytes 10485760 | Out-Null
 
-    $envBlock = "FITT_HOME=$fittHome`0" + "PYTHONUNBUFFERED=1`0"
+    # PYTHONUTF8=1: NSSM captures stdout to a file, so Python would
+    # otherwise use the ANSI codepage - and Telegram text is full of
+    # non-ASCII. See install-service.ps1 for the longer note.
+    $envBlock = "FITT_HOME=$fittHome`0" + "PYTHONUNBUFFERED=1`0" + "PYTHONUTF8=1`0"
     & $Nssm set $Name AppEnvironmentExtra $envBlock | Out-Null
 
     Write-Step "Starting service."

@@ -61,6 +61,18 @@ The curated ordering - the judgment call a tool can't make for you.
     ladder, and it blocks any honest claim about local-model usefulness.
   - **One sample per model isn't enough to read a one-step move.** Use
     `--samples` for anything we intend to cite as a comparison.
+- **A Windows CI leg — the missing observer (2026-08-10).** FITT deploys
+  on Windows; both CI jobs are `ubuntu-latest`. That gap is why the
+  cp1252 `UnicodeEncodeError` class recurred ~10 times: it can't fail on
+  Linux, and it can't fail in an interactive local shell either (Python
+  only falls back to the ANSI codepage when stdout *isn't* a terminal).
+  A `windows-latest` matrix leg running the same lint/typecheck/tests
+  would catch this and any other path/encoding/shell assumption. Costs
+  CI minutes and will likely surface a handful of pre-existing
+  Windows-only test failures the first time, so it's a deliberate
+  sitting rather than a drive-by. Cheaper interim: the entry-point
+  tests added alongside `stdio_encoding.py`, which fake a cp1252 stream
+  on any OS.
 - **Template pre-flight check — idea survives, its motivating example
   does NOT.** gemma4:12b-it-qat ships a stub template (`{{ .Prompt }}`)
   and that looked like the cause of its spiral; **falsified twice** (a

@@ -14,9 +14,16 @@ from .app import create_app
 from .config import default_config_path, default_secrets_path, load_config
 from .errors import ConfigError
 from .logging_config import configure_logging, get_logger
+from .stdio_encoding import make_output_encoding_safe
 
 
 def main() -> int:
+    # Before the first print: under NSSM (and docker) stdout is a
+    # captured file, not a terminal, so on Windows it would default to
+    # the ANSI codepage and a non-ASCII config-error message would
+    # replace the diagnostic below with a UnicodeEncodeError traceback.
+    make_output_encoding_safe()
+
     try:
         cfg = load_config(default_config_path(), default_secrets_path())
     except ConfigError as e:
