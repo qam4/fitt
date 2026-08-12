@@ -33,6 +33,44 @@ doc.
 
 ---
 
+## Standing: what each local model can drive (tracked, not retyped)
+
+**First generated:** 2026-08-12. **Regenerate with:** `fitt eval matrix`.
+**Live table:** [`docs/feature-model-standing.md`](./feature-model-standing.md).
+
+`fitt eval e2e` now writes a JSON sidecar beside its markdown report, and
+`fitt eval matrix` folds the latest run per model into a grid. The point
+is that the standing is a *generated artifact* — a table typed into a
+doc drifts the moment a scenario is added or a model re-measured.
+
+Where things stand on the 7 seed scenarios (single sample each, Tier-1
+judge pinned to claude-sonnet-4.5, `--exclusive`):
+
+| DUT | objective | only failures |
+|---|---|---|
+| gemma4:12b-it-qat | **7/7** | none |
+| qwen3:14b | 6/7 | cross-session recall |
+| hermes3:8b | 3-4/7 | reminder, news_summary, cross-session recall |
+
+The result worth the whole investigation: **gemma4 — the model that
+started at 0/6 and looked broken — is now the best of the three, a 12B
+beating a 14B thinking model.** Every point of that gap was our
+plumbing: a 4096-token context window, VRAM contention, and litellm
+dropping `tool_calls`. It is also the cheapest of the three to run, which
+makes it the better default binding for the local aliases.
+
+hermes3 scored 3/7 and 4/7 on consecutive identical runs, so treat
+single-sample cells as indicative only.
+
+The grid deliberately keeps four non-pass states apart — `FAIL`, `n/a`
+(feature not available on this deployment), `?` (ran but didn't exercise
+what it tests), `-` (never measured for this model). Collapsing them is
+how this session's harness bugs got misread as model defects, and `-`
+specifically stops a newly added scenario from silently downgrading every
+model measured before it existed.
+
+---
+
 ## memory_recall failed on every model, and never once for a model reason
 
 **First observed:** 2026-08-10 (all three EC2 aliases), root-caused
@@ -116,20 +154,16 @@ With that clean, the result: **qwen3:14b does not attempt retrieval.**
 Asked about the planted fact it replied "I don't have access to your gym
 locker number. You may need to check with the gym staff or your
 membership portal", with no tool call. Not a spiral, not a wrong search —
-it never considers `memory_search`. The provider itself is fine
-(indexed, searched, 768-dim, backend reachable in isolation).
+it never considers `memory_search`.
 
-Two levers, neither pulled yet:
-
-1. **Prompt guidance** — nothing tells the model "when the user asks
-   about something you don't know, search memory first". It has 34 tools
-   and no cue that this one applies here. Note `memory_search` also
-   defaults to `scope="session"`, so even a model that reaches for it
-   must choose `scope="all"`.
-2. **Prefetch (Phase 9e)** — already built, off by default: inject the
-   most relevant excerpts as a `[Recalled context]` block each turn,
-   removing the need for the model to choose a tool at all. This is the
-   designed answer to exactly this failure.
+**But the feature is fine.** gemma4:12b-it-qat passes the same scenario:
+`learn_list:ok, memory_search:ok` -> "Your gym locker number is 7391",
+judge 1.00. So Phase 9 cross-session recall is proven end to end, and
+this is a model-selection result rather than a FITT gap — the opposite of
+the conclusion the first single-model run suggested. Two optional levers
+remain for weaker models (prompt guidance telling a model to search
+memory when it doesn't know something; or Phase 9e prefetch, which
+removes the tool choice entirely).
 
 Caution if prefetch gets switched on: it is a **fourth recall channel**,
 and the cross-session assertion would need to detect it the same way it

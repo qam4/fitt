@@ -64,19 +64,24 @@ The curated ordering - the judgment call a tool can't make for you.
   (real `append_turn`, indexer drained); a failing setup reports
   *inconclusive*, never a model verdict. Cron-cancel is the next natural
   user (cancelled vs never-created look identical in the end state).
-- **Make the model reach for `memory_search` — the live gap now.** With
-  a trustworthy cross-session scenario, qwen3:14b simply never attempts
-  retrieval: asked about a planted fact it says it has no access and
-  stops. Two levers, pick one and measure:
+- **Cross-session retrieval works; it's a model-selection question, not
+  a FITT gap (corrected 2026-08-12).** First read of this was wrong.
+  gemma4:12b-it-qat passes the cross-session scenario by calling
+  `memory_search` and returning the planted fact — Phase 9 is proven end
+  to end. qwen3:14b never attempts it. So the levers below are optional
+  polish for weaker models, not required work:
   - **prompt guidance** — nothing tells the model to search memory when
     asked about something it doesn't know; and `memory_search` defaults
     to `scope="session"`, so it must also choose `scope="all"`;
   - **prefetch (Phase 9e)** — built, off by default, injects a
     `[Recalled context]` block and removes the tool choice entirely.
-    This is the designed answer to this exact failure.
   If prefetch is switched on, teach the cross-session assertion about it
   first: it's a *fourth* recall channel, and the harness has already
   mis-scored three times by not knowing which channel carried a fact.
+- **Multi-sample before citing a standing number.** hermes3:8b scored
+  3/7 and 4/7 on consecutive identical runs (`memory_recall` flipped).
+  Single-sample cells in the standing matrix are indicative, not
+  reliable; use `--samples` for anything load-bearing.
 - **Scenario cross-talk (small, will bite again).** Scenarios share one
   run home, so lessons / todos / crons / the index carry side effects
   between them — a `learn_add` in one scenario handed a later scenario

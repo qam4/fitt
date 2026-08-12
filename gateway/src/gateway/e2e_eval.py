@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 # --------------------------------------------------------------- ports
@@ -504,3 +505,63 @@ def ensure_distinct_judge(dut_alias: str, judge_alias: str) -> None:
             f"judge alias {judge_alias!r} must differ from the DUT alias "
             f"{dut_alias!r} — the model can't judge its own output"
         )
+
+
+# --------------------------------------------------------------- persist
+
+
+SIDECAR_SCHEMA = 1
+"""Bump when a field's meaning changes, so an old sidecar can be
+recognised rather than silently misread by the matrix view."""
+
+
+def result_status(result: E2EResult) -> str:
+    """``scored`` / ``unsupported`` / ``inconclusive`` for one result."""
+    if result.unsupported is not None:
+        return "unsupported"
+    if result.inconclusive is not None:
+        return "inconclusive"
+    return "scored"
+
+
+def report_to_dict(
+    report: E2EReport,
+    *,
+    dut: str,
+    model: str | None = None,
+    samples: int = 1,
+    judge_command: str | None = None,
+    ts: str | None = None,
+) -> dict[str, Any]:
+    """Serialise a run for the tracked feature/model matrix.
+
+    The markdown report is for reading; this is for aggregating. It keeps
+    the whole scenario list (not just the failures) so the matrix can
+    tell "this model was never measured on that scenario" apart from
+    "it failed", and records ``judge_command`` because an unpinned judge
+    silently invalidates comparisons between runs."""
+    return {
+        "schema": SIDECAR_SCHEMA,
+        "dut": dut,
+        "model": model,
+        "ts": ts or datetime.now(UTC).isoformat(timespec="seconds"),
+        "samples": samples,
+        "judge_command": judge_command,
+        "objective_passed": report.objective_passed,
+        "total": report.total,
+        "judged": report.judged,
+        "judge_passed": report.judge_passed,
+        "scenarios": [
+            {
+                "scenario": r.scenario,
+                "status": result_status(r),
+                "objective": "pass" if r.outcome.passed else "fail",
+                "judge": ("pass" if r.verdict.passed else "fail")
+                if r.verdict.judged
+                else "unjudged",
+                "reason": r.outcome.reason,
+                "tools": list(r.trajectory.run.tool_sequence),
+            }
+            for r in report.results
+        ],
+    }

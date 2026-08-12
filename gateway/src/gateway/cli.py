@@ -15,6 +15,7 @@ from any shell on the machine where the gateway is installed.
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import UTC
 from decimal import Decimal
@@ -1827,6 +1828,21 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
         "cause CPU offload that silently pollutes results. On by default."
     ),
 )
+@click.option(
+    "--tunnel-wait",
+    type=float,
+    default=120.0,
+    help=(
+        "Seconds to wait for --tunnel-url to become reachable after "
+        "starting $FITT_TUNNEL_CMD. The old hardcoded 20s aborted whole "
+        "batches: an SSM session that has to fetch credentials first was "
+        "measured taking over 60s from cold (~4s when they're warm). "
+        "Costs nothing when the tunnel is already up, so prefer a "
+        "generous value. Each failed attempt also leaves a session "
+        "process holding the local port, so retrying is worse than "
+        "waiting."
+    ),
+)
 @click.option("--config-file", type=click.Path(path_type=Path), default=None)
 def eval_e2e_cmd(
     dut: str,
@@ -1839,6 +1855,7 @@ def eval_e2e_cmd(
     out: Path | None,
     judge_detail: str,
     exclusive: bool,
+    tunnel_wait: float,
     config_file: Path | None,
 ) -> None:
     """Run the judged end-to-end scenarios against a live DUT.
@@ -1860,7 +1877,13 @@ def eval_e2e_cmd(
 
     from .config import fitt_home
     from .e2e_driver import build_http_dispatch, snapshot_app
-    from .e2e_eval import SetupContext, aggregate, ensure_distinct_judge, run_scenario
+    from .e2e_eval import (
+        SetupContext,
+        aggregate,
+        ensure_distinct_judge,
+        report_to_dict,
+        run_scenario,
+    )
     from .e2e_judge import CliJudge
     from .e2e_scenarios import seed_scenarios
     from .tunnel import ensure_tunnel
@@ -1893,7 +1916,7 @@ def eval_e2e_cmd(
     token = cfg.secrets.allowed_tokens[0].token
 
     if tunnel_url:
-        status = ensure_tunnel(tunnel_url)
+        status = ensure_tunnel(tunnel_url, wait_s=tunnel_wait)
         colour = "green" if status.reachable else "red"
         _console.print(f"[{colour}]tunnel {status.action}[/{colour}]: {status.detail}")
         if not status.reachable:
@@ -2091,12 +2114,85 @@ def eval_e2e_cmd(
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     _console.print(f"[cyan]report[/cyan] → {out_path}")
 
+    # Structured sidecar next to the markdown: `fitt eval matrix` folds
+    # these into the tracked feature/model standing. The markdown is for
+    # reading; regex-parsing it back would drift.
+    sidecar = out_path.with_suffix(".json")
+    sidecar.write_text(
+        json.dumps(
+            report_to_dict(
+                report,
+                dut=dut,
+                model=getattr(cfg.resolve_alias(dut)[0], "model", None),
+                samples=samples,
+                judge_command=judge_command if use_judge else None,
+            ),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _console.print(f"[cyan]sidecar[/cyan] → {sidecar}")
+
     if min_objective_rate is not None and report.objective_rate < min_objective_rate:
         _console.print(
             f"[red]objective pass-rate below threshold[/red] "
             f"{report.objective_rate * 100:.0f}% < {min_objective_rate * 100:.0f}%"
         )
         sys.exit(1)
+
+
+@eval_group.command("matrix")
+@click.option(
+    "--eval-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Where the e2e sidecars live (default: $FITT_HOME/eval).",
+)
+@click.option(
+    "--out",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Also write the table to this path, for tracking it in the repo.",
+)
+def eval_matrix(eval_dir: Path | None, out: Path | None) -> None:
+    """Show which models can drive which features.
+
+    Folds the latest `fitt eval e2e` run per DUT into a grid: scenarios
+    down the side, models across the top. This is the standing view —
+    what works today, per model — regenerated from stored runs rather
+    than retyped.
+
+    Cells distinguish four non-pass states on purpose: FAIL (the model
+    got it wrong), n/a (the feature isn't available on this deployment),
+    ? (the run didn't exercise what it tests), and - (never measured for
+    this model). Collapsing those into "fail" is how a switched-off
+    feature and a leaked lesson previously got recorded as model
+    defects.
+    """
+    from .config import fitt_home
+    from .e2e_matrix import build_standing, load_sidecars, render_standing
+
+    directory = eval_dir or (fitt_home() / "eval")
+    standing = build_standing(load_sidecars(directory))
+    rendered = render_standing(standing)
+    _console.print(rendered)
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # No absolute path in the body: this file is meant to be
+        # committed, and $FITT_HOME differs per machine (Principle 10,
+        # shareable by construction).
+        header = [
+            "# FITT feature/model standing",
+            "",
+            "Generated by `fitt eval matrix` from the e2e sidecars in",
+            "`$FITT_HOME/eval`. Re-run the eval and regenerate rather than",
+            "hand-editing this file.",
+            "",
+            "",
+        ]
+        out.write_text("\n".join(header) + rendered, encoding="utf-8")
+        _console.print(f"[cyan]written[/cyan] -> {out}")
 
 
 # --------------------------------------------------------------- scenario
