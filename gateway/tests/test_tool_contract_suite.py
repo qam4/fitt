@@ -13,7 +13,13 @@ from typing import Any
 
 import pytest
 
-from gateway.tool_contract_suite import EXEMPT, build_project, default_checks, init_git_repo
+from gateway.tool_contract_suite import (
+    EXEMPT,
+    build_project,
+    default_checks,
+    init_git_repo,
+    stub_http_server,
+)
 from gateway.tool_contracts import run_contract_checks
 
 _PROJECT = "sample"
@@ -62,11 +68,34 @@ def contract_env(tmp_path: Path, monkeypatch: Any) -> Any:
 async def test_declared_contracts_hold_against_the_real_tools(contract_env: Any) -> None:
     app, ctx = contract_env
 
-    report = await run_contract_checks(
-        app.state.tool_registry, ctx, default_checks(_PROJECT), exempt=EXEMPT
-    )
+    with stub_http_server() as base_url:
+        report = await run_contract_checks(
+            app.state.tool_registry,
+            ctx,
+            default_checks(_PROJECT, http_base_url=base_url),
+            exempt=EXEMPT,
+        )
 
     assert not report.failed, report.render()
+
+
+async def test_every_registered_tool_is_covered_or_exempt(contract_env: Any) -> None:
+    """The coverage goal itself, as an assertion.
+
+    Failing here means a tool was registered without a check — which is
+    the state this spec exists to end.
+    """
+    app, ctx = contract_env
+
+    with stub_http_server() as base_url:
+        report = await run_contract_checks(
+            app.state.tool_registry,
+            ctx,
+            default_checks(_PROJECT, http_base_url=base_url),
+            exempt=EXEMPT,
+        )
+
+    assert report.unchecked == [], f"registered tools with no contract check: {report.unchecked}"
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")

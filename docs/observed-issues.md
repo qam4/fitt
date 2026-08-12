@@ -55,12 +55,36 @@ scenario would have surfaced:
    The fix worth making is a Python `rglob` for the local path, keeping
    `find` for SSH-backed projects — that removes a platform dependency
    from a read-side tool the scope doc calls a core use case.
-2. **POSIX-shell discovery only looks in one place.**
-   `local_shell._CANDIDATES` hardcodes
-   `C:\Program Files\Git\bin\bash.exe`. This machine has Git at
-   `C:\Tools\Git`, so the probe reports `none` and every eval run this
-   session logged `shell.interpreter_unavailable` — on a box with a
-   perfectly good bash. Deriving the path from `git` on PATH fixes it.
+2. **A transient shell-probe failure is cached for the whole process.**
+
+   **Correction — the first diagnosis here was wrong, twice.** I claimed
+   `local_shell._CANDIDATES` hardcoding `C:\Program Files\Git\bin\bash.exe`
+   was why the probe reported `none`, then that the `-l` login flag was
+   tripping over the operator's `.bash_profile`. Both false: `bash` is on
+   PATH at `C:\Tools\Git\usr\bin\bash.exe` (so it matches candidate #1,
+   `("bash", ("bash", "-lc"))`), and `bash -lc "echo probe"` returns
+   `probe` with exit 0 when run directly.
+
+   What actually happens is intermittent. Git Bash on this host sometimes
+   fails to fork —
+   `child_copy: cygheap read copy failed ... Win32 error 299` and
+   `couldn't create signal pipe, Win32 error 5` — and on those attempts
+   the probe correctly concludes no working shell. FITT behaved right;
+   the environment is flaky (the usual suspects for cygwin fork failures
+   are antivirus and a stale cygheap).
+
+   The genuine FITT-side issue is what happens next:
+   `LocalShellProbe.detect` caches `ShellInterpreter.none()` for the
+   process lifetime. So a single flaky boot probe disables
+   `project_shell` on local projects until the gateway restarts, with no
+   retry and no way to re-probe. Caching a *success* forever is right;
+   caching a transient failure forever is not. Worth a bounded retry, or
+   simply not caching the negative result.
+
+   Method note, since this is the second time this session a confident
+   diagnosis was wrong: both bad answers came from reading code and
+   inferring, and the right one came from running the command. Read the
+   source to form the hypothesis; run the thing to confirm it.
 
 Worth noting why the *contract* layer caught these and 20+ judged
 scenario runs didn't: a model rarely calls `glob_search` unprompted, and

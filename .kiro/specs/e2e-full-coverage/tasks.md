@@ -45,12 +45,15 @@ Status legend: `[x]` done, `[ ]` not yet.
   `find` for SSH-backed projects, or fail with a clear
   "needs POSIX find" message. The first is better — it removes a
   platform dependency from a read-side core tool.
-- [ ] 25. **Widen POSIX-shell discovery** (found while diagnosing 24).
-  `local_shell._CANDIDATES` hardcodes `C:\Program Files\Git\bin\bash.exe`,
-  so a Git install anywhere else (e.g. `C:\Tools\Git`) reports "no POSIX
-  shell" on a machine that has one — which is why every eval run this
-  session logged `shell.interpreter_unavailable`. Derive the path from
-  `git` on PATH instead of guessing one location.
+- [ ] 25. **Don't cache a transient shell-probe failure.**
+  (Supersedes an earlier, wrong version of this task that blamed the
+  hardcoded Git Bash path — `bash` is on PATH here and matches candidate
+  #1; verified by running it.) `LocalShellProbe.detect` caches
+  `ShellInterpreter.none()` for the process lifetime, so one flaky probe
+  — Git Bash on this host intermittently fails to fork with cygwin
+  `Win32 error 299` / `error 5` — disables `project_shell` on local
+  projects until the gateway restarts, with no retry. Caching a success
+  forever is right; caching a transient failure forever is not.
 
 ## Phase B — Coverage report
 

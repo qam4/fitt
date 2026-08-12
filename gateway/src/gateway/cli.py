@@ -2197,9 +2197,17 @@ def eval_contracts(project: str | None, config_file: Path | None) -> None:
         todos=getattr(app.state, "todos", None),
     )
 
-    report = asyncio.run(
-        run_contract_checks(app.state.tool_registry, ctx, default_checks(target), exempt=EXEMPT)
-    )
+    from .tool_contract_suite import stub_http_server
+
+    with stub_http_server() as base_url:
+        report = asyncio.run(
+            run_contract_checks(
+                app.state.tool_registry,
+                ctx,
+                default_checks(target, http_base_url=base_url),
+                exempt=EXEMPT,
+            )
+        )
     _console.print(report.render())
 
     if report.unexpectedly_fixed:

@@ -15,7 +15,11 @@ See `.kiro/specs/e2e-full-coverage/design.md` (D2).
 from __future__ import annotations
 
 import subprocess
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -150,6 +154,244 @@ def state_side_checks(project: str) -> list[ContractCheck]:
     ]
 
 
+@contextmanager
+def stub_http_server() -> Iterator[str]:
+    """A local one-route HTTP server, yielding its base URL.
+
+    `http_get` is an in-process httpx call, so checking it needs a real
+    listening socket. A local stub rather than a public URL keeps the
+    layer deterministic and offline (Property 2) — a check that fails
+    because someone's wifi dropped teaches nothing."""
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = b'{"contract": "ok"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: Any) -> None:
+            """Silence the default stderr access log."""
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # Read only the port: we bound 127.0.0.1 explicitly, and
+        # server_address[0] is typed str|bytes.
+        port = server.server_address[1]
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def http_checks(base_url: str) -> list[ContractCheck]:
+    return [
+        ContractCheck(
+            tool="http_get",
+            valid_args=lambda ctx: {"url": f"{base_url}/probe"},
+            side_effect=lambda res, ctx: _assert_contains(res, "contract"),
+            # Not a bad host (that's a network timeout, slow and flaky) —
+            # a URL the tool should reject before making any request.
+            invalid_args={"url": "not-a-url"},
+        )
+    ]
+
+
+def todo_checks() -> list[ContractCheck]:
+    """The todo lifecycle, each step on the row the previous one made."""
+    item = "contract fixture todo"
+    return [
+        ContractCheck(
+            tool="todo_add",
+            valid_args=lambda ctx: {"text": item},
+            side_effect=lambda res, ctx: _assert_todo(ctx, item, present=True),
+            invalid_args={"text": ""},
+        ),
+        ContractCheck(
+            tool="todo_done",
+            valid_args=lambda ctx: {"substring": item},
+            invalid_args={"substring": ""},
+        ),
+        ContractCheck(
+            tool="todo_remove",
+            valid_args=lambda ctx: {"substring": item},
+            side_effect=lambda res, ctx: _assert_todo(ctx, item, present=False),
+            invalid_args={"substring": ""},
+        ),
+        ContractCheck(
+            tool="todowrite",
+            valid_args=lambda ctx: {
+                "todos": [{"text": "contract fixture plan step", "status": "pending"}]
+            },
+            invalid_args={"todos": "not a list"},
+        ),
+    ]
+
+
+def cron_checks() -> list[ContractCheck]:
+    """Cron mutations. `cron_add` seeds the job the rest operate on, and
+    the ids are read back from the service so nothing hardcodes state."""
+    return [
+        ContractCheck(
+            tool="cron_add",
+            valid_args=lambda ctx: {
+                "text": "contract fixture reminder",
+                "schedule_spec": "in 2 hours",
+            },
+            side_effect=lambda res, ctx: _assert_cron(ctx, present=True),
+            invalid_args={"text": "x", "schedule_spec": "not a schedule at all"},
+        ),
+        ContractCheck(
+            tool="cron_pause",
+            valid_args=lambda ctx: {"id": _fixture_cron_id(ctx)},
+            invalid_args={"id": "no-such-job"},
+        ),
+        ContractCheck(
+            tool="cron_resume",
+            valid_args=lambda ctx: {"id": _fixture_cron_id(ctx)},
+            invalid_args={"id": "no-such-job"},
+        ),
+        ContractCheck(
+            tool="cron_update",
+            valid_args=lambda ctx: {
+                "id": _fixture_cron_id(ctx),
+                "text": "contract fixture reminder, edited",
+            },
+            invalid_args={"id": "no-such-job", "text": "x"},
+        ),
+        ContractCheck(
+            tool="cron_remove",
+            valid_args=lambda ctx: {"id": _fixture_cron_id(ctx)},
+            side_effect=lambda res, ctx: _assert_cron(ctx, present=False),
+            invalid_args={"id": "no-such-job"},
+        ),
+    ]
+
+
+def write_side_checks(project: str) -> list[ContractCheck]:
+    """Coverage only, per the scope note — prove they work, invest nothing.
+
+    They write into the fixture project, which is a temp tree, so nothing
+    here touches anything real."""
+    return [
+        ContractCheck(
+            tool="write_file",
+            valid_args=lambda ctx: {
+                "project": project,
+                "path": "contract.txt",
+                "content": "written by the contract suite\n",
+            },
+            invalid_args={"project": project, "path": "../escape.txt", "content": "x"},
+        ),
+        ContractCheck(
+            tool="edit_file",
+            valid_args=lambda ctx: {
+                "project": project,
+                "path": "contract.txt",
+                "old_str": "written",
+                "new_str": "edited",
+            },
+            invalid_args={
+                "project": project,
+                "path": "contract.txt",
+                "old_str": "string that is definitely not present",
+                "new_str": "x",
+            },
+        ),
+        ContractCheck(
+            tool="git_commit",
+            valid_args=lambda ctx: {"project": project, "message": "contract fixture commit"},
+            invalid_args={"project": "no-such-project", "message": "x"},
+        ),
+        ContractCheck(
+            tool="run_tests",
+            valid_args=lambda ctx: {"project": project},
+            # The fixture project has no tests; a non-zero exit is a
+            # legitimate tool result, not a contract violation, so only
+            # the error path is asserted here.
+            skip_reason=(
+                "needs a project with a real passing test command; the "
+                "fixture tree has none, and a failing test run is a valid "
+                "tool result rather than a contract breach"
+            ),
+        ),
+        ContractCheck(
+            tool="project_shell",
+            valid_args=lambda ctx: {"project": project, "command": "echo contract"},
+            invalid_args={"project": "no-such-project", "command": "echo x"},
+            known_broken=(
+                "needs a working POSIX shell. Git Bash on this host "
+                "intermittently fails to fork (cygwin Win32 error 299/5), and a "
+                "single failed boot probe is cached for the process lifetime, so "
+                "project_shell stays disabled until restart (spec task 25)"
+            ),
+        ),
+    ]
+
+
+def spec_checks(project: str) -> list[ContractCheck]:
+    """The spec tools read `.kiro/specs/`. The fixture project has none,
+    so an empty-but-clean result is the contract here."""
+    return [
+        ContractCheck(
+            tool="spec_list",
+            valid_args=lambda ctx: {"project": project},
+            invalid_args={"project": "no-such-project"},
+        ),
+        ContractCheck(
+            tool="spec_read",
+            valid_args=lambda ctx: {"project": project, "feature": "no-such-feature"},
+            skip_reason=(
+                "reading a nonexistent spec is the error path, and the fixture "
+                "tree has no .kiro/specs to read a real one from"
+            ),
+        ),
+        ContractCheck(
+            tool="spec_next_task",
+            valid_args=lambda ctx: {"project": project, "feature": "no-such-feature"},
+            skip_reason="same as spec_read: no fixture spec to advance",
+        ),
+        ContractCheck(
+            tool="spec_mark_task",
+            valid_args=lambda ctx: {
+                "project": project,
+                "feature": "no-such-feature",
+                "task_id": "1",
+            },
+            skip_reason="same as spec_read: no fixture spec to mark",
+        ),
+    ]
+
+
+def _assert_todo(ctx: Any, item: str, *, present: bool) -> None:
+    texts = [t.text for t in ctx.todos.read()]
+    if present:
+        assert any(item in t for t in texts), f"todo not stored: {texts!r}"
+    else:
+        assert not any(item in t for t in texts), f"todo still present after removal: {texts!r}"
+
+
+def _assert_cron(ctx: Any, *, present: bool) -> None:
+    jobs = [j for j in ctx.cron.list(include_disabled=True) if "contract fixture" in j.message]
+    if present:
+        assert jobs, "cron job was not created"
+    else:
+        assert not jobs, "cron job still present after removal"
+
+
+def _fixture_cron_id(ctx: Any) -> str:
+    """Look the fixture job's id up rather than hardcoding one."""
+    for job in ctx.cron.list(include_disabled=True):
+        if "contract fixture" in job.message:
+            return str(job.id)
+    raise AssertionError("fixture cron job missing — cron_add's check must run first")
+
+
 def git_side_checks(project: str) -> list[ContractCheck]:
     """Coverage only, per the scope note: prove they work, invest nothing."""
     return [
@@ -176,14 +418,19 @@ def _assert_lesson_present(result: Any, ctx: Any) -> None:
     assert "contract fixture lesson" in block, f"lesson not in store: {block[:200]!r}"
 
 
-def default_checks(project: str) -> list[ContractCheck]:
+def default_checks(project: str, *, http_base_url: str | None = None) -> list[ContractCheck]:
     """Every check this module knows about.
 
     Without a project, the file and git checks can't run at all — so they
     are *skipped with a reason*, not failed. A missing fixture says
     nothing about the tool, the same distinction the judged layer draws
     with unsupported/inconclusive."""
-    needs_project = [*read_side_checks(project), *git_side_checks(project)]
+    needs_project = [
+        *read_side_checks(project),
+        *git_side_checks(project),
+        *write_side_checks(project),
+        *spec_checks(project),
+    ]
     if not project:
         needs_project = [
             replace(
@@ -194,4 +441,21 @@ def default_checks(project: str) -> list[ContractCheck]:
             else c
             for c in needs_project
         ]
-    return [*needs_project, *state_side_checks(project)]
+    http = (
+        http_checks(http_base_url)
+        if http_base_url
+        else [
+            ContractCheck(
+                tool="http_get",
+                valid_args=lambda ctx: {},
+                skip_reason="no stub server supplied — see stub_http_server()",
+            )
+        ]
+    )
+    return [
+        *needs_project,
+        *state_side_checks(project),
+        *todo_checks(),
+        *cron_checks(),
+        *http,
+    ]
