@@ -95,15 +95,14 @@ The curated ordering - the judgment call a tool can't make for you.
   one prompt change. Note the judge already HAS internals — tool
   args/results, timeline, Tier-3 sent messages — so blindness was never
   the problem.
-- **Frontier explorer — the goal beyond that (spec drafted 2026-08-12).**
-  See [`frontier-explorer`](.kiro/specs/frontier-explorer/requirements.md).
-  Even un-anchored, the judge reads *one run*: it cannot form a
-  hypothesis, change one variable, and re-run — which is how every real
-  defect in the 2026-08-10..12 sessions was actually found. The explorer
-  gets `talk_to_fitt` + `inspect` verbs, missions instead of rubrics,
-  findings that must carry citable evidence, dedupe against
-  observed-issues, and a human-gated ratchet from confirmed finding to
-  permanent check. Scripted scenarios stay the regression floor.
+- **IDEA ONLY — an exploratory agent, someday.** Even un-anchored, the
+  judge reads *one run*: it can't form a hypothesis, change a variable and
+  re-run, which is how the defects in these sessions were actually found.
+  An agent with `talk_to_fitt` + `inspect` verbs and missions instead of
+  rubrics would close that. **Not planned, not specced** — a full spec was
+  drafted 2026-08-12 and withdrawn the same day as over-reach: the ask was
+  more coverage for the judge we have, not a second subsystem. Revisit
+  only if blind judging plus wider scenarios prove insufficient.
 - **Scenario coverage — now a spec, in progress.** Was 7 of 34 tools;
   see [`e2e-full-coverage`](.kiro/specs/e2e-full-coverage/tasks.md).
   Status 2026-08-12: **all 34 tools have a deterministic contract check**
