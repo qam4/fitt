@@ -18,6 +18,26 @@ from typing import Any
 from .config import fitt_home
 from .e2e_eval import DispatchFn, RunResult
 
+# Event kinds the push pipeline deliberately does NOT deliver, mirroring
+# `fitt_telegram_bot.event_pusher._SKIP_KINDS`. Approvals have their own
+# UI surface, and `cron_fired` is internal bookkeeping — the user hears
+# about a cron when it *finishes* (`cron_completed`), which is that
+# scenario's actual delivery channel. Kept here so an objective check can
+# ask "would the user have seen this?" instead of guessing at a channel;
+# guessing is what made a working cron look broken.
+_NOT_DELIVERED: frozenset[str] = frozenset(
+    {"approval_requested", "approval_resolved", "cron_fired"}
+)
+
+
+def _event_dict(e: Any) -> dict[str, Any]:
+    return {
+        "kind": str(getattr(e, "kind", "")),
+        "title": getattr(e, "title", ""),
+        "body": getattr(e, "body", ""),
+        "session_key": getattr(e, "session_key", ""),
+    }
+
 
 def snapshot_app(app: Any, *, session_id: str = "main", event_tail: int = 20) -> dict[str, Any]:
     """Read the relevant stores at run end into a JSON-able dict.
@@ -53,14 +73,27 @@ def snapshot_app(app: Any, *, session_id: str = "main", event_tail: int = 20) ->
     except OSError:
         snap["todos_text"] = ""
 
-    # Recent event kinds — coarse "what happened" signal.
+    # Recent event kinds — coarse "what happened" signal — plus the
+    # bodies of any agent_message events. `send_message` records delivery
+    # by appending an agent_message to the event log (the poller is a
+    # separate subscriber), so the event log *is* the delivery record: an
+    # assertion on "did FITT actually tell me?" reads this rather than
+    # mocking Telegram.
     events = getattr(app.state, "events", None)
     if events is not None:
         try:
             recent = events.read(limit=event_tail)
             snap["event_kinds"] = [getattr(e, "kind", None) for e in recent]
+            snap["agent_messages"] = [
+                _event_dict(e) for e in recent if getattr(e, "kind", None) == "agent_message"
+            ]
+            snap["deliveries"] = [
+                _event_dict(e) for e in recent if str(getattr(e, "kind", "")) not in _NOT_DELIVERED
+            ]
         except Exception:  # pragma: no cover - defensive
             snap["event_kinds"] = []
+            snap["agent_messages"] = []
+            snap["deliveries"] = []
 
     # The global [Learned corrections] block. Not a scenario target —
     # it's here because lessons are injected into EVERY system prompt

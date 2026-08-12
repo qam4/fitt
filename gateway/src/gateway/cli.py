@@ -1762,10 +1762,17 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
         "fed on stdin; a JSON verdict is read from stdout. PIN THE MODEL "
         "— a judge on 'auto' can silently change between runs, which "
         "invalidates any before/after comparison. Recommended: "
-        '"kiro-cli chat --no-interactive --model claude-sonnet-4.5" '
+        '"kiro-cli chat --no-interactive --model claude-sonnet-5" '
         "(strong reasoning for root-cause work, reliable JSON, and it "
-        "out-classes a local 8-14B DUT); use --model claude-haiku-4.5 for "
-        "cheap high-volume runs."
+        "out-classes a local 8-14B DUT). Check `kiro-cli chat "
+        "--list-models` before pinning: sonnet-5 costs the same 1.30x as "
+        "the older sonnet-4.5, so an inherited pin goes stale rather than "
+        "cheap. Use --model claude-haiku-4.5 (0.40x) for high-volume "
+        "sweeps, or claude-opus-5 (2.20x) when a verdict needs to be "
+        "trusted over the harness. Changing the judge invalidates "
+        "comparison with earlier runs, so re-measure every DUT after a "
+        "switch — the sidecar records the judge command so a mixed "
+        "matrix is at least detectable."
     ),
 )
 @click.option(
@@ -1939,6 +1946,17 @@ def eval_e2e_cmd(
         # Tier 3: capture the outgoing conversation per iteration. Safe
         # here because this run is fully isolated under a scratch home.
         cfg.record_llm_requests = True
+    # Any session FITT starts on its own — a cron job firing, for
+    # instance — resolves an empty agent_alias to `fitt-default`, or to
+    # the first alias in the map when that's absent. In a measurement run
+    # that silently sends the model-initiated half of the work to a
+    # different model than the DUT: the cron_fires scenario failed with
+    # "No reachable backend for alias 'fitt-local-qwen3'" while
+    # ostensibly measuring gemma4. Point the default at the DUT so the
+    # whole run measures one model.
+    # Unknown-alias validation already happened above, so this index is safe.
+    cfg.aliases = {**cfg.aliases, "fitt-default": cfg.aliases[dut]}
+
     cfg.memory = cfg.memory.model_copy(
         update={
             "identity_dir": iso_home / "identity",

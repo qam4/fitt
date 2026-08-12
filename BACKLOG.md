@@ -82,32 +82,23 @@ The curated ordering - the judgment call a tool can't make for you.
   3/7 and 4/7 on consecutive identical runs (`memory_recall` flipped).
   Single-sample cells in the standing matrix are indicative, not
   reliable; use `--samples` for anything load-bearing.
-- **Scenario coverage: 7 of 34 tools (measured 2026-08-12).** The seed
-  set covers the daily-use core and nothing else. Exercised: `cron_add`,
-  `web_search`, `todo_add`, `todo_done`, `memory_search`, `learn_add`,
-  `learn_list`. The standing matrix therefore says "the daily core works
-  on gemma4", NOT "FITT works". Ranked by daily-life payoff, using the
-  scope doc's own priorities:
-  1. **`send_message`** — the proactive half of the assistant ("ping me
-     when X"), completely untested. Needs a delivery sink the objective
-     check can read.
-  2. **Cron actually firing** — `cron_add` proves a job was *created*;
-     nothing proves one fires, runs its agent session, and delivers.
-     That's the whole monitor-and-notify promise. Wants a short-fuse job
-     plus a wait, or a forced tick.
-  3. **Read-mostly repo queries** — `grep_repo` / `read_file` /
-     `list_directory` / `glob_search`. Explicitly a core use case, and
-     the safe half of the tool surface.
-  4. **Cron management** — list / remove / pause / resume. Cancel needs
-     the setup hook (cancelled and never-created look identical).
-  5. **`http_get`** status checks, `todo_list` / `todo_remove`,
-     `learn_remove`.
-  Deliberately NOT priorities: `write_file` / `edit_file` /
-  `project_shell` / `git_*` (FITT is not a coding agent) and `spec_*`
-  (Phase 6 reshaped).
-  Untested surfaces beyond tools: the approval flow (ask -> Telegram
-  tap), the Telegram interface, the skills loader, planned-mode
-  orchestration, prefetch.
+- **Scenario coverage — now a spec, in progress.** Was 7 of 34 tools;
+  see [`e2e-full-coverage`](.kiro/specs/e2e-full-coverage/tasks.md).
+  Status 2026-08-12: **all 34 tools have a deterministic contract check**
+  (`fitt eval contracts`, no model or tunnel needed) and the judged set
+  is **9 scenarios** — the original 7 plus `notify` (proactive push,
+  passes on gemma4) and `cron_fires` (a job actually firing and
+  delivering). Remaining in that spec: cron cancel/pause, repo-query
+  scenarios, the approval flow (ask -> approve/reject/timeout), the
+  skills loader, planned-mode orchestration, prefetch, and Telegram
+  command handling.
+- **`<|tool_response>` leaking into a user-visible reply.** gemma4's
+  reply after a successful `cron_add` was the literal string
+  `<|tool_response>` — a raw chat-template token. The tool worked and the
+  objective check passed on the side effect, but the user would see
+  garbage. Not yet separated: model emitting a stray token vs FITT
+  failing to strip one. A reply consisting only of template tokens is
+  cheap to detect and suppress, and worth doing regardless of cause.
 - **Scenario cross-talk (small, will bite again).** Scenarios share one
   run home, so lessons / todos / crons / the index carry side effects
   between them — a `learn_add` in one scenario handed a later scenario

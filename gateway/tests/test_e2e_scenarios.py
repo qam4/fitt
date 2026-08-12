@@ -7,9 +7,11 @@ from datetime import UTC, datetime
 from gateway.e2e_eval import E2ETrajectory, RunResult
 from gateway.e2e_scenarios import (
     chitchat_scenario,
+    cron_fires_scenario,
     memory_recall_cross_session_scenario,
     memory_recall_scenario,
     news_scenario,
+    notify_scenario,
     reminder_scenario,
     seed_scenarios,
     todo_lifecycle_scenario,
@@ -288,6 +290,8 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
     assert {s.name for s in scens} == {
         "chitchat",
         "reminder",
+        "cron_fires",
+        "notify",
         "news_summary",
         "memory_recall",
         "memory_recall_cross_session",
@@ -299,3 +303,128 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
     # memory_recall and todo_lifecycle are multi-turn.
     assert len(memory_recall_scenario().turns) == 2
     assert len(todo_lifecycle_scenario().turns) == 2
+
+
+# --------------------------------------------------------------- notify
+
+
+def test_notify_passes_when_a_message_was_actually_delivered() -> None:
+    """Delivery is the agent_message event, not the reply text."""
+    scen = notify_scenario(keyword="basting")
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="Done, sent it.",
+            snapshot={"agent_messages": [{"title": "Reminder", "body": "The roast needs basting"}]},
+        )
+    )
+
+    assert res.passed
+
+
+def test_notify_fails_when_the_model_only_claims_to_have_sent() -> None:
+    """The failure mode worth catching: a confident reply, no delivery."""
+    scen = notify_scenario(keyword="basting")
+
+    res = scen.outcome_assert(
+        _traj(reply="I've sent that to your phone!", snapshot={"agent_messages": []})
+    )
+
+    assert not res.passed
+    assert "never fired" in res.reason
+
+
+def test_notify_fails_when_a_message_went_out_with_the_wrong_content() -> None:
+    scen = notify_scenario(keyword="basting")
+
+    res = scen.outcome_assert(
+        _traj(reply="sent", snapshot={"agent_messages": [{"title": "", "body": "hello there"}]})
+    )
+
+    assert not res.passed
+    assert "none mentioning" in res.reason
+
+
+# --------------------------------------------------------------- cron fires
+
+
+def test_cron_fires_passes_when_the_job_ran_and_delivered() -> None:
+    """A cron's notification IS its cron_completed event — the fired
+    session's reply. Requiring an agent_message instead made a working
+    cron read as broken on the first live run."""
+    scen = cron_fires_scenario(keyword="stretch")
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "event_kinds": ["cron_fired", "cron_completed"],
+                "deliveries": [
+                    {"kind": "cron_completed", "title": "cron", "body": "time to stretch"}
+                ],
+            }
+        )
+    )
+
+    assert res.passed
+
+
+def test_cron_fires_ignores_undelivered_bookkeeping_events() -> None:
+    """cron_fired is skipped by the push pipeline, so its presence is not
+    delivery — the snapshot's `deliveries` slice must exclude it."""
+    scen = cron_fires_scenario(keyword="stretch")
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "event_kinds": ["cron_fired", "cron_completed"],
+                # A cron_fired mentioning the keyword must not count.
+                "deliveries": [{"kind": "cron_completed", "title": "cron", "body": "done"}],
+            }
+        )
+    )
+
+    assert not res.passed
+
+
+def test_cron_fires_fails_when_the_job_was_only_created() -> None:
+    """The gap this scenario exists for: reminder_scenario proves a job
+    was created, which is not the same as it ever running."""
+    scen = cron_fires_scenario(keyword="stretch")
+
+    res = scen.outcome_assert(_traj(snapshot={"event_kinds": ["cron_created"]}))
+
+    assert not res.passed
+    assert "never ran" in res.reason
+
+
+def test_cron_fires_distinguishes_a_failed_session_from_no_fire() -> None:
+    scen = cron_fires_scenario(keyword="stretch")
+
+    res = scen.outcome_assert(
+        _traj(snapshot={"event_kinds": ["cron_fired", "cron_failed"], "deliveries": []})
+    )
+
+    assert not res.passed
+    assert "session failed" in res.reason
+
+
+def test_cron_fires_fails_when_it_fired_but_delivered_nothing() -> None:
+    scen = cron_fires_scenario(keyword="stretch")
+
+    res = scen.outcome_assert(
+        _traj(snapshot={"event_kinds": ["cron_fired", "cron_completed"], "deliveries": []})
+    )
+
+    assert not res.passed
+    assert "delivered" in res.reason
+
+
+def test_cron_fires_declares_a_settle_hook() -> None:
+    """Without forcing a tick the scenario would have to sleep, which the
+    harness never does."""
+    assert cron_fires_scenario().settle is not None
+
+
+def test_new_scenarios_declare_their_coverage_intent() -> None:
+    assert notify_scenario().exercises_tools == ("send_message",)
+    assert cron_fires_scenario().exercises_tools == ("cron_add",)

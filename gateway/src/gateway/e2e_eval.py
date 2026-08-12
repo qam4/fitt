@@ -222,6 +222,28 @@ class TaskScenario:
     unsupported reason, per Principle 8: when a capability is missing,
     say what's missing AND how to add it."""
 
+    exercises_tools: tuple[str, ...] = ()
+    """Which tools this scenario is *meant* to drive — coverage intent,
+    distinct from ``requires_tools`` (what must exist for it to run).
+
+    Intent is not evidence: a model that ignores the tool leaves it
+    unproven, so the coverage report counts intent while the matrix cell
+    shows what actually happened. Both numbers are only honest
+    together."""
+
+    settle: SetupFn | None = None
+    """Optional hook that runs *after* the turns and *before* the
+    snapshot, to let scheduled work happen.
+
+    Needed because not everything FITT does is a reply to a turn. A cron
+    job fires on a scheduler tick, so "did the reminder actually fire and
+    get delivered?" can't be observed by dispatching turns and looking:
+    something has to advance the clock. This hook forces one tick and
+    awaits the firings, which is why the harness never sleeps.
+
+    Same failure discipline as ``setup``: if settling raises, the result
+    is inconclusive rather than a model verdict."""
+
     setup: SetupFn | None = None
     """Optional hook that plants state *before* the turns run, with the
     model out of the loop.
@@ -303,11 +325,17 @@ async def run_scenario(
         return _not_scored(scenario, reason, inconclusive=False)
 
     if scenario.setup is not None:
-        problem = await _run_setup(scenario, setup_context)
+        problem = await _run_hook(scenario.setup, setup_context, label="setup")
         if problem is not None:
             return _not_scored(scenario, problem, inconclusive=True)
 
     run = await dispatch(scenario.turns)
+
+    if scenario.settle is not None:
+        problem = await _run_hook(scenario.settle, setup_context, label="settle")
+        if problem is not None:
+            return _not_scored(scenario, problem, inconclusive=True)
+
     snap = snapshot()
     traj = E2ETrajectory(scenario=scenario.name, turns=list(scenario.turns), run=run, snapshot=snap)
 
@@ -352,22 +380,21 @@ async def run_scenario(
     return E2EResult(scenario=scenario.name, trajectory=traj, outcome=outcome, verdict=verdict)
 
 
-async def _run_setup(scenario: TaskScenario, ctx: SetupContext | None) -> str | None:
-    """Run the scenario's setup hook. Returns a reason on failure.
+async def _run_hook(hook: SetupFn, ctx: SetupContext | None, *, label: str) -> str | None:
+    """Run a setup/settle hook. Returns a reason on failure.
 
     A missing context is a wiring bug in the runner, and a raising hook
     is a broken precondition; either way the run can't test what it
     claims, so both come back as reasons rather than exceptions."""
     if ctx is None:
         return (
-            "scenario declares a setup hook but the runner supplied no "
-            "setup context, so the precondition was never planted"
+            f"scenario declares a {label} hook but the runner supplied no "
+            f"setup context, so the {label} step never ran"
         )
-    assert scenario.setup is not None
     try:
-        await scenario.setup(ctx)
+        await hook(ctx)
     except Exception as exc:
-        return f"scenario setup failed ({type(exc).__name__}: {exc}) — precondition not planted"
+        return f"scenario {label} failed ({type(exc).__name__}: {exc})"
     return None
 
 
@@ -524,6 +551,32 @@ def result_status(result: E2EResult) -> str:
     return "scored"
 
 
+UNPINNED_JUDGE = "unpinned"
+"""Recorded when the judge command names no model, so the run used
+whatever the CLI's default resolves to. Such a verdict can't be compared
+across runs — the default moves under you."""
+
+
+def judge_model_from_command(command: str | None) -> str | None:
+    """Pull the judge's model out of its command line.
+
+    Recorded as its own field rather than left implicit in the command
+    string, so the standing view can state which model produced a
+    verdict without anyone parsing a shell line by eye. ``None`` means no
+    judge ran; ``UNPINNED_JUDGE`` means one ran on the CLI's default."""
+    if not command:
+        return None
+    parts = command.split()
+    for i, part in enumerate(parts):
+        if part == "--model" and i + 1 < len(parts):
+            model = parts[i + 1]
+            return UNPINNED_JUDGE if model == "auto" else model
+        if part.startswith("--model="):
+            model = part.split("=", 1)[1]
+            return UNPINNED_JUDGE if model == "auto" else model
+    return UNPINNED_JUDGE
+
+
 def report_to_dict(
     report: E2EReport,
     *,
@@ -547,6 +600,7 @@ def report_to_dict(
         "ts": ts or datetime.now(UTC).isoformat(timespec="seconds"),
         "samples": samples,
         "judge_command": judge_command,
+        "judge_model": judge_model_from_command(judge_command),
         "objective_passed": report.objective_passed,
         "total": report.total,
         "judged": report.judged,

@@ -14,6 +14,7 @@ did the model call memory_search and surface the earlier fact). The
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime
 
 from .e2e_eval import E2ETrajectory, OutcomeResult, SetupContext, TaskScenario
@@ -236,6 +237,145 @@ def memory_recall_cross_session_scenario(
     )
 
 
+def _notify_assert(keyword: str):  # type: ignore[no-untyped-def]
+    """Delivery is an ``agent_message`` event, not a reply.
+
+    `send_message` records what it sent in the event log; the Telegram
+    poller is a separate subscriber to that log. So the objective check
+    reads the log — which also means a model that *says* "I've messaged
+    you" without calling the tool fails, which is the whole point."""
+
+    def _a(traj: E2ETrajectory) -> OutcomeResult:
+        messages = traj.snapshot.get("agent_messages", [])
+        for m in messages:
+            body = f"{m.get('title', '')} {m.get('body', '')}".lower()
+            if keyword.lower() in body:
+                return OutcomeResult(True, f"agent_message delivered mentioning {keyword!r}")
+        if messages:
+            return OutcomeResult(
+                False, f"{len(messages)} message(s) sent, none mentioning {keyword!r}"
+            )
+        return OutcomeResult(False, "send_message never fired — nothing was delivered")
+
+    return _a
+
+
+def notify_scenario(*, keyword: str = "basting") -> TaskScenario:
+    """Proactive delivery: the model must actually push a message.
+
+    This is the half of FITT's purpose the seed set never tested — "ping
+    me when X". Claiming to have sent something is the failure mode worth
+    catching, so the check reads the delivery record rather than the
+    reply text."""
+    return TaskScenario(
+        name="notify",
+        turns=[
+            {
+                "role": "user",
+                "content": (
+                    "Send me a message on my phone reminding me that the roast needs basting."
+                ),
+            }
+        ],
+        outcome_assert=_notify_assert(keyword),
+        rubric=(
+            "Did the assistant actually send a push message (not merely promise "
+            "to), and confirm it briefly?"
+        ),
+        exercises_tools=("send_message",),
+    )
+
+
+def _cron_fired_assert(keyword: str):  # type: ignore[no-untyped-def]
+    """A cron that was *created* proves nothing; this checks it fired.
+
+    The settle hook forces a scheduler tick, so by snapshot time a due
+    job should have produced a ``cron_fired`` event and, because the job
+    text asks for a message, an ``agent_message`` too."""
+
+    def _a(traj: E2ETrajectory) -> OutcomeResult:
+        kinds = [str(k) for k in traj.snapshot.get("event_kinds", [])]
+        fired = "cron_fired" in kinds
+        failed = "cron_failed" in kinds
+        # "Delivered" means the push pipeline would have sent it. For a
+        # cron that is the `cron_completed` event, NOT an agent_message:
+        # the fired session's reply *is* the notification. Checking only
+        # for agent_message made a working cron read as broken.
+        delivered = any(
+            keyword.lower() in f"{d.get('title', '')} {d.get('body', '')}".lower()
+            for d in traj.snapshot.get("deliveries", [])
+        )
+        if not fired:
+            return OutcomeResult(
+                False,
+                "no cron_fired event — the job never ran "
+                f"(events seen: {sorted(set(kinds)) or 'none'})",
+            )
+        if failed:
+            return OutcomeResult(False, "the job fired but its session failed (cron_failed)")
+        if not delivered:
+            return OutcomeResult(
+                False, f"cron fired but nothing mentioning {keyword!r} was delivered"
+            )
+        return OutcomeResult(True, f"cron fired and delivered a message mentioning {keyword!r}")
+
+    return _a
+
+
+def _force_cron_tick(seconds_ahead: float = 3600.0):  # type: ignore[no-untyped-def]
+    """Settle hook: fire anything due within ``seconds_ahead``.
+
+    Ticks the scheduler at a *virtual* future time and awaits the firing
+    tasks it launches, instead of sleeping until the job is due. Sleeping
+    would make the scenario slow, flaky, and dependent on how the model
+    phrased the schedule."""
+
+    async def _settle(ctx: SetupContext) -> None:
+        import time
+
+        scheduler = getattr(ctx.app.state, "cron_scheduler", None)
+        if scheduler is None:
+            raise RuntimeError("no cron_scheduler on app.state — cannot force a tick")
+        await scheduler.tick(now=time.time() + seconds_ahead)
+        # Await the firings this tick launched, or the snapshot races the
+        # agent session. Copy defensively: _in_flight mutates as tasks
+        # finish.
+        for task in list(getattr(scheduler, "_in_flight", {}).values()):
+            if not task.done():
+                with contextlib.suppress(Exception):
+                    await task
+
+    return _settle
+
+
+def cron_fires_scenario(*, keyword: str = "stretch") -> TaskScenario:
+    """The monitor-and-notify promise, end to end.
+
+    `reminder_scenario` only proves a job was created. This one asks for a
+    reminder, forces the clock forward, and checks the job actually fired
+    and delivered — the thing an operator is trusting when they leave FITT
+    running."""
+    return TaskScenario(
+        name="cron_fires",
+        turns=[
+            {
+                "role": "user",
+                "content": (
+                    "In 10 minutes, send me a message telling me to stretch. "
+                    "Set it as a one-off reminder."
+                ),
+            }
+        ],
+        settle=_force_cron_tick(),
+        outcome_assert=_cron_fired_assert(keyword),
+        rubric=(
+            "Did the assistant confirm it set a one-off reminder about stretching "
+            "for ~10 minutes' time?"
+        ),
+        exercises_tools=("cron_add",),
+    )
+
+
 def _todo_assert(item: str):  # type: ignore[no-untyped-def]
     def _a(traj: E2ETrajectory) -> OutcomeResult:
         text = str(traj.snapshot.get("todos_text", ""))
@@ -323,6 +463,8 @@ def seed_scenarios() -> list[TaskScenario]:
     return [
         chitchat_scenario(),
         reminder_scenario(),
+        cron_fires_scenario(),
+        notify_scenario(),
         news_scenario(),
         memory_recall_scenario(),
         memory_recall_cross_session_scenario(),

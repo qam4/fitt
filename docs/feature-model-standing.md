@@ -8,8 +8,10 @@ hand-editing this file.
 |---|---|---|---|
 | chitchat | pass | pass | pass |
 | reminder | pass | FAIL | pass |
+| cron_fires | pass | pass | pass |
+| notify | pass | FAIL | pass |
 | news_summary | pass | FAIL | pass |
-| memory_recall | pass | pass | pass |
+| memory_recall | pass | FAIL | pass |
 | memory_recall_cross_session | pass | FAIL | FAIL |
 | todo | pass | pass | pass |
 | todo_lifecycle | pass | pass | pass |
@@ -18,6 +20,6 @@ Legend: `pass` objective check passed · `FAIL` failed · `n/a` feature not avai
 
 Runs folded in (latest per model):
 
-- `fitt-ec2-gemma4` (gemma4:12b-it-qat) — 2026-08-12T14:53:29+00:00, samples=1, objective 7/7, judge: kiro-cli chat --no-interactive --model claude-sonnet-4.5
-- `fitt-ec2-hermes` (hermes3:8b) — 2026-08-12T14:48:35+00:00, samples=1, objective 4/7, judge: kiro-cli chat --no-interactive --model claude-sonnet-4.5
-- `fitt-ec2-qwen3` (qwen3:14b) — 2026-08-11T22:26:25+00:00, samples=1, objective 6/7, judge: kiro-cli chat --no-interactive --model claude-sonnet-4.5
+- `fitt-ec2-gemma4` (gemma4:12b-it-qat) — 2026-08-12T19:10:05+00:00, samples=1, objective 9/9, judge: claude-sonnet-5
+- `fitt-ec2-hermes` (hermes3:8b) — 2026-08-12T19:31:07+00:00, samples=1, objective 4/9, judge: claude-sonnet-5
+- `fitt-ec2-qwen3` (qwen3:14b) — 2026-08-12T19:21:39+00:00, samples=1, objective 8/9, judge: claude-sonnet-5

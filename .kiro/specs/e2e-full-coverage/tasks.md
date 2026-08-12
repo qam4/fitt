@@ -67,14 +67,33 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase C — Proactive behaviour (judged)
 
-- [ ] 11. Recording message sink on app.state + `sent_messages` in
-  `snapshot_app`. (D3; R3.1)
-- [ ] 12. `send_message` scenario ("tell me X on Telegram") with an
-  objective check reading the sink. (R3.1)
-- [ ] 13. Cron-fires scenario: setup hook pre-creates a job, forced tick,
-  assert it ran + delivered via the sink. No sleeping. (D4; R3.2)
+- [x] 11. **No sink needed — D3 was wrong.** `send_message` already
+  records delivery by appending an `agent_message` event to the event
+  log; the Telegram poller is a separate subscriber to that log. So the
+  log *is* the delivery record. `snapshot_app` now captures
+  `agent_messages` (title/body/session) instead. DONE 2026-08-12.
+- [x] 12. `notify` scenario: "send me a message on my phone reminding
+  me...". Objective check reads the delivery record, so a model that
+  merely *claims* to have sent fails. DONE 2026-08-12. **Live: gemma4
+  PASSES** (send_message:ok, judge 1.00) — proactive push verified for
+  the first time.
+- [x] 13. `cron_fires` scenario + `TaskScenario.settle`, a new hook that
+  runs after the turns and before the snapshot. A cron fires on a
+  scheduler tick, not in response to a turn, so the hook forces
+  `cron_scheduler.tick(now=+1h)` and awaits the firings — no sleeping.
+  Distinguishes never-fired / fired-but-session-failed / fired-but-
+  delivered-nothing. DONE 2026-08-12; first live run found a harness
+  confound (task 26), re-measuring.
 - [ ] 14. Cron cancel/pause scenarios using the setup hook, so
   cancelled is distinguishable from never-created. (R3.3)
+- [x] 26. **Pin `fitt-default` to the DUT during an eval run.** Found by
+  task 13's first live run: a cron job with no explicit `agent_alias`
+  resolves to `fitt-default`, or to the *first alias in the map* when
+  that's absent — `fitt-local-qwen3` in the dev config. So the chat turn
+  was measured on gemma4 while the model-initiated half of the work went
+  to an unreachable local model (`cron_failed: NoBackendAvailable`).
+  Any future scenario where FITT starts its own session would have been
+  mismeasured the same way. DONE 2026-08-12.
 
 ## Phase D — Read-mostly project queries (judged)
 

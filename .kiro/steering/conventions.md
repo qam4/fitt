@@ -5,6 +5,27 @@ description: Coding and tooling conventions for FITT
 
 # Conventions
 
+## Long-running jobs (kiro-monitor)
+
+Pass an explicit output directory **inside the workspace** — use
+`output/<job-id>` — rather than letting runs land in
+`~/.kiro-monitor/runs/`. Logs and status for a run belong where the
+work is, so they're visible in the editor's file tree alongside the code
+that produced them:
+
+```
+kiro-monitor output/<job-id> <hang_timeout_min> --job-id <job-id> -- <cmd...>
+```
+
+**The job id names the kind of work, not the occasion.** `e2e-eval`,
+`pytest`, `build` — stable ids, reused every time that job runs, so a
+rerun overwrites the previous status and log. Do NOT mint
+`e2e-eval2`, `e2e-eval3`: one folder per kind of job stays scannable,
+whereas per-invocation ids sprawl and bury which one is current. If a
+particular run's log needs keeping, copy it out deliberately.
+
+`output/` is gitignored — these are run artifacts, not source.
+
 ## Python tooling
 
 - **uv** manages Python, virtualenv, and dependencies. `uv sync`,

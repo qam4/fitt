@@ -142,9 +142,11 @@ def render_standing(standing: Standing) -> str:
         "Runs folded in (latest per model):",
         "",
     ]
+    judges: set[str] = set()
     for dut in standing.duts:
         run = standing.runs[dut]
-        judge = run.get("judge_command") or "no judge"
+        judge = run.get("judge_model") or ("unknown" if run.get("judge_command") else "no judge")
+        judges.add(str(judge))
         lines.append(
             f"- `{dut}`"
             + (f" ({run['model']})" if run.get("model") else "")
@@ -152,6 +154,23 @@ def render_standing(standing: Standing) -> str:
             + f"objective {run.get('objective_passed', '?')}/{run.get('total', '?')}, "
             + f"judge: {judge}"
         )
+
+    graded = judges - {"no judge"}
+    if len(graded) > 1:
+        lines += [
+            "",
+            "Judge verdicts in this table came from more than one model "
+            f"({', '.join(sorted(graded))}), so the *judge* columns aren't "
+            "comparable across models. Objective results are unaffected — "
+            "they never involve a judge.",
+        ]
+    if "unpinned" in graded:
+        lines += [
+            "",
+            "At least one run used an unpinned judge (`--model auto`), whose "
+            "default moves between runs. Re-run it with an explicit model "
+            "before citing its judge score.",
+        ]
 
     stale = standing.stale_duts()
     if stale:

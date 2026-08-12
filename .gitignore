@@ -58,3 +58,6 @@ desktop.ini
 # Open WebUI bind-mount data (chat history, admin account)
 open-webui-data/
 .aider*
+
+# kiro-monitor run artifacts (status.json + output.log per job)
+output/

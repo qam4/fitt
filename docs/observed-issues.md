@@ -33,6 +33,64 @@ doc.
 
 ---
 
+## Proactive behaviour: send_message works, cron firing was mismeasured
+
+**First observed:** 2026-08-12, first run of the `notify` and
+`cron_fires` scenarios.
+**Tag:** eval correctness / cron / proactive notification.
+**Status:** `notify` PASSES live on gemma4. The `fitt-default` confound
+is fixed; cron firing is being re-measured. The `<|tool_response>` leak
+below is open.
+
+Two scenarios were added for the half of FITT's purpose the seed set
+never touched — "ping me when X":
+
+- **`notify`** asks for a push message. The objective check reads the
+  delivery record (an `agent_message` event) rather than the reply, so a
+  model that *says* "I've sent that to your phone" without calling the
+  tool fails. gemma4 passes it: `send_message:ok`, judge 1.00. **This is
+  the first verification that proactive push works at all.**
+- **`cron_fires`** goes past `reminder`, which only proves a job was
+  *created*. It forces a scheduler tick (via the new `settle` hook) and
+  checks the job ran, its session completed, and something was
+  delivered.
+
+### The confound: an eval run was measuring two different models
+
+`cron_fires` failed its first run with
+
+```
+cron_failed: NoBackendAvailable: No reachable backend for alias
+'fitt-local-qwen3'. Attempted: qwen3-8b-local
+```
+
+The job fired correctly — so the forced tick works — but its agent
+session ran against `fitt-local-qwen3`, not the DUT. A cron job with an
+empty `agent_alias` resolves to `fitt-default`, and when that's absent,
+to *the first alias in the config map*. The dev config has no
+`fitt-default`, so the first entry won: an unreachable local model.
+
+The scenario was therefore measuring gemma4 for the chat turn and
+something else entirely for the fired session. This would have silently
+mismeasured **any** scenario where FITT starts its own session, not just
+this one. Fixed by pinning `fitt-default` to the DUT in the eval's
+isolated config.
+
+Worth noting FITT itself behaved well here: the error named the alias and
+the model it tried, which is what made a five-minute diagnosis possible.
+
+### Open: `<|tool_response>` leaking into replies
+
+On the same run, gemma4's user-visible reply after a successful
+`cron_add` was the literal string `<|tool_response>` — a raw chat-template
+token. The tool call succeeded and the objective check passed on side
+effect, but a user would see garbage. Two candidate causes, not yet
+separated: the model emitting a stray special token, or FITT failing to
+strip one. Backlogged; a reply consisting solely of template tokens is
+also a cheap thing to detect and suppress.
+
+---
+
 ## Two Windows defects found on the tool-contract layer's first run
 
 **First observed:** 2026-08-12, first run of `fitt eval contracts`.
@@ -106,14 +164,26 @@ user.
 is that the standing is a *generated artifact* — a table typed into a
 doc drifts the moment a scenario is added or a model re-measured.
 
-Where things stand on the 7 seed scenarios (single sample each, Tier-1
-judge pinned to claude-sonnet-4.5, `--exclusive`):
+Where things stand on the 9 seed scenarios (single sample each, Tier-1
+judge pinned to claude-sonnet-5, `--exclusive`):
 
 | DUT | objective | only failures |
 |---|---|---|
-| gemma4:12b-it-qat | **7/7** | none |
-| qwen3:14b | 6/7 | cross-session recall |
-| hermes3:8b | 3-4/7 | reminder, news_summary, cross-session recall |
+| gemma4:12b-it-qat | **9/9** | none |
+| qwen3:14b | 8/9 | cross-session recall |
+| hermes3:8b | 4/9 | reminder, notify, news_summary, both recalls |
+
+`cron_fires` and `notify` pass on **all three** models, so proactive
+notification and cron firing work end to end regardless of model choice —
+the two capabilities that had never been tested at all.
+
+The judge model is part of the measurement: it's recorded per run
+(`judge_model` in the sidecar) and the standing view warns when folded
+runs disagree, or when a run used `--model auto`. Switching it
+invalidates judge scores but never objective ones. Check
+`kiro-cli chat --list-models` before pinning — this table was graded by
+claude-sonnet-4.5 for a while purely because the pin was inherited, while
+claude-sonnet-5 costs the same 1.30x.
 
 The result worth the whole investigation: **gemma4 — the model that
 started at 0/6 and looked broken — is now the best of the three, a 12B

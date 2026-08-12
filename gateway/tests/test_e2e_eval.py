@@ -46,6 +46,7 @@ def _scenario(
     rubric: str = "",
     requires_tools: tuple[str, ...] = (),
     setup: Any = None,
+    settle: Any = None,
 ) -> TaskScenario:
     return TaskScenario(
         name=name,
@@ -54,6 +55,7 @@ def _scenario(
         rubric=rubric,
         requires_tools=requires_tools,
         setup=setup,
+        settle=settle,
     )
 
 
@@ -501,3 +503,75 @@ async def test_prerequisite_check_precedes_setup() -> None:
 
     assert not setup_ran
     assert res.unsupported is not None
+
+
+# ------------------------------------------- settle hooks
+#
+# Not everything FITT does is a reply to a turn: a cron job fires on a
+# scheduler tick, so "did the reminder actually fire?" needs the clock
+# advanced between the turns and the snapshot. The alternative is
+# sleeping, which is slow, flaky, and forbidden by the steering rules.
+
+
+async def test_settle_runs_after_the_turns_and_before_the_snapshot() -> None:
+    order: list[str] = []
+
+    async def _dispatch_fn(turns: list[dict[str, Any]]) -> RunResult:
+        order.append("dispatch")
+        return RunResult(reply="ok")
+
+    async def _settle(ctx: SetupContext) -> None:
+        order.append("settle")
+
+    def _snapshot_fn() -> dict[str, Any]:
+        order.append("snapshot")
+        return {}
+
+    res = await run_scenario(
+        _scenario(settle=_settle),
+        dispatch=_dispatch_fn,
+        snapshot=_snapshot_fn,
+        setup_context=SetupContext(app=object(), session_id="e2e-x-0"),
+    )
+
+    assert order == ["dispatch", "settle", "snapshot"]
+    assert res.scored
+
+
+async def test_failing_settle_is_inconclusive_not_a_model_failure() -> None:
+    async def _settle(ctx: SetupContext) -> None:
+        raise RuntimeError("no cron_scheduler on app.state")
+
+    res = await run_scenario(
+        _scenario(settle=_settle, rubric="grade me"),
+        dispatch=_dispatch("ok"),
+        snapshot=_snapshot({}),
+        setup_context=SetupContext(app=object(), session_id="e2e-x-0"),
+    )
+
+    assert res.inconclusive is not None
+    assert "no cron_scheduler" in res.inconclusive
+    assert not res.verdict.judged
+
+
+async def test_setup_and_settle_both_run_in_order() -> None:
+    order: list[str] = []
+
+    async def _setup(ctx: SetupContext) -> None:
+        order.append("setup")
+
+    async def _settle(ctx: SetupContext) -> None:
+        order.append("settle")
+
+    async def _dispatch_fn(turns: list[dict[str, Any]]) -> RunResult:
+        order.append("dispatch")
+        return RunResult(reply="ok")
+
+    await run_scenario(
+        _scenario(setup=_setup, settle=_settle),
+        dispatch=_dispatch_fn,
+        snapshot=_snapshot({}),
+        setup_context=SetupContext(app=object(), session_id="e2e-x-0"),
+    )
+
+    assert order == ["setup", "dispatch", "settle"]

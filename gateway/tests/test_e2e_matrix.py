@@ -39,6 +39,7 @@ def _run(
         "ts": ts,
         "samples": 1,
         "judge_command": "kiro-cli chat --model claude-sonnet-4.5",
+        "judge_model": "claude-sonnet-4.5",
         "objective_passed": sum(1 for _, st, o in scenarios if st == "scored" and o == "pass"),
         "total": sum(1 for _, st, _ in scenarios if st == "scored"),
         "scenarios": [
@@ -161,3 +162,60 @@ def test_load_sidecars_orders_oldest_first(tmp_path: Path) -> None:
 
 def test_missing_eval_dir_is_empty_not_an_error(tmp_path: Path) -> None:
     assert load_sidecars(tmp_path / "nope") == []
+
+
+# ------------------------------------------- judge provenance
+#
+# The judge model is part of the measurement: switching it changes the
+# quality scores, so the standing view has to say which model produced
+# which verdict rather than leaving it implicit in a shell string.
+
+
+def test_judge_model_is_extracted_from_the_command() -> None:
+    from gateway.e2e_eval import judge_model_from_command
+
+    assert (
+        judge_model_from_command("kiro-cli chat --no-interactive --model claude-sonnet-5")
+        == "claude-sonnet-5"
+    )
+    assert judge_model_from_command("kiro-cli chat --model=claude-haiku-4.5") == "claude-haiku-4.5"
+
+
+def test_auto_and_missing_model_are_recorded_as_unpinned() -> None:
+    """An unpinned judge's default moves between runs, so it can't back a
+    comparison — the sidecar must say so rather than look specific."""
+    from gateway.e2e_eval import UNPINNED_JUDGE, judge_model_from_command
+
+    assert judge_model_from_command("kiro-cli chat --model auto") == UNPINNED_JUDGE
+    assert judge_model_from_command("kiro-cli chat --no-interactive") == UNPINNED_JUDGE
+
+
+def test_no_judge_command_means_no_judge_model() -> None:
+    from gateway.e2e_eval import judge_model_from_command
+
+    assert judge_model_from_command(None) is None
+    assert judge_model_from_command("") is None
+
+
+def test_render_warns_when_judges_differ_between_models() -> None:
+    old = _run("qwen3", [("todo", "scored", "pass")])
+    old["judge_model"] = "claude-sonnet-4.5"
+    new = _run("gemma4", [("todo", "scored", "pass")])
+    new["judge_model"] = "claude-sonnet-5"
+
+    rendered = render_standing(build_standing([old, new]))
+
+    assert "more than one model" in rendered
+    assert "claude-sonnet-4.5" in rendered
+    assert "claude-sonnet-5" in rendered
+    # Objective results survive a judge change; say so.
+    assert "Objective results are unaffected" in rendered
+
+
+def test_render_flags_an_unpinned_judge() -> None:
+    run = _run("qwen3", [("todo", "scored", "pass")])
+    run["judge_model"] = "unpinned"
+
+    rendered = render_standing(build_standing([run]))
+
+    assert "unpinned judge" in rendered
