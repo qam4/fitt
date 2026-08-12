@@ -33,6 +33,45 @@ doc.
 
 ---
 
+## Two Windows defects found on the tool-contract layer's first run
+
+**First observed:** 2026-08-12, first run of `fitt eval contracts`.
+**Tag:** Windows / read-side tools / deployment neutrality.
+**Status:** both open, tracked as tasks 24-25 in
+`.kiro/specs/e2e-full-coverage/tasks.md`. `glob_search` is marked
+`known_broken` in the suite so it stays visible without failing CI.
+
+The deterministic contract layer (call each tool directly, assert valid
+args succeed and invalid args return a *structured error* rather than
+raising) found two things in its first run, neither of which any judged
+scenario would have surfaced:
+
+1. **`glob_search` is broken on a Windows hub.** It shells argv
+   `["find", ".", "-type", "f", "-name", pattern]` through the execution
+   backend, which runs it without a shell — so on Windows `find`
+   resolves to `FIND.EXE`, the text-search utility, and the model
+   receives `FIND: Parameter format not correct`. Not a crash, not a
+   clean error: a confusing message that looks like the model's fault.
+   The fix worth making is a Python `rglob` for the local path, keeping
+   `find` for SSH-backed projects — that removes a platform dependency
+   from a read-side tool the scope doc calls a core use case.
+2. **POSIX-shell discovery only looks in one place.**
+   `local_shell._CANDIDATES` hardcodes
+   `C:\Program Files\Git\bin\bash.exe`. This machine has Git at
+   `C:\Tools\Git`, so the probe reports `none` and every eval run this
+   session logged `shell.interpreter_unavailable` — on a box with a
+   perfectly good bash. Deriving the path from `git` on PATH fixes it.
+
+Worth noting why the *contract* layer caught these and 20+ judged
+scenario runs didn't: a model rarely calls `glob_search` unprompted, and
+never sends deliberately malformed arguments. The invalid-args half of
+each check is the part that finds tools which raise instead of returning
+`ToolResult.error` — a raise escapes the agent loop's error handling and
+kills the whole turn, which is invisible until it happens in front of a
+user.
+
+---
+
 ## Standing: what each local model can drive (tracked, not retyped)
 
 **First generated:** 2026-08-12. **Regenerate with:** `fitt eval matrix`.

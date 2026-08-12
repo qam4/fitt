@@ -2141,6 +2141,76 @@ def eval_e2e_cmd(
         sys.exit(1)
 
 
+@eval_group.command("contracts")
+@click.option("--project", default=None, help="Registered project to run file/git checks against.")
+@click.option("--config-file", type=click.Path(path_type=Path), default=None)
+def eval_contracts(project: str | None, config_file: Path | None) -> None:
+    """Check every registered tool's contract — no model, no tunnel.
+
+    The judged scenarios measure whether a *model* picks the right tool.
+    This measures whether the tools themselves work: valid arguments
+    succeed with the declared side effect, and invalid arguments come
+    back as a structured error rather than an exception (a raising tool
+    escapes the agent loop's error handling and kills the turn).
+
+    Deterministic and offline, so it can gate CI while the judged
+    scenarios stay a dev/debug driver. Exits 1 on a real failure;
+    known-broken entries are reported but don't fail the run.
+    """
+    import asyncio
+
+    from .tool_contract_suite import EXEMPT, default_checks
+    from .tool_contracts import run_contract_checks
+    from .tools import ToolContext
+
+    cfg = load_config(config_file or default_config_path(), default_secrets_path())
+    from .app import create_app
+
+    app = create_app(cfg)
+
+    target = project or ""
+    if not target:
+        registered = [p.name for p in app.state.project_registry.all()]
+        if not registered:
+            _console.print(
+                "[yellow]no projects registered — file and git checks will be "
+                "skipped. Register one with `fitt project add`.[/yellow]"
+            )
+        else:
+            target = registered[0]
+            _console.print(f"[dim]using project {target!r} for file/git checks[/dim]")
+
+    ctx = ToolContext(
+        client="cli",
+        session_key="main",
+        projects=app.state.project_registry,
+        backend=app.state.execution_backend,
+        policy=app.state.tool_registry.policy,
+        audit=getattr(app.state, "audit", None),
+        cron=getattr(app.state, "cron", None),
+        events=getattr(app.state, "events", None),
+        local_shell=getattr(app.state, "local_shell", None),
+        lessons=getattr(app.state, "lessons", None),
+        turns=getattr(app.state, "turns", None),
+        plan_store=getattr(app.state, "plan_store", None),
+        retrieval=getattr(app.state, "retrieval_provider", None),
+        todos=getattr(app.state, "todos", None),
+    )
+
+    report = asyncio.run(
+        run_contract_checks(app.state.tool_registry, ctx, default_checks(target), exempt=EXEMPT)
+    )
+    _console.print(report.render())
+
+    if report.unexpectedly_fixed:
+        fixed = ", ".join(r.tool for r in report.unexpectedly_fixed)
+        _console.print(
+            f"[green]these were marked known-broken but passed: {fixed} — drop the marker[/green]"
+        )
+    if report.failed:
+        sys.exit(1)
+
+
 @eval_group.command("matrix")
 @click.option(
     "--eval-dir",
