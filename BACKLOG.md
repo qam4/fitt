@@ -82,19 +82,28 @@ The curated ordering - the judgment call a tool can't make for you.
   3/7 and 4/7 on consecutive identical runs (`memory_recall` flipped).
   Single-sample cells in the standing matrix are indicative, not
   reliable; use `--samples` for anything load-bearing.
-- **Frontier explorer — the actual goal (spec drafted 2026-08-12).**
-  A frontier agent that *interacts with* FITT to find issues, rather than
-  a judge that grades fixed transcripts. See
-  [`frontier-explorer`](.kiro/specs/frontier-explorer/requirements.md).
-  The evidence for it is blunt: every real defect in the 2026-08-10..12
-  sessions came from investigation (differential experiments, reading run
-  homes, wire capture), while the judge agreed with a *wrong* objective
-  verdict five times — once while the contradicting evidence sat in its
-  own prompt. A passive judge inherits the harness's framing, so it can
-  never question the harness. Scripted scenarios are the regression
-  floor; discovery needs an agent with `talk_to_fitt` + `inspect` verbs,
-  missions instead of rubrics, findings that must carry evidence, and a
-  human-gated ratchet from confirmed finding to permanent check.
+- **Un-anchor the judge (cheap, do this first).** `build_judge_prompt`
+  hands the judge the harness's own verdict under the heading "Objective
+  outcome (deterministic, checked by code)" and labels the snapshot
+  "GROUND TRUTH". On the five occasions the *harness* was wrong, the
+  judge was therefore handed a wrong answer presented as authoritative —
+  and agreed every time, once while Tier 3 showed it the contradicting
+  evidence verbatim. Add a blind mode (same internals, no objective
+  verdict, softer framing: "captured by the harness, may be incomplete")
+  and replay it against those five known cases. If a blind judge catches
+  what an anchored one rubber-stamped, most of the discovery value costs
+  one prompt change. Note the judge already HAS internals — tool
+  args/results, timeline, Tier-3 sent messages — so blindness was never
+  the problem.
+- **Frontier explorer — the goal beyond that (spec drafted 2026-08-12).**
+  See [`frontier-explorer`](.kiro/specs/frontier-explorer/requirements.md).
+  Even un-anchored, the judge reads *one run*: it cannot form a
+  hypothesis, change one variable, and re-run — which is how every real
+  defect in the 2026-08-10..12 sessions was actually found. The explorer
+  gets `talk_to_fitt` + `inspect` verbs, missions instead of rubrics,
+  findings that must carry citable evidence, dedupe against
+  observed-issues, and a human-gated ratchet from confirmed finding to
+  permanent check. Scripted scenarios stay the regression floor.
 - **Scenario coverage — now a spec, in progress.** Was 7 of 34 tools;
   see [`e2e-full-coverage`](.kiro/specs/e2e-full-coverage/tasks.md).
   Status 2026-08-12: **all 34 tools have a deterministic contract check**

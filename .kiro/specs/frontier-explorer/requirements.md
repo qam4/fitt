@@ -8,7 +8,57 @@ subordinate pieces stay subordinate.
 
 A frontier agent *interacts with* FITT to find issues — it drives the
 conversation, decides what to try next, chases anything that looks wrong,
-and reports findings. Not a grader of fixed transcripts: an explorer.
+and reports findings.
+
+## What the judge already is (correcting an earlier overstatement)
+
+An earlier draft of this spec described the judge as grading "fixed
+transcripts". That undersold it, and the distinction matters for deciding
+what to build. The judge already receives:
+
+* **Tier 1** — every tool call with arguments and results, `loop_status`,
+  and the side-effect snapshot (cron jobs, todos, recent events).
+* **Tier 2** — the per-iteration timeline (each LLM call with
+  `finish_reason`, tokens, tool-call counts) and a *required* root-cause
+  hypothesis citing which iteration misbehaved.
+* **Tier 3** — the verbatim conversation FITT sent the model each
+  iteration.
+* An audit ask naming the harness itself as a suspect, plus a
+  known-issues checklist.
+
+It has genuine wins on that basis: Tier 2 correctly characterised the
+gemma4 spiral ("re-emits the same call every iteration, never produces
+`finish_reason=stop`"), caught a loop-brake circumvention, and flagged a
+`news_summary` reply as generic even though it passed objectively.
+
+## The real failure mechanism: anchoring, not blindness
+
+`build_judge_prompt` hands the judge the harness's own conclusion:
+
+```
+## Objective outcome (deterministic, checked by code)
+FAIL — memory_search did not fire on the recall turn
+```
+
+…and labels the snapshot `GROUND TRUTH`. So on the five occasions the
+*harness* was wrong (unregistered tool, lesson leak across a session,
+lesson leak across scenarios, wrong cron delivery channel, dropped
+`tool_calls`), the judge was handed a wrong answer presented as
+authoritative — and reasoned its way to "the assistant hallucinated a
+1-in-10,000 number" rather than doubting what we'd called fact.
+
+Two consequences, in cost order:
+
+1. **Cheap, do first: blind judging.** Same internals, no objective
+   verdict, no "ground truth" framing — and replay it against the five
+   known cases. If a blind judge catches what an anchored one
+   rubber-stamped, most of the discovery value arrives for the price of a
+   prompt change.
+2. **Still missing, and the reason for this spec: the judge cannot
+   ACT.** It reads one run. It cannot form a hypothesis, change one
+   variable, and run the experiment — which is how every real defect in
+   these sessions was actually found. That's the gap an explorer fills,
+   and it stands regardless of how well blind judging works.
 
 ## Why, from evidence
 
@@ -28,12 +78,16 @@ Every real defect found in the 2026-08-10..12 sessions came from
 
 The judge, over the same period, **agreed with a wrong objective verdict
 five times**, including once while the contradicting evidence was in its
-own prompt. It inherits the harness's framing, so it cannot be the thing
-that questions the harness.
+own prompt (Tier 3 showed the dropped `tool_calls` verbatim and it still
+blamed the model). Per the section above, the likeliest cause is
+anchoring — we tell it the answer and call it authoritative — not lack of
+visibility.
 
-Conclusion: scripted scenarios + a passive judge is a good **regression**
-layer and a poor **discovery** layer. Discovery needs an agent that can
-form a hypothesis, run an experiment, and read internals.
+Conclusion: the judge is a decent *diagnostician of one run* and, while
+anchored, an unreliable *auditor of the harness*. Discovery needs
+something that can also act: form a hypothesis, change one variable, run
+it again. Try un-anchoring the judge first (it's a prompt change), then
+build the explorer for the part a single-run reader can never do.
 
 ## User stories
 
