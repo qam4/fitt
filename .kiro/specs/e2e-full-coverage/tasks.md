@@ -176,3 +176,44 @@ nothing about them:
 Also note the standing's denominator is per-deployment: `memory_search`
 only registers when an embedding alias is bound, so the registry is 33 or
 34 tools depending on config. Any coverage percentage has to say which.
+
+
+## Judge enhancements (added 2026-08-12)
+
+Salvaged from a withdrawn "frontier explorer" spec. The subsystem framing
+was over-reach, but each idea below is a concrete upgrade to the judge we
+already have, and the anchoring one is close to free.
+
+- [ ] 34. **Blind mode (un-anchor the judge).** `build_judge_prompt`
+  hands the judge the harness's verdict under "Objective outcome
+  (deterministic, checked by code)" and labels the snapshot "GROUND
+  TRUTH". On the five occasions the *harness* was wrong, it was handed a
+  wrong answer presented as authoritative and agreed every time — once
+  while Tier 3 showed it the contradicting evidence verbatim. Add a mode
+  that withholds the objective verdict and softens the framing to
+  "captured by the harness, may be incomplete".
+- [ ] 35. **Replay the judge against known-wrong cases.** We have five:
+  dropped `tool_calls`, unregistered `memory_search`, lesson leak within
+  a scenario, lesson leak across scenarios, wrong cron delivery channel.
+  Store those trajectories as fixtures and assert a blind judge flags
+  what the anchored one rubber-stamped. This is a regression test *for
+  the judge*, which nothing currently has.
+- [ ] 36. **Require citations in the verdict.** The `reasoning` field
+  already must state a root-cause hypothesis (Tier 2); extend it to cite
+  specific evidence — which iteration, which tool call, which snapshot
+  field. Fluent-but-uncited reasoning is what accompanied every wrong
+  verdict.
+- [ ] 37. **Audit rubrics (missions, not just per-turn grading).** A
+  scenario grades one turn against a rubric. Add a scenario shape whose
+  rubric is an *investigation*: "does this run show FITT claiming
+  something the internals don't support?", "was the answer reachable by
+  the channel the scenario intends?". Same judge, same internals,
+  different question.
+- [ ] 38. **Let the judge ask for more evidence.** Today it gets a fixed
+  dump chosen by `--judge-detail`. A second round-trip — "which iteration
+  do you want the sent messages for?" — would beat guessing the tier, and
+  keeps Tier-3 prompt bloat off runs that don't need it.
+- [ ] 39. **Feed known issues for dedupe.** `_KNOWN_ISSUES` exists but is
+  hand-maintained; source it from `docs/observed-issues.md` slugs so the
+  judge stops re-reporting fixed defects and spends attention on new
+  ground.
