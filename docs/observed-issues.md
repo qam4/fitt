@@ -191,9 +191,10 @@ and are absent from the number above: the **skills loader** (4.10),
 **lessons actually being applied later** (5), **planned mode** (12), the
 **Telegram command surface** (3/7), the **dashboard** (7), **compaction**
 (8), and the alias-eval **`coding` / `realistic` suites**, which are a
-separate ladder rung with their own reports. Tracked as Phase G in
-`.kiro/specs/e2e-full-coverage/tasks.md`. "9/9" means the daily-use core
-plus proactive notification — not "FITT works".
+separate ladder rung with their own reports. Tracked under
+"Roadmap-derived gaps" in `.kiro/specs/e2e-full-coverage/tasks.md`.
+"9/9" means the daily-use core plus proactive notification — not
+"FITT works".
 
 The judge model is part of the measurement: it's recorded per run
 (`judge_model` in the sidecar) and the standing view warns when folded

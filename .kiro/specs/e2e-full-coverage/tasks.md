@@ -128,7 +128,12 @@ Status legend: `[x]` done, `[ ]` not yet.
   and re-measure all three DUTs (`--samples` > 1 for anything cited).
 
 
-## Phase G — Roadmap-derived gaps (added 2026-08-12)
+## Roadmap-derived gaps (added 2026-08-12)
+
+*(Not a roadmap phase. The lettered phases above are sections of this
+spec's plan; FITT's roadmap phases are numbered — 4.5, 9, 12 — and the
+items here are cross-references INTO that roadmap, not a new phase of
+it.)*
 
 Phases A-F were scoped from the *tool registry*, which is why they miss
 whole features: a capability with no tool (skills) or a different
