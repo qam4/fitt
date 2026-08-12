@@ -177,6 +177,24 @@ judge pinned to claude-sonnet-5, `--exclusive`):
 notification and cron firing work end to end regardless of model choice —
 the two capabilities that had never been tested at all.
 
+VRAM at `num_ctx: 16384`, measured by `--exclusive`'s warm step:
+hermes3:8b 6.8GB, **gemma4:12b-it-qat 8.0GB**, qwen3:14b 11.8GB. So the
+best-scoring model is also the middle of the three on footprint and beats
+a model needing ~50% more VRAM — gemma4 is the recommended binding, and
+it fits a 12GB card with room for the embedding model alongside.
+
+### What this table does NOT cover
+
+The scenarios were scoped from the *tool registry*, so anything without a
+tool is invisible to them. Mapped against the roadmap, these ship today
+and are absent from the number above: the **skills loader** (4.10),
+**lessons actually being applied later** (5), **planned mode** (12), the
+**Telegram command surface** (3/7), the **dashboard** (7), **compaction**
+(8), and the alias-eval **`coding` / `realistic` suites**, which are a
+separate ladder rung with their own reports. Tracked as Phase G in
+`.kiro/specs/e2e-full-coverage/tasks.md`. "9/9" means the daily-use core
+plus proactive notification — not "FITT works".
+
 The judge model is part of the measurement: it's recorded per run
 (`judge_model` in the sidecar) and the standing view warns when folded
 runs disagree, or when a run used `--model auto`. Switching it

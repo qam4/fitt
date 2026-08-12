@@ -126,3 +126,48 @@ Status legend: `[x]` done, `[ ]` not yet.
   rows with a meaningless model column. (D6)
 - [ ] 23. Regenerate `docs/feature-model-standing.md` with the full set
   and re-measure all three DUTs (`--samples` > 1 for anything cited).
+
+
+## Phase G — Roadmap-derived gaps (added 2026-08-12)
+
+Phases A-F were scoped from the *tool registry*, which is why they miss
+whole features: a capability with no tool (skills) or a different
+execution mode (planned) is invisible to a registry-derived count. Mapped
+against `FITT_ROADMAP.md`, these ship today and the standing view says
+nothing about them:
+
+- [ ] 27. **Skills loader (Phase 4.10).** Shipped, and skills aren't
+  tools — the contract layer can't see them. Needs a scenario where a
+  temp skill is loaded, appears in the capability surface, and the model
+  uses it. Probably also a contract-style check that a malformed
+  `SKILL.md` is rejected with a readable error rather than breaking boot.
+- [ ] 28. **Lessons applied later (Phase 5).** `learn_*` are
+  contract-checked, but nothing tests the *point* of lessons: correct the
+  assistant, then see the correction honoured on a later turn. Note the
+  global-lessons channel already caused two false verdicts here, so this
+  scenario must isolate its fixture (see R5.4).
+- [ ] 29. **Planned mode (Phase 12).** `--mode planned` orchestration has
+  a spec and no e2e coverage. Cheapest useful form: run one existing
+  multi-step scenario both flat and planned, and compare.
+- [ ] 30. **Telegram command surface (Phase 3 / 7).** `/model`,
+  `/status`, `/lastturn`, `/eval`, and the markdown renderer. Decide
+  explicitly whether the telegram-bot package's own suite is sufficient —
+  if so, record it as an exemption with that reason rather than leaving
+  it looking forgotten.
+- [ ] 31. **Gateway contract (Phase 1).** No scenario asserts the alias
+  discipline that Principle 7 rests on: a concrete model id must be
+  rejected with HTTP 400, a bad token with 401. Cheap, deterministic,
+  and it guards a rule the whole config model depends on.
+- [ ] 32. **Compaction (Phase 8)** and **visibility surfaces (4.8/7)** —
+  cover when they matter; compaction isn't exercised until sessions are
+  long enough to trigger it.
+- [ ] 33. **Fold the alias-eval suites into one standing view.**
+  `fitt eval` already runs `default` / `coding` / `realistic` suites with
+  their own reports and sidecars — a separate ladder rung from the judged
+  e2e harness. Two places to look is one too many: `fitt eval matrix`
+  should show both, clearly labelled, so "what works today" is a single
+  question with a single answer.
+
+Also note the standing's denominator is per-deployment: `memory_search`
+only registers when an embedding alias is bound, so the registry is 33 or
+34 tools depending on config. Any coverage percentage has to say which.
