@@ -82,6 +82,19 @@ The curated ordering - the judgment call a tool can't make for you.
   3/7 and 4/7 on consecutive identical runs (`memory_recall` flipped).
   Single-sample cells in the standing matrix are indicative, not
   reliable; use `--samples` for anything load-bearing.
+- **Frontier explorer — the actual goal (spec drafted 2026-08-12).**
+  A frontier agent that *interacts with* FITT to find issues, rather than
+  a judge that grades fixed transcripts. See
+  [`frontier-explorer`](.kiro/specs/frontier-explorer/requirements.md).
+  The evidence for it is blunt: every real defect in the 2026-08-10..12
+  sessions came from investigation (differential experiments, reading run
+  homes, wire capture), while the judge agreed with a *wrong* objective
+  verdict five times — once while the contradicting evidence sat in its
+  own prompt. A passive judge inherits the harness's framing, so it can
+  never question the harness. Scripted scenarios are the regression
+  floor; discovery needs an agent with `talk_to_fitt` + `inspect` verbs,
+  missions instead of rubrics, findings that must carry evidence, and a
+  human-gated ratchet from confirmed finding to permanent check.
 - **Scenario coverage — now a spec, in progress.** Was 7 of 34 tools;
   see [`e2e-full-coverage`](.kiro/specs/e2e-full-coverage/tasks.md).
   Status 2026-08-12: **all 34 tools have a deterministic contract check**

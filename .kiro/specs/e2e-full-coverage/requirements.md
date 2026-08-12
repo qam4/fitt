@@ -1,6 +1,15 @@
 # Requirements: Full e2e Coverage
 
-**Status:** drafted 2026-08-12, not started.
+**Status:** in progress (Phases A-C largely done; see tasks.md).
+
+**Where this sits:** subordinate to
+[`frontier-explorer`](../frontier-explorer/requirements.md). That's the
+goal — a frontier agent interacting with FITT to *find* issues. This spec
+builds the **regression floor** underneath it: deterministic checks and
+scripted scenarios that re-verify what we already know, cheaply, so the
+expensive exploratory layer isn't spent re-treading known ground. Neither
+replaces the other, and the ordering matters: a scenario suite can only
+check what someone already thought of.
 
 ## Why
 
