@@ -178,9 +178,39 @@ nothing about them:
   assistant, then see the correction honoured on a later turn. Note the
   global-lessons channel already caused two false verdicts here, so this
   scenario must isolate its fixture (see R5.4).
-- [ ] 29. **Planned mode (Phase 12).** `--mode planned` orchestration has
-  a spec and no e2e coverage. Cheapest useful form: run one existing
-  multi-step scenario both flat and planned, and compare.
+- [ ] 29. **Planned mode (Phase 12).** Orchestration has a full spec,
+  shipped code, thorough *fake-driven* unit tests — and no judged
+  coverage at all. The judged driver has no mode concept: `e2e_driver`
+  POSTs to `/v1/chat/completions`, so the loop is chosen downstream by
+  `config.is_orchestrated(alias)`, which is default-off. Every number in
+  the standing matrix is therefore the flat loop, and nothing in the
+  report says so. Two parts, in order:
+  - **Make the mode explicit and visible.** A `--mode flat|planned` flag
+    on `fitt eval e2e` that sets `cfg.orchestration` for the DUT, and the
+    loop that ran recorded in the sidecar. Today an operator whose real
+    config has `orchestration.<dut>.enabled: true` would silently measure
+    planned mode and never know.
+  - **Get a discriminating scenario first.** Phase 12 task 24 deferred
+    "orchestration-readiness" as a profile dimension for exactly this
+    reason: `daily_news_summary` doesn't *need* sequencing, so it can't
+    show planning's leverage. Comparing flat vs planned on a scenario
+    that doesn't reward planning measures nothing.
+
+  Carry the confound forward, or it gets re-derived: the one real-model
+  comparison we have (task 22, hermes3:8b, n=5) found planning did **not**
+  beat flat — but task 23 then found hermes3 elects to plan **0%** of the
+  time, so "planned mode" ran plan-less and the comparison was flat vs
+  flat. **Planning has never been measured on gemma4**, the model that
+  scores 14/14 and is the recommended binding. "Planning doesn't help" is
+  not a finding yet.
+- [ ] 46. **Test the routing gate into the orchestrator.** `chat.py` and
+  `cron_runner.py` each guard `run_orchestrated_turn` behind
+  `config.is_orchestrated(alias)` + a prompt resolver + a plan store. The
+  gate is tested (`test_config.py`) and the orchestrator is tested
+  (`test_orchestrator.py`, which calls it directly) — the *wire between
+  them* is not. So an orchestrated alias silently falling back to the
+  flat loop would pass every test we have. Cheap: one test per call site
+  asserting the orchestrator is reached.
 - [ ] 30. **Telegram command surface (Phase 3 / 7).** `/model`,
   `/status`, `/lastturn`, `/eval`, and the markdown renderer. Decide
   explicitly whether the telegram-bot package's own suite is sufficient —
