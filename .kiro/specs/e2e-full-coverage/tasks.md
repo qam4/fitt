@@ -20,19 +20,22 @@ Status legend: `[x]` done, `[ ]` not yet.
 - [x] 2. Tests with a fake registry: an ok-tool passes, a tool that
   raises on bad args is reported failing, a tool returning `err` for bad
   args passes. DONE 2026-08-12: 11 tests.
-- [~] 3. Fixtures: temp FITT home, registered temp project, temp git
+- [x] 3. Fixtures: temp FITT home, registered temp project, temp git
   repo, file tree — DONE via `tool_contract_suite.build_project` /
-  `init_git_repo` reusing `_fixtures.build_test_config`. Stub HTTP
-  server for `http_get` still to do.
+  `init_git_repo` reusing `_fixtures.build_test_config`, plus
+  `stub_http_server` (a local one-route server) so `http_get` is checked
+  without touching the network.
 - [x] 4. Read-mostly surface: `read_file`, `list_directory`,
   `grep_repo`, `list_capabilities` pass; `glob_search` marked
   known-broken (real Windows defect found by this layer — see task 24).
   `http_get` deferred with task 3's stub server.
-- [~] 5. State tools: `todo_list`, `cron_list`, `learn_add` (with a
-  side-effect assertion on the lessons store), `learn_list`,
-  `learn_remove` DONE. Still to do: `todo_add`/`todo_done`/`todo_remove`,
-  `cron_add`/`cron_update`/`cron_pause`/`cron_resume`/`cron_remove`.
-- [ ] 6. Write/code surface — coverage only, no investment:
+- [x] 5. State tools: lessons (`learn_add` with a side-effect assertion
+  on the store, `learn_list`, `learn_remove`), the full todo lifecycle
+  (`todo_add`/`todo_list`/`todo_done`/`todo_remove`) and the full cron
+  lifecycle (`cron_add`/`cron_list`/`cron_update`/`cron_pause`/
+  `cron_resume`/`cron_remove`). Each works on a row it creates itself, so
+  the suite is order-independent.
+- [x] 6. Write/code surface — coverage only, no investment:
   `write_file`, `edit_file`, `todowrite`, `project_shell`, `run_tests`,
   `git_commit`, `spec_*`. (`git_status`/`git_diff` done in task 4's pass.)
 - [~] 7. `fitt eval contracts` command DONE (exits 1 on a real failure;
@@ -145,8 +148,13 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 - [ ] 22. Matrix renders contract results as a separate table, not as
   rows with a meaningless model column. (D6)
-- [ ] 23. Regenerate `docs/feature-model-standing.md` with the full set
+- [~] 23. Regenerate `docs/feature-model-standing.md` with the full set
   and re-measure all three DUTs (`--samples` > 1 for anything cited).
+  Regenerated 2026-08-13 with all 14 scenarios × all 3 DUTs — no `-`
+  cells, so the columns are comparable for the first time (gemma4 14/14,
+  qwen3 12/14, hermes3 7/14). Still `samples=1`, which the backlog is
+  explicit about: hermes3 has scored 3/7 and 4/7 on consecutive identical
+  runs. Every cell is indicative until it's multi-sampled.
 
 
 ## Roadmap-derived gaps (added 2026-08-12)
