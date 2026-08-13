@@ -86,6 +86,35 @@ caught this one, because both layers were wrong together. That
 asymmetry is now written into the field's docstring: a hit is
 strong evidence, silence is weak.
 
+### The judge had the same bug, one layer up
+
+Fixing the objective check turned the run into 14/14 objective —
+and the disagreement line fired on the very next run:
+`asks_before_acting: objective=PASS judge=FAIL`. The judge's own
+snapshot is the *cumulative* end state, so it repeated the
+mistake the assert had just been cured of:
+
+> The assistant invented a time (9:00) that was never provided
+> ... and it also created a cron job 'Call the doctor' with no
+> evidence that subject was ever confirmed by the user
+
+Two errors in one sentence: the user *did* say 9, and the cron
+was another scenario's. So the disagreement line earned its keep
+within one run of shipping — it surfaced this in a glance rather
+than a diff of per-scenario lines.
+
+**Fix.** The judge prompt now says what the internals do and
+don't attribute: the tool list is *this turn's*, the side-effect
+state is *the run's*, an entry with no matching tool call is not
+this turn's doing. Stated twice — in the instructions and again
+beside the evidence it qualifies — and the "GROUND TRUTH — what
+actually happened" heading over the whole block is gone, because
+it was true of the tools and false of the state.
+
+Not a substitute for task 34 (un-anchoring) or for per-scenario
+state isolation. It removes one specific wrong inference the
+prompt was inviting.
+
 **Running tally.** Seventh time this month a "model failure"
 turned out to be harness-side. Zero genuine model defects found
 by first-read verdicts so far. The corrected result stands at

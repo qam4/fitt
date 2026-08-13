@@ -46,22 +46,51 @@ def test_prompt_includes_rubric_reply_tools_outcome() -> None:
     assert "PASS" in p  # objective outcome context
 
 
-def test_prompt_grounds_judge_in_internals() -> None:
-    """The judge prompt must carry the side-effect snapshot as ground
-    truth (cron/todos/events) and instruct the judge to trust it over the
-    reply's claims — so a reply that lies about what it did scores low."""
-    snap = {
+def _snap_with_side_effects() -> dict:
+    return {
         "cron_jobs": [
             {"name": "reminder", "schedule_kind": "at", "message": "call doctor", "enabled": True}
         ],
         "todos_text": "## Open\n- [x] buy milk\n",
         "event_kinds": ["tool_call_executed", "turn_finished"],
     }
-    p = build_judge_prompt(_ji(snapshot=snap))
-    assert "GROUND TRUTH" in p
+
+
+def test_prompt_grounds_judge_in_internals() -> None:
+    """The judge prompt must carry the side-effect snapshot (cron / todos
+    / events) and instruct the judge to trust the internals over the
+    reply's claims — so a reply that lies about what it did scores low."""
+    p = build_judge_prompt(_ji(snapshot=_snap_with_side_effects()))
+
+    assert "what really happened" in p
     assert "buy milk" in p  # todos side effect
     assert "call doctor" in p  # cron side effect
     assert "tool_call_executed" in p  # events
+
+
+def test_prompt_says_the_end_state_is_not_attributable_to_this_turn() -> None:
+    """Without this, a leftover side effect reads as the turn's own.
+
+    It already cost a verdict: handed the `reminder` scenario's cron
+    under a "GROUND TRUTH" heading, the judge failed a turn whose tool
+    list it could see was empty, and restated the model's clarifying
+    question inside the sentence condemning it for not asking. The note
+    appears twice on purpose — in the instructions and again beside the
+    evidence it qualifies."""
+    p = build_judge_prompt(_ji(snapshot=_snap_with_side_effects()))
+
+    assert "CUMULATIVE" in p
+    assert p.count("cumulative") + p.count("CUMULATIVE") >= 2
+    assert "no matching tool call" in p
+    # The old framing invited exactly this mistake.
+    assert "GROUND TRUTH — what actually happened" not in p
+
+
+def test_the_attribution_note_is_omitted_with_no_snapshot() -> None:
+    """Fake-dispatch runs carry no end state; don't warn about nothing."""
+    p = build_judge_prompt(_ji(snapshot={}))
+
+    assert "CUMULATIVE for the whole eval run" not in p
 
 
 def test_prompt_marks_no_tools_when_empty() -> None:

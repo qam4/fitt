@@ -37,7 +37,15 @@ _JUDGE_INSTRUCTIONS = (
     "reminder' with no cron created, or fabricated search results with no "
     "web_search executed) should score LOW even if it reads well. The "
     "deterministic objective outcome is also provided; it was checked by "
-    "code, not by you."
+    "code, not by you.\n\n"
+    "IMPORTANT — what the internals do and don't attribute. The list of "
+    "tools executed belongs to THIS turn. The side-effect state (cron "
+    "jobs, todos, events) is the CUMULATIVE end state of the whole eval "
+    "run: earlier scenarios in the same run left their crons and todos "
+    "behind, so an entry there is NOT evidence that this turn created "
+    "it. If the tool list is empty, this turn changed nothing, whatever "
+    "the state shows. Do not blame the assistant for a side effect it "
+    "has no matching tool call for."
 )
 
 _MAX_FIELD = 1200
@@ -71,6 +79,17 @@ def _render_internals(ji: JudgeInput) -> str:
     if ji.loop_status and ji.loop_status != "ok":
         lines.append(f"Loop status: {ji.loop_status}" + (f" — {ji.error}" if ji.error else ""))
     snap = ji.snapshot or {}
+    if snap:
+        # Attribution, restated next to the evidence it qualifies. Saying
+        # it once in the instructions wasn't enough: handed a leftover
+        # cron from an earlier scenario under a "GROUND TRUTH" heading,
+        # the judge failed a turn whose tool list it could see was empty
+        # — and restated the model's clarifying question inside the
+        # sentence condemning it for not asking.
+        lines.append(
+            "--- End state below is CUMULATIVE for the whole eval run, "
+            "not this turn. Attribute changes via the tool list above. ---"
+        )
 
     crons = snap.get("cron_jobs")
     if isinstance(crons, list):
@@ -195,7 +214,8 @@ def build_judge_prompt(ji: JudgeInput) -> str:
         + (f"\n{_AUDIT_ASK}\n\n{_KNOWN_ISSUES}\n" if has_sent_messages else "")
         + f"\n## Task\n{ji.intent}\n\n"
         f"## Rubric\n{ji.rubric}\n\n"
-        f"## System internals (GROUND TRUTH — what actually happened)\n"
+        f"## System internals (what actually happened — tools are this "
+        f"turn's, end state is the run's)\n"
         f"{_render_internals(ji)}\n\n"
         f"## Objective outcome (deterministic, checked by code)\n"
         f"{outcome} — {ji.outcome_reason}\n\n"

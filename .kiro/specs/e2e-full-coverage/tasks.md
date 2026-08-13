@@ -223,6 +223,18 @@ FITT actually advertises, and *that* premise needs pinning too.
   scenario. Documented limit: the judge is anchored on the objective
   verdict, so it's biased toward agreement; a hit is strong evidence,
   silence is weak (task 34 is what would change that). DONE 2026-08-13.
+- [x] 45. **Tell the judge what the internals attribute.** With task 44
+  in, the disagreement line fired on the next run: `objective=PASS
+  judge=FAIL`, because the judge's snapshot is the *cumulative* end state
+  and it made the same inference the assert had just been cured of ("it
+  also created a cron job 'Call the doctor'" — another scenario's — plus
+  "invented a time (9:00)", which the user had given). The prompt now
+  states that the tool list is this turn's and the side-effect state is
+  the run's, an entry with no matching tool call is not this turn's
+  doing, and drops the "GROUND TRUTH — what actually happened" heading
+  over the whole block, which was true of the tools and false of the
+  state. Not a substitute for task 34 or for per-scenario state
+  isolation. DONE 2026-08-13.
 - [x] 44. **Attribute action to the turn, not the end state.** The
   corrected `asks_before_acting` then failed a *correct* model: it asked
   the clarifying question and called nothing, and was blamed for the
