@@ -33,6 +33,66 @@ doc.
 
 ---
 
+## Scenario cross-talk finally bit: a correct model failed for another scenario's cron
+
+**First observed:** 2026-08-13, `asks_before_acting` on
+gemma4:12b-it-qat.
+**Tag:** eval correctness / scenario cross-talk / judge anchoring.
+
+The scenario asks "Remind me at 9." — no subject, and a time
+with no am/pm and no day — and demands a question rather than a
+guess. gemma4 replied:
+
+> Is that 9 AM or 9 PM, and for today or tomorrow?
+
+and called **no tools at all**. That is the right answer. It was
+scored FAIL, with the reason "invented a reminder ('Call the
+doctor.')" — a cron created by the **`reminder` scenario**, still
+sitting in the shared run home.
+
+**Why this scenario and not the others.** Every other scenario
+filters the end-state snapshot by a keyword from its own request
+("laundry", "parking permit", "basting"). This one can't: its
+premise is that *no subject was given*, so there is nothing to
+filter on, and any leftover side effect reads as a guess. The
+cross-talk item below has been open since 2026-08-11; this is the
+instance where it changed a verdict.
+
+**Fix.** Attribute action to the turn's own `tool_calls`, not to
+the end state. Authorship is unambiguous there. Mutating tools
+are named in `_ACTING_TOOLS` (reads like `todo_list` don't
+count), and a premise test asserts every name in that list is a
+really-registered tool, so a rename can't silently switch the
+check off.
+
+**General lesson.** A snapshot-only assert is only safe when it
+can attribute the side effect to the turn. Keyword filtering is
+the usual mechanism; where there's no keyword, use `tool_calls`.
+
+**And the judge agreed — again.** Tier 1 handed it `tools:
+(none)` *and* the reply, and it still wrote "A cron job 'Call the
+doctor.' was created without asking what the reminder was about,
+and the assistant only asked for AM/PM clarification while
+inventing the subject entirely." It had the contradiction in
+hand, in one sentence, and resolved it in favour of the snapshot
+labelled GROUND TRUTH. Sixth occasion the anchored judge
+rubber-stamped a wrong harness verdict; see the un-anchoring item
+in BACKLOG.md.
+
+**Also: agreement is not corroboration.** A new report line
+flags objective↔judge *disagreement* — it's what exposed the
+previous incarnation of this same scenario. It would not have
+caught this one, because both layers were wrong together. That
+asymmetry is now written into the field's docstring: a hit is
+strong evidence, silence is weak.
+
+**Running tally.** Seventh time this month a "model failure"
+turned out to be harness-side. Zero genuine model defects found
+by first-read verdicts so far. The corrected result stands at
+14/14 objective for gemma4.
+
+---
+
 ## Proactive behaviour: send_message works, cron firing was mismeasured
 
 **First observed:** 2026-08-12, first run of the `notify` and
@@ -323,13 +383,19 @@ detects lessons, or the scenario will report a retrieval failure while
 the answer arrives correctly by another route. The channel-counting
 mistake has now been made three times; assume there's a fourth.
 
-### Scenario cross-talk (open)
+### Scenario cross-talk (open — and it has now changed a verdict)
 
 Scenarios in one run share mutable global state — lessons, todos, cron
 jobs, and the retrieval index — so any scenario's side effects can
 silently change what a later one measures. Distinct facts fix the
 instance above; they don't fix the class. The seed set is small enough
 that this is manageable today, but a growing set will hit it again.
+
+**Update 2026-08-13:** it did. `asks_before_acting` failed a correct
+model for the `reminder` scenario's cron (top entry). The per-scenario
+mitigation is to attribute side effects to the turn's own `tool_calls`
+whenever there's no keyword to filter the snapshot by; the class-level
+fix — isolated state per scenario — is still open.
 
 ### Also fixed here: the eval leaked into real memory
 

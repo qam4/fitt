@@ -488,6 +488,34 @@ class E2EReport:
     def inconclusive(self) -> list[E2EResult]:
         return [r for r in self.results if r.inconclusive]
 
+    @property
+    def disagreements(self) -> list[E2EResult]:
+        """Scored, judged runs where the code and the judge disagree.
+
+        The most informative line in the report, because the two layers
+        fail differently: the objective check can only be wrong about
+        *the scenario* (asserting something the deployment no longer
+        means), and the judge can only be wrong about *the reply*. When
+        they split, one of them is broken — and it is at least as often
+        the scenario.
+
+        Earned: `asks_before_acting` scored objective=FAIL judge=PASS for
+        a whole run because a tool description had grown a clause that
+        resolved the ambiguity the scenario was built on. Both layers
+        were behaving correctly; the disagreement was the only evidence
+        that the scenario itself had gone stale, and it was visible only
+        by reading the per-scenario lines side by side.
+
+        Note the asymmetry this does *not* cover: the judge is handed the
+        objective verdict as authoritative, so it is biased toward
+        agreement. Silence here is weak evidence (see the un-anchoring
+        item in BACKLOG.md); a hit is strong evidence."""
+        return [
+            r
+            for r in self.results
+            if r.scored and r.verdict.judged and r.outcome.passed != r.verdict.passed
+        ]
+
     def render(self) -> str:
         jr = f"{self.judge_rate * 100:.0f}%" if self.judge_rate is not None else "n/a"
         lines = [
@@ -509,6 +537,17 @@ class E2EReport:
             lines.append(
                 f"Inconclusive: {len(undecided)} ran but didn't exercise what "
                 f"they test, excluded from both rates ({names})"
+            )
+        split = self.disagreements
+        if split:
+            detail = ", ".join(
+                f"{r.scenario} (objective={'PASS' if r.outcome.passed else 'FAIL'}, "
+                f"judge={'PASS' if r.verdict.passed else 'FAIL'})"
+                for r in split
+            )
+            lines.append(
+                f"Disagreements: {len(split)} where code and judge split ({detail}) "
+                "— suspect the scenario as readily as the model"
             )
         for r in self.results:
             if r.unsupported:

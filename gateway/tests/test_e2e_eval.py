@@ -575,3 +575,100 @@ async def test_setup_and_settle_both_run_in_order() -> None:
     )
 
     assert order == ["setup", "dispatch", "settle"]
+
+
+# ------------------------------------------- objective/judge disagreement
+#
+# The two layers fail differently: the objective check can only be wrong
+# about the *scenario*, the judge only about the *reply*. So a split is
+# the report's sharpest signal, and it caught a real one —
+# asks_before_acting scored objective=FAIL judge=PASS for a whole run
+# because a tool description had grown a clause that resolved the very
+# ambiguity the scenario was built on. Both layers were working; the
+# scenario had gone stale. It was visible only by reading the
+# per-scenario lines side by side, so promote it to a report field.
+
+
+async def _judged(name: str, *, objective: bool, judge: bool) -> Any:
+    async def _judge_fn(ji: JudgeInput) -> JudgeVerdict:
+        return JudgeVerdict(judge, 1.0 if judge else 0.0, "graded")
+
+    return await run_scenario(
+        _scenario(
+            name=name,
+            rubric="r",
+            assert_fn=lambda t: OutcomeResult(objective, "checked"),
+        ),
+        dispatch=_dispatch("a reply"),
+        snapshot=_snapshot({}),
+        judge=_judge_fn,
+    )
+
+
+async def test_disagreement_is_reported_when_the_judge_passes_a_failure() -> None:
+    """The asks_before_acting shape: code says no, judge says yes."""
+    split = await _judged("asks_before_acting", objective=False, judge=True)
+    agreed = await _judged("todo", objective=True, judge=True)
+
+    rep = aggregate([split, agreed])
+
+    assert [r.scenario for r in rep.disagreements] == ["asks_before_acting"]
+
+
+async def test_disagreement_is_reported_in_the_other_direction_too() -> None:
+    """A side effect landing while the reply is nonsense is equally worth
+    a look — that's the `<|tool_response>` case."""
+    split = await _judged("reminder", objective=True, judge=False)
+
+    assert [r.scenario for r in aggregate([split]).disagreements] == ["reminder"]
+
+
+async def test_agreement_reports_no_disagreement() -> None:
+    both_fail = await _judged("a", objective=False, judge=False)
+    both_pass = await _judged("b", objective=True, judge=True)
+
+    assert aggregate([both_fail, both_pass]).disagreements == []
+
+
+async def test_unjudged_runs_cannot_disagree() -> None:
+    """With judging off every scenario would otherwise look like a split
+    against the judge's default-False verdict."""
+    res = await run_scenario(
+        _scenario(name="a", assert_fn=lambda t: OutcomeResult(True, "ok")),
+        dispatch=_dispatch("ok"),
+        snapshot=_snapshot({}),
+    )
+
+    assert aggregate([res]).disagreements == []
+
+
+async def test_unscored_runs_cannot_disagree() -> None:
+    """Unsupported and inconclusive results carry no model verdict, so
+    their objective=False must not read as a split."""
+    unsupported = await run_scenario(
+        _scenario(name="memory_recall", rubric="r", requires_tools=("memory_search",)),
+        dispatch=_dispatch("x"),
+        snapshot=_snapshot({}),
+        available_tools=[],
+    )
+    undecided = await run_scenario(
+        _scenario(
+            name="cross_session",
+            rubric="r",
+            assert_fn=lambda t: OutcomeResult(False, "lesson leaked", inconclusive=True),
+        ),
+        dispatch=_dispatch("4821"),
+        snapshot=_snapshot({}),
+    )
+
+    assert aggregate([unsupported, undecided]).disagreements == []
+
+
+async def test_report_names_the_split_and_which_way_it_went() -> None:
+    split = await _judged("asks_before_acting", objective=False, judge=True)
+
+    rendered = aggregate([split]).render()
+
+    assert "Disagreements: 1" in rendered
+    assert "asks_before_acting (objective=FAIL, judge=PASS)" in rendered
+    assert "suspect the scenario" in rendered

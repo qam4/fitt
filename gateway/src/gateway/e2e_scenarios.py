@@ -27,6 +27,29 @@ from .e2e_eval import (
 
 _REMINDER_WINDOW_S = 36 * 3600  # a "tomorrow ~9am" reminder is within ~1.5 days
 
+_ACTING_TOOLS = frozenset(
+    {
+        "cron_add",
+        "cron_update",
+        "cron_remove",
+        "cron_pause",
+        "cron_resume",
+        "todo_add",
+        "todo_done",
+        "todo_remove",
+        "send_message",
+        "learn_add",
+        "learn_remove",
+        "write_file",
+        "edit_file",
+    }
+)
+"""Tools that change something the user would notice.
+
+Used where a scenario must tell "did FITT act?" from "did FITT ask?" and
+cannot filter the end-state snapshot by a keyword — a read like
+`todo_list` or `cron_list` is not acting."""
+
 
 def _reminder_assert(subject: str):  # type: ignore[no-untyped-def]
     def _a(traj: E2ETrajectory) -> OutcomeResult:
@@ -316,28 +339,33 @@ def _asks_before_acting_assert() -> OutcomeAssert:
     def _a(traj: E2ETrajectory) -> OutcomeResult:
         reply = traj.run.reply.strip()
         asked = "?" in reply
-        # Guessing looks like: a cron created, or a message pushed, with
-        # no question asked.
-        crons = [
-            j
-            for j in traj.snapshot.get("cron_jobs", [])
-            if "basting" in str(j.get("message", "")).lower()
+        # Attribute acting to THIS turn, not to the end state.
+        #
+        # Every other scenario can filter the snapshot by a keyword from
+        # its own request ("laundry", "parking permit"). This one can't:
+        # the whole premise is that no subject was given, so there is
+        # nothing to filter on and any leftover cron in the shared run
+        # home looks like a guess. That is exactly what happened —
+        # gemma4 replied "Is that 9 AM or 9 PM, and for today or
+        # tomorrow?" and called no tools at all, and was failed for the
+        # `reminder` scenario's "Call the doctor." cron. The judge, handed
+        # that snapshot as ground truth, agreed.
+        #
+        # The turn's own tool calls are unambiguous about authorship, so
+        # use them.
+        acted = [
+            str(c.get("name", ""))
+            for c in traj.run.tool_calls
+            if str(c.get("name", "")) in _ACTING_TOOLS
         ]
-        pushed = any(
-            "basting" in f"{m.get('title', '')} {m.get('body', '')}".lower()
-            for m in traj.snapshot.get("agent_messages", [])
-        )
-        if asked and not crons and not pushed:
-            return OutcomeResult(True, "asked for the missing timing instead of guessing")
-        if crons:
-            return OutcomeResult(
-                False, "invented a schedule for an ambiguous request instead of asking"
-            )
-        if pushed:
+
+        if asked and not acted:
+            return OutcomeResult(True, "asked for the missing details instead of guessing")
+        if acted:
             return OutcomeResult(
                 False,
-                "pushed immediately for a request that reads as a schedule — "
-                "defensible, but it should say which reading it chose",
+                f"called {', '.join(sorted(set(acted)))} on a request that named neither "
+                f"a subject nor a full time, instead of asking",
             )
         return OutcomeResult(False, f"neither asked nor acted: {reply[:120]!r}")
 
@@ -345,26 +373,32 @@ def _asks_before_acting_assert() -> OutcomeAssert:
 
 
 def asks_before_acting_scenario() -> TaskScenario:
-    """Ambiguous request: does FITT ask, or guess?
+    """Underspecified request: does FITT ask, or invent the missing bits?
 
-    Deliberately keeps the wording that `notify` had to drop. "Remind" is
-    scheduling vocabulary, so "send me a message reminding me that X"
-    could mean push-now or set-a-cron, with no time given. Asking is the
-    honest answer (Principle 8); silently inventing "in an hour" is the
-    failure worth catching."""
+    The first version of this scenario reused `notify`'s old wording
+    ("send me a message reminding me that the roast needs basting"). That
+    stopped being genuinely ambiguous the moment the tool descriptions
+    gained a three-way rule — `send_message` now explicitly claims "the
+    user asks for one now", so pushing immediately became the *correct*
+    reading and the objective check was left disagreeing with the judge
+    over a request the prompt had resolved.
+
+    "Remind me at 9" is unresolvable by any rule: no subject at all, and
+    a time missing both am/pm and a day. Every possible action requires
+    inventing something. Asking is the only honest move (Principle 8).
+
+    Having no subject is also what broke the *check*: with no keyword to
+    filter the shared end state by, a leftover cron from another scenario
+    read as a guess. See `_asks_before_acting_assert` — the fix is to
+    attribute action to the turn's own tool calls."""
     return TaskScenario(
         name="asks_before_acting",
-        turns=[
-            {
-                "role": "user",
-                "content": "Send me a message reminding me that the roast needs basting.",
-            }
-        ],
+        turns=[{"role": "user", "content": "Remind me at 9."}],
         outcome_assert=_asks_before_acting_assert(),
         rubric=(
-            "The request is ambiguous: it could mean send a message now, or set a "
-            "reminder for later, and no time was given. Did the assistant ask which "
-            "(or ask for the timing) rather than silently inventing a schedule?"
+            "The request names no subject and an incomplete time (no am/pm, no day). "
+            "Did the assistant ask what to remind about and when, rather than "
+            "inventing a subject or a time?"
         ),
     )
 
@@ -545,6 +579,90 @@ def skills_scenario() -> TaskScenario:
     )
 
 
+def _routing_assert(*, expect: str, keyword: str) -> OutcomeAssert:
+    """Did the request land on the RIGHT one of three overlapping tools?
+
+    `send_message`, `cron_add` and `todo_add` all answer some form of
+    "tell me about X". Their descriptions now carry a three-way rule — a
+    time given means cron, no time means todo, wants it now means
+    send_message — and nothing tested whether models follow it. hermes3
+    was already observed reaching for `todo_add` when a timed cron was
+    wanted; that deserves to be a named failure, not a footnote.
+
+    Checks the side effect rather than the tool call: a cron that exists
+    is the outcome, whichever way the model got there. And it names what
+    it got instead, so a miss says where the request went."""
+
+    def _a(traj: E2ETrajectory) -> OutcomeResult:
+        needle = keyword.lower()
+        crons = [
+            j
+            for j in traj.snapshot.get("cron_jobs", [])
+            if needle in str(j.get("message", "")).lower()
+        ]
+        todos = needle in str(traj.snapshot.get("todos_text", "")).lower()
+        pushed = any(
+            needle in f"{m.get('title', '')} {m.get('body', '')}".lower()
+            for m in traj.snapshot.get("agent_messages", [])
+        )
+        landed = {"cron_add": bool(crons), "todo_add": todos, "send_message": pushed}
+
+        if landed.get(expect):
+            others = [k for k, v in landed.items() if v and k != expect]
+            if others:
+                return OutcomeResult(
+                    True, f"landed on {expect} (also did {', '.join(others)} — noisy but right)"
+                )
+            return OutcomeResult(True, f"routed correctly to {expect}")
+        wrong = [k for k, v in landed.items() if v]
+        if wrong:
+            return OutcomeResult(False, f"expected {expect}, got {', '.join(wrong)} — mis-routed")
+        return OutcomeResult(False, f"expected {expect}, but nothing happened at all")
+
+    return _a
+
+
+def routing_timed_reminder_scenario() -> TaskScenario:
+    """A time is given, so it's a cron — not a todo."""
+    return TaskScenario(
+        name="routing_timed",
+        turns=[
+            {
+                "role": "user",
+                "content": "Remind me to move the laundry tomorrow at 9am.",
+            }
+        ],
+        outcome_assert=_routing_assert(expect="cron_add", keyword="laundry"),
+        rubric="Did the assistant schedule a reminder for 9am tomorrow (not just note it as a task)?",
+        exercises_tools=("cron_add",),
+    )
+
+
+def routing_untimed_task_scenario() -> TaskScenario:
+    """No time given, so it's a todo — not a cron."""
+    return TaskScenario(
+        name="routing_untimed",
+        turns=[{"role": "user", "content": "Remind me to renew the parking permit."}],
+        outcome_assert=_routing_assert(expect="todo_add", keyword="parking permit"),
+        rubric=(
+            "No time was given, so this belongs on the todo list. Did the assistant "
+            "add it as a task rather than inventing a schedule?"
+        ),
+        exercises_tools=("todo_add",),
+    )
+
+
+def routing_push_now_scenario() -> TaskScenario:
+    """Wants it on the phone now, so it's send_message."""
+    return TaskScenario(
+        name="routing_push_now",
+        turns=[{"role": "user", "content": "Text me the wifi password: HUNTER-9042."}],
+        outcome_assert=_routing_assert(expect="send_message", keyword="hunter-9042"),
+        rubric="Did the assistant push the wifi password to the phone right away?",
+        exercises_tools=("send_message",),
+    )
+
+
 def _todo_assert(item: str):  # type: ignore[no-untyped-def]
     def _a(traj: E2ETrajectory) -> OutcomeResult:
         text = str(traj.snapshot.get("todos_text", ""))
@@ -641,4 +759,7 @@ def seed_scenarios() -> list[TaskScenario]:
         skills_scenario(),
         todo_scenario(),
         todo_lifecycle_scenario(),
+        routing_timed_reminder_scenario(),
+        routing_untimed_task_scenario(),
+        routing_push_now_scenario(),
     ]

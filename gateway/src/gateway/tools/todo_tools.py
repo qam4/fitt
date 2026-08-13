@@ -112,8 +112,10 @@ def build_todo_tools() -> list[Tool]:
             description=(
                 "Add an untimed task to the user's todo list. The user saying "
                 "'add X to my todos', 'I need to Y', or 'remind me to Z' (with no "
-                "specific time) is a signal to call this. For a time-based reminder, "
-                "use cron_add instead."
+                "specific time) is a signal to call this. Three-way rule: no time "
+                "-> todo_add; a time ('tomorrow at 9', 'in 10 minutes') -> "
+                "cron_add; wants a message right now -> send_message. If the "
+                "request is ambiguous about which, ask rather than guessing."
             ),
             schema=_SCHEMA_ADD,
             callable=_tool_todo_add,

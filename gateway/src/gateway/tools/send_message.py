@@ -326,13 +326,16 @@ def build_send_message_tool(
     return Tool(
         name="send_message",
         description=(
-            "Proactively send a text message to the user, outside "
-            "the normal reply channel. Use for state-change "
-            "notifications from a silent cron, progress pings on "
-            "a long-running task, or any moment the user isn't "
-            "watching this chat but should know something. Each "
-            "session is rate-limited; exceeding the cap returns a "
-            "structured error with retry_after_secs."
+            "Send a text message to the user's phone, outside the "
+            "normal reply channel. Two cases: (a) the user asks for "
+            "one now — 'text me X', 'send that to my phone', 'message "
+            "me the summary'; (b) you decide they should know "
+            "something while not watching this chat — a silent cron's "
+            "result, progress on a long task. NOT for scheduling: for "
+            "a message at a later time use cron_add, and for an "
+            "untimed task use todo_add. Each session is rate-limited; "
+            "exceeding the cap returns a structured error with "
+            "retry_after_secs."
         ),
         schema=_SCHEMA_SEND_MESSAGE,
         callable=_send_message_impl,

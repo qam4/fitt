@@ -14,6 +14,9 @@ from gateway.e2e_scenarios import (
     news_scenario,
     notify_scenario,
     reminder_scenario,
+    routing_push_now_scenario,
+    routing_timed_reminder_scenario,
+    routing_untimed_task_scenario,
     seed_scenarios,
     skills_scenario,
     todo_lifecycle_scenario,
@@ -303,6 +306,9 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
         "skills",
         "todo",
         "todo_lifecycle",
+        "routing_timed",
+        "routing_untimed",
+        "routing_push_now",
     }
     for s in scens:
         assert s.turns and s.rubric  # all judged + non-empty
@@ -573,11 +579,37 @@ def test_asking_for_the_missing_detail_passes() -> None:
     scen = asks_before_acting_scenario()
 
     res = scen.outcome_assert(
-        _traj(reply="How long after now would you like the reminder sent?", snapshot={})
+        _traj(reply="Remind you about what, and is that 9am or 9pm?", snapshot={})
     )
 
     assert res.passed
     assert "asked" in res.reason
+
+
+def test_a_leftover_cron_from_another_scenario_is_not_a_guess() -> None:
+    """The defect this assert was rewritten for.
+
+    gemma4 replied "Is that 9 AM or 9 PM, and for today or tomorrow?" and
+    called nothing — the correct answer — and was failed for the
+    `reminder` scenario's "Call the doctor." cron, still sitting in the
+    shared run home. Scenarios with a subject filter the snapshot by
+    keyword; this one has no subject to filter on, so it must attribute
+    action to the turn's own tool calls instead."""
+    scen = asks_before_acting_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="Is that 9 AM or 9 PM, and for today or tomorrow?",
+            tool_calls=(),
+            snapshot={
+                "cron_jobs": [{"message": "Call the doctor.", "at_ts": 1}],
+                "todos_text": "- [ ] call the doctor",
+                "agent_messages": [{"title": "", "body": "baste the roast"}],
+            },
+        )
+    )
+
+    assert res.passed
 
 
 def test_inventing_a_schedule_fails() -> None:
@@ -586,13 +618,13 @@ def test_inventing_a_schedule_fails() -> None:
 
     res = scen.outcome_assert(
         _traj(
-            reply="Done, I'll remind you in an hour.",
-            snapshot={"cron_jobs": [{"message": "the roast needs basting", "at_ts": 1}]},
+            reply="Done, set for 9am.",
+            tool_calls=({"name": "cron_add", "args": {"text": "reminder"}, "ok": True},),
         )
     )
 
     assert not res.passed
-    assert "invented a schedule" in res.reason
+    assert "cron_add" in res.reason
 
 
 def test_silently_pushing_now_is_also_flagged() -> None:
@@ -601,12 +633,26 @@ def test_silently_pushing_now_is_also_flagged() -> None:
     res = scen.outcome_assert(
         _traj(
             reply="Sent.",
-            snapshot={"agent_messages": [{"title": "", "body": "the roast needs basting"}]},
+            tool_calls=({"name": "send_message", "args": {"text": "reminder"}, "ok": True},),
         )
     )
 
     assert not res.passed
-    assert "which reading" in res.reason
+    assert "send_message" in res.reason
+
+
+def test_reading_the_todo_list_is_not_acting() -> None:
+    """Looking around before asking is fine — only mutations count."""
+    scen = asks_before_acting_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="Remind you about what?",
+            tool_calls=({"name": "todo_list", "args": {}, "ok": True},),
+        )
+    )
+
+    assert res.passed
 
 
 def test_neither_asking_nor_acting_fails() -> None:
@@ -622,5 +668,91 @@ def test_the_ambiguous_wording_is_preserved_here() -> None:
     signal the reword removed is gone for good."""
     text = str(asks_before_acting_scenario().turns[0]["content"]).lower()
 
-    assert "reminding" in text
+    assert "at 9" in text
     assert "right now" not in text
+
+
+# ------------------------------------------- routing
+#
+# send_message / cron_add / todo_add all answer some form of "tell me
+# about X". Their descriptions now carry a three-way rule (time -> cron,
+# no time -> todo, now -> send_message) and nothing tested whether models
+# follow it. hermes3 was observed reaching for todo_add when a timed cron
+# was wanted; these make that a named failure.
+
+
+def test_timed_reminder_routes_to_cron() -> None:
+    scen = routing_timed_reminder_scenario()
+
+    res = scen.outcome_assert(
+        _traj(snapshot={"cron_jobs": [{"message": "move the laundry", "at_ts": 1}]})
+    )
+
+    assert res.passed
+
+
+def test_timed_reminder_landing_on_a_todo_is_a_named_misroute() -> None:
+    """The exact mistake hermes3 made."""
+    scen = routing_timed_reminder_scenario()
+
+    res = scen.outcome_assert(_traj(snapshot={"todos_text": "- [ ] move the laundry"}))
+
+    assert not res.passed
+    assert "got todo_add" in res.reason
+
+
+def test_untimed_task_routes_to_todo() -> None:
+    scen = routing_untimed_task_scenario()
+
+    res = scen.outcome_assert(_traj(snapshot={"todos_text": "- [ ] renew the parking permit"}))
+
+    assert res.passed
+
+
+def test_untimed_task_inventing_a_cron_is_a_misroute() -> None:
+    scen = routing_untimed_task_scenario()
+
+    res = scen.outcome_assert(
+        _traj(snapshot={"cron_jobs": [{"message": "renew the parking permit", "at_ts": 1}]})
+    )
+
+    assert not res.passed
+    assert "got cron_add" in res.reason
+
+
+def test_push_now_routes_to_send_message() -> None:
+    scen = routing_push_now_scenario()
+
+    res = scen.outcome_assert(
+        _traj(snapshot={"agent_messages": [{"title": "", "body": "wifi: HUNTER-9042"}]})
+    )
+
+    assert res.passed
+
+
+def test_doing_nothing_is_distinguished_from_misrouting() -> None:
+    """A miss should say where the request went, or that it went nowhere."""
+    scen = routing_push_now_scenario()
+
+    res = scen.outcome_assert(_traj(snapshot={}))
+
+    assert not res.passed
+    assert "nothing happened" in res.reason
+
+
+def test_right_tool_plus_extra_noise_still_passes() -> None:
+    """Belt-and-braces behaviour (also adding a todo) isn't a routing
+    failure — the requested outcome happened."""
+    scen = routing_timed_reminder_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "cron_jobs": [{"message": "move the laundry", "at_ts": 1}],
+                "todos_text": "- [ ] move the laundry",
+            }
+        )
+    )
+
+    assert res.passed
+    assert "noisy but right" in res.reason

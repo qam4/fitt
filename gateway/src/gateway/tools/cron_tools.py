@@ -407,7 +407,10 @@ def build_cron_tools() -> list[Tool]:
             name="cron_add",
             description=(
                 "Schedule an agent session to fire on its own — "
-                "use this for reminders and recurring jobs. "
+                "use this for reminders WITH a time, and recurring "
+                "jobs. Three-way rule: a time given -> cron_add; no "
+                "time -> todo_add; wants a message right now -> "
+                "send_message. Ambiguous about which? Ask. "
                 "REQUIRED args: `text` (what the cron should do "
                 "or say when it fires) and `schedule_spec` (when). "
                 "Schedules: interval ('every 60s'), one-shot "

@@ -85,16 +85,33 @@ The curated ordering - the judgment call a tool can't make for you.
 - **Un-anchor the judge (cheap, do this first).** `build_judge_prompt`
   hands the judge the harness's own verdict under the heading "Objective
   outcome (deterministic, checked by code)" and labels the snapshot
-  "GROUND TRUTH". On the five occasions the *harness* was wrong, the
+  "GROUND TRUTH". On the **six** occasions the *harness* was wrong, the
   judge was therefore handed a wrong answer presented as authoritative —
-  and agreed every time, once while Tier 3 showed it the contradicting
-  evidence verbatim. Add a blind mode (same internals, no objective
-  verdict, softer framing: "captured by the harness, may be incomplete")
-  and replay it against those five known cases. If a blind judge catches
-  what an anchored one rubber-stamped, most of the discovery value costs
-  one prompt change. Note the judge already HAS internals — tool
-  args/results, timeline, Tier-3 sent messages — so blindness was never
-  the problem.
+  and agreed every time, twice while the prompt showed it the
+  contradicting evidence verbatim. Add a blind mode (same internals, no
+  objective verdict, softer framing: "captured by the harness, may be
+  incomplete") and replay it against those six known cases. If a blind
+  judge catches what an anchored one rubber-stamped, most of the
+  discovery value costs one prompt change. Note the judge already HAS
+  internals — tool args/results, timeline, Tier-3 sent messages — so
+  blindness was never the problem. **Sharpest of the six
+  (2026-08-13):** Tier 1 showed it `tools: (none)` and a reply that
+  asked a clarifying question, and it wrote "a cron job was created
+  without asking ... while inventing the subject entirely" — it even
+  restated the clarifying question inside the sentence that condemned
+  it. Nothing about that verdict needed deeper evidence; it needed the
+  snapshot to stop being labelled ground truth.
+- **Objective↔judge disagreement is now a report line — SHIPPED
+  2026-08-13.** `E2EReport.disagreements` + a `render()` line naming
+  each split and which way it went. It's what exposed a stale scenario
+  (a tool description had grown a clause resolving the ambiguity the
+  scenario was built on, so code said FAIL and judge said PASS for a
+  whole run, with both layers behaving correctly). Known limit, written
+  into the docstring: because the judge is anchored on the objective
+  verdict it's biased toward agreement, so a hit is strong evidence and
+  silence is weak — the very next defect had both layers wrong
+  together. Un-anchoring (above) is what would make silence mean
+  something.
 - **IDEA ONLY — an exploratory agent, someday.** Even un-anchored, the
   judge reads *one run*: it can't form a hypothesis, change a variable and
   re-run, which is how the defects in these sessions were actually found.
@@ -141,12 +158,18 @@ The curated ordering - the judgment call a tool can't make for you.
   garbage. Not yet separated: model emitting a stray token vs FITT
   failing to strip one. A reply consisting only of template tokens is
   cheap to detect and suppress, and worth doing regardless of cause.
-- **Scenario cross-talk (small, will bite again).** Scenarios share one
-  run home, so lessons / todos / crons / the index carry side effects
-  between them — a `learn_add` in one scenario handed a later scenario
-  its answer. Distinct fixtures per scenario fixed the instance; the
-  class is open. Cheapest general fix is probably per-scenario lessons
-  isolation, since that's the global channel.
+- **Scenario cross-talk (no longer theoretical — it changed a verdict).**
+  Scenarios share one run home, so lessons / todos / crons / the index
+  carry side effects between them — a `learn_add` in one scenario handed
+  a later scenario its answer, and on 2026-08-13 the `reminder`
+  scenario's cron made `asks_before_acting` fail a model that had
+  answered correctly and called nothing. Distinct fixtures per scenario
+  fix instances; the class is open. Two levers: per-scenario state
+  isolation (the real fix, cheapest at the lessons channel since that's
+  the global one), and the assert-side discipline now in place —
+  attribute side effects to the turn's own `tool_calls` whenever there's
+  no keyword to filter the snapshot by, which is the only option for a
+  scenario whose premise is that no subject was given.
 - **A Windows CI leg — the missing observer (2026-08-10).** FITT deploys
   on Windows; both CI jobs are `ubuntu-latest`. That gap is why the
   cp1252 `UnicodeEncodeError` class recurred ~10 times: it can't fail on

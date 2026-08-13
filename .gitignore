@@ -61,3 +61,11 @@ open-webui-data/
 
 # kiro-monitor run artifacts (status.json + output.log per job)
 output/
+
+# Local scratch: throwaway notes and the machine-specific run scripts
+# that drive an eval (they name this host's paths, so they can't be
+# shared — Principle 10). Findings worth keeping graduate into
+# docs/observed-issues.md.
+_*.md
+_*.cmd
+_*.ps1

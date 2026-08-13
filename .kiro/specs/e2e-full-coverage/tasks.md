@@ -107,8 +107,13 @@ Status legend: `[x]` done, `[ ]` not yet.
 - [ ] 17. Approval flow: approve / reject / timeout with a scripted
   decider; assert the tool ran or didn't, and that the audit log
   recorded the decision. (D5; R4)
-- [ ] 18. Skills loader: a temp skill is offered to the model and
-  appears in the capability surface. (R4)
+- [x] 18. Skills loader: a temp skill is offered to the model and
+  appears in the capability surface. (R4) DONE 2026-08-12 via the
+  `skills` scenario + `TaskScenario.fixture_files` (planted *pre-boot*,
+  because `SkillsLoader` scans once at startup and deliberately never
+  re-reads) + `requires_features` so a skills-off deployment reports
+  unsupported instead of a model failure. **Live: gemma4 PASSES** —
+  loaded the recipe and applied it.
 - [ ] 19. Planned-mode orchestration: same scenario via `--mode planned`,
   compared against flat. (R4)
 - [ ] 20. Prefetch: with `prefetch_enabled`, recall works with no
@@ -141,10 +146,8 @@ execution mode (planned) is invisible to a registry-derived count. Mapped
 against `FITT_ROADMAP.md`, these ship today and the standing view says
 nothing about them:
 
-- [ ] 27. **Skills loader (Phase 4.10).** Shipped, and skills aren't
-  tools — the contract layer can't see them. Needs a scenario where a
-  temp skill is loaded, appears in the capability surface, and the model
-  uses it. Probably also a contract-style check that a malformed
+- [~] 27. **Skills loader (Phase 4.10).** Scenario DONE 2026-08-12 (see
+  task 18). Still open: a contract-style check that a malformed
   `SKILL.md` is rejected with a readable error rather than breaking boot.
 - [ ] 28. **Lessons applied later (Phase 5).** `learn_*` are
   contract-checked, but nothing tests the *point* of lessons: correct the
@@ -178,6 +181,57 @@ only registers when an embedding alias is bound, so the registry is 33 or
 34 tools depending on config. Any coverage percentage has to say which.
 
 
+## Routing + scenario-premise discipline (added 2026-08-13)
+
+Three scenarios and two guard mechanisms that came out of the
+send/cron/todo routing triangle. Grouped here because they share a
+lesson: a scenario is only fair if the behaviour it demands is behaviour
+FITT actually advertises, and *that* premise needs pinning too.
+
+- [x] 40. **Document the third edge of the routing triangle.**
+  `cron_add` and `todo_add` spelled out their boundary; `send_message`
+  was described purely as agent-initiated, so the everyday "text me X"
+  wasn't advertised anywhere and the model had to infer it. All three
+  descriptions now carry the same three-way rule (time -> `cron_add`, no
+  time -> `todo_add`, wants it now -> `send_message`, ambiguous -> ask).
+  DONE 2026-08-13.
+- [x] 41. **Routing scenarios: `routing_timed`, `routing_untimed`,
+  `routing_push_now`.** Assert the documented rule actually holds, which
+  turns hermes3's observed mis-route (reaching for `todo_add` when a
+  timed cron was wanted) into a named failure rather than a footnote.
+  Check the side effect, not the tool call, and name what it got instead
+  so a miss says where the request went. **Live: gemma4 passes all
+  three.** DONE 2026-08-13.
+- [x] 42. **Pin the premises (`tests/test_scenario_premises.py`).** Task
+  40 silently invalidated `asks_before_acting`: it was built on wording
+  that was unresolvable, `send_message`'s description then claimed that
+  wording, and the scenario carried on asserting a failure for behaviour
+  the prompt now endorses. Nothing failed — an **unpinned premise**, a
+  test depending on a property of production text that lived nowhere.
+  Now: the triangle must stay closed, the timed/untimed clauses must
+  exist verbatim, `routing_push_now` must use a phrasing `send_message`
+  advertises, and `asks_before_acting` must use one no description
+  claims. Plus a guard on the extraction helper itself (possessives like
+  "the user's phone" mis-pair a naive quote regex and turn every check
+  vacuous) and one asserting `_ACTING_TOOLS` names real tools.
+  DONE 2026-08-13.
+- [x] 43. **Report objective↔judge disagreement.**
+  `E2EReport.disagreements` + a `render()` line. The two layers fail
+  differently — code can only be wrong about the *scenario*, the judge
+  only about the *reply* — so a split says one of them is broken, and it
+  is at least as often the scenario. It's what exposed task 42's stale
+  scenario. Documented limit: the judge is anchored on the objective
+  verdict, so it's biased toward agreement; a hit is strong evidence,
+  silence is weak (task 34 is what would change that). DONE 2026-08-13.
+- [x] 44. **Attribute action to the turn, not the end state.** The
+  corrected `asks_before_acting` then failed a *correct* model: it asked
+  the clarifying question and called nothing, and was blamed for the
+  `reminder` scenario's leftover cron. Scenarios with a subject filter
+  the snapshot by keyword; this one has no subject, so it must read the
+  turn's own `tool_calls`. The general rule now recorded in
+  observed-issues: snapshot-only asserts are only safe when they can
+  attribute the side effect to the turn. DONE 2026-08-13.
+
 ## Judge enhancements (added 2026-08-12)
 
 Salvaged from a withdrawn "frontier explorer" spec. The subsystem framing
@@ -192,12 +246,15 @@ already have, and the anchoring one is close to free.
   while Tier 3 showed it the contradicting evidence verbatim. Add a mode
   that withholds the objective verdict and softens the framing to
   "captured by the harness, may be incomplete".
-- [ ] 35. **Replay the judge against known-wrong cases.** We have five:
+- [ ] 35. **Replay the judge against known-wrong cases.** We have six:
   dropped `tool_calls`, unregistered `memory_search`, lesson leak within
-  a scenario, lesson leak across scenarios, wrong cron delivery channel.
-  Store those trajectories as fixtures and assert a blind judge flags
-  what the anchored one rubber-stamped. This is a regression test *for
-  the judge*, which nothing currently has.
+  a scenario, lesson leak across scenarios, wrong cron delivery channel,
+  and (2026-08-13, the sharpest) a cron from a *different* scenario
+  blamed on a turn whose Tier-1 evidence read `tools: (none)` — the
+  judge restated the model's clarifying question inside the sentence
+  condemning it for not asking. Store those trajectories as fixtures and
+  assert a blind judge flags what the anchored one rubber-stamped. This
+  is a regression test *for the judge*, which nothing currently has.
 - [ ] 36. **Require citations in the verdict.** The `reasoning` field
   already must state a root-cause hypothesis (Tier 2); extend it to cite
   specific evidence — which iteration, which tool call, which snapshot
