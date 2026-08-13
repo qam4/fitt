@@ -222,6 +222,24 @@ class TaskScenario:
     unsupported reason, per Principle 8: when a capability is missing,
     say what's missing AND how to add it."""
 
+    requires_features: tuple[str, ...] = ()
+    """Non-tool capabilities this scenario needs (e.g. ``skills``).
+
+    Coverage was scoped from the tool registry, which is why a shipped
+    feature with no tool — the skills loader — had no scenario and no way
+    to declare a prerequisite. Same discipline as ``requires_tools``: a
+    disabled feature reports unsupported, never a model failure."""
+
+    fixture_files: tuple[tuple[str, str], ...] = ()
+    """``(path relative to FITT_HOME, content)`` written *before the
+    gateway boots*.
+
+    Distinct from the ``setup`` hook, which runs after boot: some state
+    is only read at startup. Skills are the case in point —
+    ``SkillsLoader`` scans once at boot and deliberately never re-reads
+    within a process lifetime (prompt-cache stability), so a skill
+    planted by ``setup`` would be invisible."""
+
     exercises_tools: tuple[str, ...] = ()
     """Which tools this scenario is *meant* to drive — coverage intent,
     distinct from ``requires_tools`` (what must exist for it to run).
@@ -298,6 +316,7 @@ async def run_scenario(
     judge: JudgeFn | None = None,
     judge_timeline: bool = False,
     available_tools: Collection[str] | None = None,
+    available_features: Collection[str] | None = None,
     setup_context: SetupContext | None = None,
 ) -> E2EResult:
     """Run one scenario end to end and grade it.
@@ -313,11 +332,11 @@ async def run_scenario(
     returns an unsupported result, unscored and unjudged. Grading a
     model on a tool it was never offered produces a confident wrong
     answer, which is worse than no answer."""
-    missing = _missing_tools(scenario, available_tools)
+    missing = _missing_prereqs(scenario, available_tools, available_features)
     if missing:
         reason = (
             f"scenario needs {', '.join(missing)}, which "
-            f"{'is' if len(missing) == 1 else 'are'} not registered on this "
+            f"{'is' if len(missing) == 1 else 'are'} not available on this "
             "deployment — not run, not scored"
         )
         if scenario.requires_hint:
@@ -414,17 +433,25 @@ def _not_scored(scenario: TaskScenario, reason: str, *, inconclusive: bool) -> E
     )
 
 
-def _missing_tools(
-    scenario: TaskScenario, available_tools: Collection[str] | None
+def _missing_prereqs(
+    scenario: TaskScenario,
+    available_tools: Collection[str] | None,
+    available_features: Collection[str] | None,
 ) -> tuple[str, ...]:
-    """Required tools absent from the registry.
+    """Required tools/features absent from this deployment.
 
-    ``None`` means the caller didn't tell us what's registered (unit
-    tests with fake dispatches), so we can't check and don't guess."""
-    if available_tools is None or not scenario.requires_tools:
-        return ()
-    have = set(available_tools)
-    return tuple(t for t in scenario.requires_tools if t not in have)
+    ``None`` means the caller didn't tell us what's available (unit tests
+    with fake dispatches), so that half isn't checked rather than
+    guessed. Features are labelled in the message so "feature 'skills'"
+    doesn't read like a missing tool."""
+    missing: list[str] = []
+    if available_tools is not None and scenario.requires_tools:
+        have_tools = set(available_tools)
+        missing += [t for t in scenario.requires_tools if t not in have_tools]
+    if available_features is not None and scenario.requires_features:
+        have_features = set(available_features)
+        missing += [f"feature {f!r}" for f in scenario.requires_features if f not in have_features]
+    return tuple(missing)
 
 
 # --------------------------------------------------------------- aggregate

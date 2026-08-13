@@ -14,6 +14,7 @@ from gateway.e2e_scenarios import (
     notify_scenario,
     reminder_scenario,
     seed_scenarios,
+    skills_scenario,
     todo_lifecycle_scenario,
     todo_scenario,
 )
@@ -23,6 +24,7 @@ def _traj(
     *,
     reply: str = "",
     tools: tuple[str, ...] = (),
+    tool_calls: tuple[dict, ...] = (),
     snapshot: dict | None = None,
     earlier_tool_calls: tuple[dict, ...] = (),
 ) -> E2ETrajectory:
@@ -32,6 +34,7 @@ def _traj(
         run=RunResult(
             reply=reply,
             tool_sequence=tools,
+            tool_calls=tool_calls,
             earlier_tool_calls=earlier_tool_calls,
         ),
         snapshot=snapshot or {},
@@ -295,6 +298,7 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
         "news_summary",
         "memory_recall",
         "memory_recall_cross_session",
+        "skills",
         "todo",
         "todo_lifecycle",
     }
@@ -428,3 +432,127 @@ def test_cron_fires_declares_a_settle_hook() -> None:
 def test_new_scenarios_declare_their_coverage_intent() -> None:
     assert notify_scenario().exercises_tools == ("send_message",)
     assert cron_fires_scenario().exercises_tools == ("cron_add",)
+
+
+# --------------------------------------------------------------- skills
+
+
+def test_skills_passes_when_the_recipe_was_loaded_and_applied() -> None:
+    scen = skills_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="Fill to 1L with vinegar and water, stand 20 min, rinse. ZEPHYR-77",
+            tool_calls=(
+                {
+                    "name": "read_file",
+                    "args": {"project": "fitt", "path": "skills/kettle-descale/SKILL.md"},
+                    "ok": True,
+                },
+            ),
+        )
+    )
+
+    assert res.passed
+
+
+def test_skills_fails_when_the_recipe_was_never_loaded() -> None:
+    """The likely real-world failure: the model answers from general
+    knowledge instead of fetching the recipe."""
+    scen = skills_scenario()
+
+    res = scen.outcome_assert(_traj(reply="Just use vinegar and water.", tool_calls=()))
+
+    assert not res.passed
+    assert "never loaded" in res.reason
+
+
+def test_skills_fails_when_loaded_but_not_followed() -> None:
+    scen = skills_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="Fill with vinegar and water, stand, rinse.",
+            tool_calls=(
+                {
+                    "name": "read_file",
+                    "args": {"path": "skills/kettle-descale/SKILL.md"},
+                    "ok": True,
+                },
+            ),
+        )
+    )
+
+    assert not res.passed
+    assert "didn't apply it" in res.reason
+
+
+def test_skills_distinguishes_reading_the_wrong_file() -> None:
+    scen = skills_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="No idea.",
+            tool_calls=({"name": "read_file", "args": {"path": "identity/user.md"}, "ok": True},),
+        )
+    )
+
+    assert not res.passed
+    assert "not for the" in res.reason
+
+
+def test_skills_declares_a_feature_prerequisite_not_a_tool_one() -> None:
+    """A skill isn't a tool, which is exactly why this feature had no
+    coverage: the registry-derived count couldn't see it."""
+    scen = skills_scenario()
+
+    assert scen.requires_features == ("skills",)
+    assert "skills_enabled" in scen.requires_hint
+
+
+def test_skills_plants_its_recipe_before_boot() -> None:
+    """SkillsLoader scans once at startup, so a post-boot setup hook
+    would plant an invisible skill."""
+    scen = skills_scenario()
+
+    assert scen.setup is None
+    paths = [p for p, _ in scen.fixture_files]
+    assert paths == ["skills/kettle-descale/SKILL.md"]
+
+
+def test_the_skill_marker_lives_only_in_the_body() -> None:
+    """The whole assertion rests on this: the body is not injected into
+    the prompt, so the marker can't be guessed from the description."""
+    scen = skills_scenario()
+    _, body = scen.fixture_files[0]
+
+    assert "ZEPHYR-77" in body
+    # Not in the description line the prompt block renders.
+    description_line = next(line for line in body.splitlines() if line.startswith("description:"))
+    assert "ZEPHYR-77" not in description_line
+    # Nor in what the user asks.
+    assert "ZEPHYR-77" not in str(scen.turns[0]["content"])
+
+
+def test_notify_wording_avoids_scheduling_vocabulary() -> None:
+    """Third instance of a scenario colliding with FITT's own concepts.
+
+    "remind" means cron here, so "send me a message reminding me..." read
+    as a schedule with a missing time and the model asked for one — good
+    behaviour, scored as a failure. `notify` is about pushing *now*, so
+    its wording must not borrow scheduling words.
+    """
+    text = str(notify_scenario().turns[0]["content"]).lower()
+
+    for collision in ("remind", "later", "schedule", "tomorrow", "in an hour"):
+        assert collision not in text, f"notify wording borrows scheduling vocabulary: {collision!r}"
+    assert "right now" in text  # and says so explicitly
+
+
+def test_cron_scenarios_do_keep_scheduling_vocabulary() -> None:
+    """The mirror image: reminder/cron_fires SHOULD use those words."""
+    reminder_text = str(reminder_scenario().turns[0]["content"]).lower()
+    cron_text = str(cron_fires_scenario().turns[0]["content"]).lower()
+
+    assert "remind" in reminder_text
+    assert "minutes" in cron_text or "remind" in cron_text

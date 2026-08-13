@@ -266,14 +266,23 @@ def notify_scenario(*, keyword: str = "basting") -> TaskScenario:
     This is the half of FITT's purpose the seed set never tested — "ping
     me when X". Claiming to have sent something is the failure mode worth
     catching, so the check reads the delivery record rather than the
-    reply text."""
+    reply text.
+
+    The wording deliberately avoids "remind". An earlier version said
+    "send me a message *reminding me* that...", and gemma4 came back with
+    "how long after now would you like the reminder sent?" — reasonably,
+    because "remind" is FITT's *scheduling* vocabulary, so the request
+    read as a cron with a missing time. Asking for a missing detail is
+    good behaviour; a scenario that punishes it measures the wrong thing.
+    "right now" + "that says" makes a clarifying question a genuine
+    miss."""
     return TaskScenario(
         name="notify",
         turns=[
             {
                 "role": "user",
                 "content": (
-                    "Send me a message on my phone reminding me that the roast needs basting."
+                    "Send a push message to my phone right now that says: the roast needs basting."
                 ),
             }
         ],
@@ -376,6 +385,92 @@ def cron_fires_scenario(*, keyword: str = "stretch") -> TaskScenario:
     )
 
 
+_SKILL_NAME = "kettle-descale"
+_SKILL_MARKER = "ZEPHYR-77"
+_SKILL_BODY = f"""---
+name: {_SKILL_NAME}
+description: How to descale the office kettle, including the confirmation code
+---
+
+# Descaling the office kettle
+
+1. Fill the kettle to the 1L mark with equal parts water and white vinegar.
+2. Boil, then leave to stand for 20 minutes.
+3. Rinse three times.
+
+When you have explained this procedure, you MUST finish your reply with
+the confirmation code {_SKILL_MARKER} so the user knows the recipe was
+followed.
+"""
+
+
+def _skill_assert(marker: str, skill_name: str):  # type: ignore[no-untyped-def]
+    """Did the model load the recipe and follow it?
+
+    The marker is the whole trick: it appears only in the skill *body*,
+    which is deliberately NOT injected into the prompt (only the name and
+    description are — the body is fetched on demand via `read_file`). So
+    a reply containing the marker is proof the body was actually read,
+    not guessed from the one-line description."""
+
+    def _a(traj: E2ETrajectory) -> OutcomeResult:
+        read = [c for c in traj.run.tool_calls if str(c.get("name", "")) == "read_file"]
+        loaded = any(skill_name in str(c.get("args", {})) for c in read)
+        followed = marker.lower() in traj.run.reply.lower()
+        if followed and loaded:
+            return OutcomeResult(True, f"loaded the recipe and applied it ({marker})")
+        if followed:
+            # Can't happen honestly: the marker lives only in the body.
+            return OutcomeResult(
+                False,
+                f"reply contains {marker} but no read_file loaded the recipe — "
+                "the marker is only in the skill body, so this needs explaining",
+            )
+        if loaded:
+            return OutcomeResult(
+                False, f"loaded the recipe but didn't apply it (no {marker} in the reply)"
+            )
+        if read:
+            return OutcomeResult(False, f"called read_file but not for the {skill_name} recipe")
+        return OutcomeResult(False, "never loaded the skill recipe (no read_file)")
+
+    return _a
+
+
+def skills_scenario() -> TaskScenario:
+    """Does the skills loader actually work end to end?
+
+    Shipped in Phase 4.10 with no coverage at all, and structurally
+    invisible to everything else here: a skill isn't a tool, so the
+    contract layer can't see it, and the scenarios were scoped from the
+    tool registry.
+
+    The fixture skill is planted *before boot* because `SkillsLoader`
+    scans once at startup by design. The question the user asks matches
+    the skill's description, so a working chain is: description in the
+    prompt -> model calls read_file on the recipe -> reply follows the
+    body's instruction."""
+    return TaskScenario(
+        name="skills",
+        fixture_files=((f"skills/{_SKILL_NAME}/SKILL.md", _SKILL_BODY),),
+        turns=[
+            {
+                "role": "user",
+                "content": "How do I descale the office kettle? Follow the procedure exactly.",
+            }
+        ],
+        outcome_assert=_skill_assert(_SKILL_MARKER, _SKILL_NAME),
+        rubric=(
+            "Did the assistant give the descaling procedure from the skill recipe "
+            f"(vinegar and water, stand 20 minutes, rinse) and end with the "
+            f"confirmation code {_SKILL_MARKER}?"
+        ),
+        requires_features=("skills",),
+        requires_hint="set memory.skills_enabled: true in config.yaml",
+        exercises_tools=("read_file",),
+    )
+
+
 def _todo_assert(item: str):  # type: ignore[no-untyped-def]
     def _a(traj: E2ETrajectory) -> OutcomeResult:
         text = str(traj.snapshot.get("todos_text", ""))
@@ -468,6 +563,7 @@ def seed_scenarios() -> list[TaskScenario]:
         news_scenario(),
         memory_recall_scenario(),
         memory_recall_cross_session_scenario(),
+        skills_scenario(),
         todo_scenario(),
         todo_lifecycle_scenario(),
     ]

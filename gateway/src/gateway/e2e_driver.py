@@ -231,6 +231,46 @@ def _timeline_from_turns(app: Any, session_id: str) -> tuple[dict[str, Any], ...
     return tuple(out)
 
 
+def isolate_memory_paths(cfg: Any, run_home: Path) -> Any:
+    """Point every FITT_HOME-derived memory path at ``run_home``.
+
+    Enumerated in one place on purpose. These paths are ``Field(
+    default_factory=lambda: fitt_home() / ...)``, so they're resolved when
+    the *config loads* — before the harness redirects ``FITT_HOME``. Any
+    one that's forgotten silently reads or writes the operator's real
+    home, and the failure looks like a model or feature defect rather than
+    a leak:
+
+    * ``index_path`` forgotten -> eval turns indexed into real memory,
+      where they could surface in later recall.
+    * ``skills_dir`` forgotten -> the loader scanned the real skills dir
+      and found none of the fixture, so a working skills feature reported
+      "the model never loaded the recipe".
+
+    Returns the mutated config for chaining; also asserts the result, so a
+    newly added path field fails loudly here rather than leaking."""
+    cfg.memory = cfg.memory.model_copy(
+        update={
+            "identity_dir": run_home / "identity",
+            "sessions_dir": run_home / "sessions",
+            "skills_dir": run_home / "skills",
+            "index_path": run_home / "memory" / "index.db",
+        }
+    )
+    stray = [
+        f"{name}={value}"
+        for name, value in vars(cfg.memory).items()
+        if isinstance(value, Path) and run_home not in value.parents and value != run_home
+    ]
+    if stray:
+        raise AssertionError(
+            "eval config still points outside the isolated run home: "
+            + ", ".join(sorted(stray))
+            + " — add it to isolate_memory_paths()"
+        )
+    return cfg
+
+
 def ensure_session(app: Any, session_id: str) -> None:
     """Register ``session_id`` if it isn't already.
 

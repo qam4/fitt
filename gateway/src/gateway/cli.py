@@ -1883,7 +1883,7 @@ def eval_e2e_cmd(
     from datetime import UTC, datetime
 
     from .config import fitt_home
-    from .e2e_driver import build_http_dispatch, snapshot_app
+    from .e2e_driver import build_http_dispatch, isolate_memory_paths, snapshot_app
     from .e2e_eval import (
         SetupContext,
         aggregate,
@@ -1957,16 +1957,25 @@ def eval_e2e_cmd(
     # Unknown-alias validation already happened above, so this index is safe.
     cfg.aliases = {**cfg.aliases, "fitt-default": cfg.aliases[dut]}
 
-    cfg.memory = cfg.memory.model_copy(
-        update={
-            "identity_dir": iso_home / "identity",
-            "sessions_dir": iso_home / "sessions",
-            # Keep the retrieval index inside the run home too, or eval
-            # turns get indexed into the operator's real memory and can
-            # surface in later recall.
-            "index_path": iso_home / "memory" / "index.db",
-        }
-    )
+    # Scenario fixtures land BEFORE create_app: some state is only read at
+    # boot. Skills are the case in point — SkillsLoader scans once at
+    # startup and never re-reads (prompt-cache stability), so a skill
+    # planted by a post-boot setup hook would be invisible.
+    scenarios = seed_scenarios()
+    planted = 0
+    for scen in scenarios:
+        for rel, content in scen.fixture_files:
+            target = iso_home / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            planted += 1
+    if planted:
+        _console.print(f"[dim]planted {planted} scenario fixture file(s) pre-boot[/dim]")
+
+    # One place for every FITT_HOME-derived path, and it asserts. Two
+    # separate leaks (the retrieval index, then the skills dir) came from
+    # redirecting these ad hoc and forgetting one.
+    isolate_memory_paths(cfg, iso_home)
     _console.print(f"[dim]isolated run home: {iso_home}[/dim]")
 
     from .app import create_app
@@ -2054,8 +2063,19 @@ def eval_e2e_cmd(
     # models in a row).
     available_tools = app.state.tool_registry.list_names()
     registered = set(available_tools)
+    # Non-tool capabilities, so a scenario for a feature with no tool
+    # (skills) can declare a prerequisite too.
+    available_features: list[str] = []
+    if getattr(cfg.memory, "skills_enabled", False):
+        available_features.append("skills")
+    if getattr(cfg.memory, "embedding_alias", None):
+        available_features.append("retrieval")
+    features = set(available_features)
     unsupported_names = [
-        scen.name for scen in scenarios if any(t not in registered for t in scen.requires_tools)
+        scen.name
+        for scen in scenarios
+        if any(t not in registered for t in scen.requires_tools)
+        or any(f not in features for f in scen.requires_features)
     ]
     if unsupported_names:
         _console.print(
@@ -2081,6 +2101,7 @@ def eval_e2e_cmd(
                         judge=judge,
                         judge_timeline=(judge_detail in ("verbose", "max")),
                         available_tools=available_tools,
+                        available_features=available_features,
                         setup_context=SetupContext(app=app, session_id=session_id),
                     )
                 )
