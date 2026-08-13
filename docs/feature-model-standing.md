@@ -9,20 +9,22 @@ hand-editing this file.
 | chitchat | pass | pass | pass |
 | reminder | pass | FAIL | pass |
 | cron_fires | pass | pass | pass |
-| notify | pass | FAIL | pass |
+| notify | pass | pass | pass |
+| asks_before_acting | pass | FAIL | FAIL |
 | news_summary | pass | FAIL | pass |
 | memory_recall | pass | FAIL | pass |
 | memory_recall_cross_session | pass | FAIL | FAIL |
+| skills | pass | FAIL | pass |
 | todo | pass | pass | pass |
 | todo_lifecycle | pass | pass | pass |
-| skills | pass | - | - |
+| routing_timed | pass | pass | pass |
+| routing_untimed | pass | FAIL | pass |
+| routing_push_now | pass | pass | pass |
 
 Legend: `pass` objective check passed · `FAIL` failed · `n/a` feature not available on this deployment · `?` ran but didn't exercise what it tests · `-` not measured for this model.
 
 Runs folded in (latest per model):
 
-- `fitt-ec2-gemma4` (gemma4:12b-it-qat) — 2026-08-13T14:00:00+00:00, samples=1, objective 10/10, judge: claude-sonnet-5
-- `fitt-ec2-hermes` (hermes3:8b) — 2026-08-12T19:31:07+00:00, samples=1, objective 4/9, judge: claude-sonnet-5
-- `fitt-ec2-qwen3` (qwen3:14b) — 2026-08-12T19:21:39+00:00, samples=1, objective 8/9, judge: claude-sonnet-5
-
-Not comparable like-for-like — these models are missing at least one scenario the others have measured, so re-run them before reading the columns against each other: fitt-ec2-hermes, fitt-ec2-qwen3.
+- `fitt-ec2-gemma4` (gemma4:12b-it-qat) — 2026-08-13T17:27:37+00:00, samples=1, objective 14/14, judge: claude-sonnet-5
+- `fitt-ec2-hermes` (hermes3:8b) — 2026-08-13T18:16:02+00:00, samples=1, objective 7/14, judge: claude-sonnet-5
+- `fitt-ec2-qwen3` (qwen3:14b) — 2026-08-13T18:28:04+00:00, samples=1, objective 12/14, judge: claude-sonnet-5

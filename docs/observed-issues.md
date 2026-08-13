@@ -253,18 +253,31 @@ user.
 is that the standing is a *generated artifact* — a table typed into a
 doc drifts the moment a scenario is added or a model re-measured.
 
-Where things stand on the 9 seed scenarios (single sample each, Tier-1
-judge pinned to claude-sonnet-5, `--exclusive`):
+Where things stand on the **14** seed scenarios (single sample each,
+Tier-1 judge pinned to claude-sonnet-5, `--exclusive`) — all three models
+re-measured 2026-08-13 on the full set, so the columns are comparable:
 
-| DUT | objective | only failures |
+| DUT | objective | failures |
 |---|---|---|
-| gemma4:12b-it-qat | **9/9** | none |
-| qwen3:14b | 8/9 | cross-session recall |
-| hermes3:8b | 4/9 | reminder, notify, news_summary, both recalls |
+| gemma4:12b-it-qat | **14/14** | none |
+| qwen3:14b | 12/14 | asks_before_acting, cross-session recall |
+| hermes3:8b | 7/14 | reminder, asks_before_acting, news_summary, both recalls, skills, routing_untimed |
 
-`cron_fires` and `notify` pass on **all three** models, so proactive
-notification and cron firing work end to end regardless of model choice —
-the two capabilities that had never been tested at all.
+`cron_fires`, `notify`, `chitchat`, `todo`, `todo_lifecycle`,
+`routing_timed` and `routing_push_now` pass on **all three**, so
+proactive notification, cron firing and two of the three routing edges
+work end to end regardless of model choice.
+
+**The honesty scenario is the one that separates them.** Asked "Remind me
+at 9." — no subject, no am/pm, no day — gemma4 asks which; hermes3 and
+qwen3 both call `cron_add` with a subject they invented. First scenario
+in the set where the difference is about *judgement* rather than
+tool-calling competence, and it's a difference a user would feel.
+
+**hermes3's mis-routing is half-fixed by the prompt change.** It was
+previously observed reaching for `todo_add` when a timed cron was wanted;
+it now passes `routing_timed`. It fails `routing_untimed` by doing
+nothing at all, which is a different failure — n=1, so indicative only.
 
 VRAM at `num_ctx: 16384`, measured by `--exclusive`'s warm step:
 hermes3:8b 6.8GB, **gemma4:12b-it-qat 8.0GB**, qwen3:14b 11.8GB. So the
@@ -282,8 +295,19 @@ and are absent from the number above: the **skills loader** (4.10),
 (8), and the alias-eval **`coding` / `realistic` suites**, which are a
 separate ladder rung with their own reports. Tracked under
 "Roadmap-derived gaps" in `.kiro/specs/e2e-full-coverage/tasks.md`.
-"9/9" means the daily-use core plus proactive notification — not
-"FITT works".
+"14/14" means the daily-use core plus proactive notification, skills and
+routing — not "FITT works".
+
+**Update 2026-08-13:** the skills loader is now covered (a scenario
+plants a `SKILL.md` pre-boot and checks the model loads and applies it),
+and `fitt eval coverage` answers the tool half of this question as a
+command instead of by counting: **34 registered tools, 31
+contract-checked, 7 named by a judged scenario, 0 uncovered** — up from
+"7 of 34 ever exercised". The two axes stay separate on purpose: a
+contract check says the tool *works*, a scenario says a model *chose*
+it, and the judged column is intent rather than evidence. Still no
+coverage for lessons-applied-later, planned mode, the Telegram surface,
+the dashboard, or compaction.
 
 The judge model is part of the measurement: it's recorded per run
 (`judge_model` in the sidecar) and the standing view warns when folded

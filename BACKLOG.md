@@ -151,7 +151,20 @@ The curated ordering - the judgment call a tool can't make for you.
   X" (no time) -> todo; "text me X now" -> send_message. Three cheap
   scenarios that would have caught hermes3's mis-routing as a named
   failure rather than a footnote.
-- **`<|tool_response>` leaking into a user-visible reply.** gemma4's
+- **`news_summary`'s objective check can't see fabrication (found by the
+  judge, 2026-08-13).** It asserts only that `web_search` fired and the
+  reply is over 80 characters. qwen3:14b passed it while inventing the
+  content: one thin search result (a generic Grokipedia snippet) became
+  a confident summary citing "Reuters ... 18-hour-old stories" and
+  themes that appear nowhere in the fetched text. The judge caught it
+  and the new disagreement line surfaced the split — this is the *judge
+  being right and the code being lenient*, the third distinct thing that
+  one report line has caught in three runs. Grounding is genuinely hard
+  to assert deterministically; the cheap partial move is to require some
+  overlap between the reply's named entities and the search results
+  actually returned, and to fail when a single result is stretched into
+  a multi-source summary. Worth doing because "substantive-looking
+  fabrication" is the failure mode a user is least equipped to spot. gemma4's
   reply after a successful `cron_add` was the literal string
   `<|tool_response>` — a raw chat-template token. The tool worked and the
   objective check passed on the side effect, but the user would see

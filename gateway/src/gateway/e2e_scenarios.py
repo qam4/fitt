@@ -77,6 +77,7 @@ def reminder_scenario(*, subject: str = "doctor") -> TaskScenario:
             f"Did the assistant confirm it set a reminder to call the {subject} for "
             "9am tomorrow (a specific one-shot time, not a vague 'I'll remind you')?"
         ),
+        exercises_tools=("cron_add",),
     )
 
 
@@ -102,6 +103,7 @@ def news_scenario(*, topic: str = "technology") -> TaskScenario:
             "substantive — NOT a refusal like 'I can't access real-time data' or a generic "
             "non-answer?"
         ),
+        exercises_tools=("web_search",),
     )
 
 
@@ -198,6 +200,8 @@ def memory_recall_scenario(
             f"Is the answer grounded in the earlier fact the user stated ({fact!r})? "
             "It should reflect that fact, not guess or say it doesn't know."
         ),
+        # No tool intent on purpose: history injection is the mechanism
+        # under test, and any recall channel counts.
     )
 
 
@@ -263,6 +267,7 @@ def memory_recall_cross_session_scenario(
             "alias backed by an embedding model (e.g. nomic-embed-text on "
             "ollama) in config.yaml"
         ),
+        exercises_tools=("memory_search",),
     )
 
 
@@ -679,6 +684,7 @@ def todo_scenario(*, item: str = "call the doctor") -> TaskScenario:
         turns=[{"role": "user", "content": f"Add '{item}' to my todo list."}],
         outcome_assert=_todo_assert(item),
         rubric=f"Did the assistant confirm it added '{item}' to the todo list?",
+        exercises_tools=("todo_add",),
     )
 
 
@@ -742,6 +748,7 @@ def todo_lifecycle_scenario(*, item: str = "buy milk") -> TaskScenario:
             f"Across the two turns, did the assistant add '{item}' and then "
             "confirm it marked it done/complete?"
         ),
+        exercises_tools=("todo_add", "todo_done"),
     )
 
 

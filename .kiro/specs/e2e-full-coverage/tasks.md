@@ -57,13 +57,29 @@ Status legend: `[x]` done, `[ ]` not yet.
 
 ## Phase B — Coverage report
 
-- [ ] 8. `exercises_tools` on `TaskScenario` (intent, distinct from
+- [x] 8. `exercises_tools` on `TaskScenario` (intent, distinct from
   `requires_tools`) and `EXEMPT` map with reasons. (D1; Property 5)
-- [ ] 9. `fitt eval coverage`: registry minus (scenario intent + contract
+  DONE 2026-08-13: the field shipped with the routing work; now
+  backfilled across the whole seed set. Two scenarios declare *no*
+  intent on purpose (`memory_recall`, `asks_before_acting`) — any recall
+  channel counts for the first, and the second is about *not* acting.
+- [x] 9. `fitt eval coverage`: registry minus (scenario intent + contract
   checks + exemptions) -> uncovered names + counts. (R2.1-2.3;
-  Property 1)
-- [ ] 10. Test: registering a tool makes it appear uncovered with no
-  other edit. (Property 1)
+  Property 1) DONE 2026-08-13 — `tool_coverage.py` + the CLI command.
+  Offline, exits 1 on an uncovered tool so it can gate. Reports the two
+  axes separately rather than as one score (they answer different
+  questions), states in the output that the judged column is *intent*,
+  and separates "absent by configuration" (`memory_search` on a
+  retrieval-off deployment) from "absent by mistake" — a rename, which
+  otherwise looks identical because a check for a missing tool is
+  skipped on purpose. The conditional list is derived from the
+  scenarios' own `requires_tools`, so there's no second copy to drift.
+  **Standing: 34 registered, 31 contract-checked, 7 judged, 0
+  uncovered** (was "7 of 34 ever exercised").
+- [x] 10. Test: registering a tool makes it appear uncovered with no
+  other edit. (Property 1) DONE 2026-08-13, plus a test asserting the
+  *live* registry is fully covered — so the standing claim is checked
+  rather than retyped, and adding a tool without a check fails a test.
 
 ## Phase C — Proactive behaviour (judged)
 
@@ -223,6 +239,11 @@ FITT actually advertises, and *that* premise needs pinning too.
   scenario. Documented limit: the judge is anchored on the objective
   verdict, so it's biased toward agreement; a hit is strong evidence,
   silence is weak (task 34 is what would change that). DONE 2026-08-13.
+  **It has since caught three distinct things in three runs:** a stale
+  scenario (code wrong), a cross-talk-poisoned judge (judge wrong — task
+  45), and a too-lenient objective check (judge right — qwen3 passed
+  `news_summary` while fabricating a multi-source summary from one thin
+  search result; backlogged).
 - [x] 45. **Tell the judge what the internals attribute.** With task 44
   in, the disagreement line fired on the next run: `objective=PASS
   judge=FAIL`, because the judge's snapshot is the *cumulative* end state

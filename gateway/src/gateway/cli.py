@@ -2312,6 +2312,64 @@ def eval_matrix(eval_dir: Path | None, out: Path | None) -> None:
         _console.print(f"[cyan]written[/cyan] -> {out}")
 
 
+@eval_group.command("coverage")
+def eval_coverage() -> None:
+    """Which registered tools have a check, and of which kind.
+
+    Offline and deterministic — no model, no tunnel. Derived from the
+    live registry, so registering a tool makes it show up here as
+    UNCOVERED with no edit anywhere else. That's the point: coverage
+    counted by hand in a document goes stale silently.
+
+    Two axes, not one score. `contract` means a deterministic offline
+    check calls the tool (`fitt eval contracts`); `judged` means a
+    scenario declares it means to drive the tool. They answer different
+    questions, and the judged column is INTENT — see `fitt eval matrix`
+    for what a model actually did.
+
+    Exits 1 when a tool has neither, so this can gate a change that adds
+    a tool without any check.
+    """
+    import sys
+
+    from .config import load_config
+    from .e2e_scenarios import seed_scenarios
+    from .tool_contract_suite import EXEMPT, default_checks
+    from .tool_coverage import build_coverage
+    from .tools import build_core_tool_registry
+    from .tools.send_message import build_send_message_tool
+
+    config = load_config()
+    registered = set(build_core_tool_registry(config).list_names())
+    # create_app registers these two on top of the core set: they need
+    # runtime handles (the rate limiter + push probe, the per-client
+    # approval defaults), so a headless build can't produce them. Named
+    # here rather than dropped, or they'd read as orphaned checks.
+    registered |= {build_send_message_tool().name, "project_shell"}
+
+    # Fixture arguments are irrelevant here — only which tools the checks
+    # NAME matters, not whether they can run.
+    checks = default_checks("coverage-probe", http_base_url="http://localhost")
+
+    scenarios = seed_scenarios()
+    report = build_coverage(
+        registered,
+        contract_checked={c.tool for c in checks},
+        judged_intent={t for s in scenarios for t in s.exercises_tools},
+        exempt=EXEMPT,
+        # A scenario declaring requires_tools has already said "this may
+        # not exist here", so that's the conditional list — no second
+        # hand-maintained copy to drift.
+        conditional={t for s in scenarios for t in s.requires_tools},
+    )
+    _console.print(report.render())
+
+    if report.uncovered:
+        names = ", ".join(e.tool for e in report.uncovered)
+        _console.print(f"[red]uncovered:[/red] {names}")
+        sys.exit(1)
+
+
 # --------------------------------------------------------------- scenario
 
 
