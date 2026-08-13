@@ -113,6 +113,27 @@ The curated ordering - the judgment call a tool can't make for you.
   scenarios, the approval flow (ask -> approve/reject/timeout), the
   skills loader, planned-mode orchestration, prefetch, and Telegram
   command handling.
+- **The send/cron/todo routing triangle has only one documented edge.**
+  `todo_add` and `cron_add` spell out their boundary for the model —
+  "remind me to Z" with no time is a todo, with a time it's a cron — and
+  that's the right place for the ambiguity, so a *user* never needs magic
+  words. But `send_message` is described purely as agent-initiated
+  ("outside the normal reply channel... state-change notifications from a
+  silent cron, progress pings"), so the everyday user request "text me
+  X" / "send that to my phone" isn't advertised anywhere and the model
+  has to infer it. Two cheap fixes: extend `send_message`'s description
+  to name the user-asked-for-a-push case, and add the third edge to the
+  disambiguation rule (now vs timed vs untimed). Evidence this matters:
+  gemma4 asked for clarification on "send me a message reminding me
+  that..." (good behaviour), and hermes3 has been observed reaching for
+  `todo_add` when a timed cron was wanted (bad routing). A weak model
+  makes phrasing matter more — which is a FITT-side prompt problem, not a
+  user-education one.
+- **Routing-disambiguation scenarios.** Assert the documented rule
+  actually holds: "remind me to X tomorrow at 9" -> cron; "remind me to
+  X" (no time) -> todo; "text me X now" -> send_message. Three cheap
+  scenarios that would have caught hermes3's mis-routing as a named
+  failure rather than a footnote.
 - **`<|tool_response>` leaking into a user-visible reply.** gemma4's
   reply after a successful `cron_add` was the literal string
   `<|tool_response>` — a raw chat-template token. The tool worked and the

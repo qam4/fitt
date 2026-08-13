@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from gateway.e2e_eval import E2ETrajectory, RunResult
 from gateway.e2e_scenarios import (
+    asks_before_acting_scenario,
     chitchat_scenario,
     cron_fires_scenario,
     memory_recall_cross_session_scenario,
@@ -294,6 +295,7 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
         "chitchat",
         "reminder",
         "cron_fires",
+        "asks_before_acting",
         "notify",
         "news_summary",
         "memory_recall",
@@ -556,3 +558,69 @@ def test_cron_scenarios_do_keep_scheduling_vocabulary() -> None:
 
     assert "remind" in reminder_text
     assert "minutes" in cron_text or "remind" in cron_text
+
+
+# ------------------------------------------- asks before acting
+#
+# This scenario exists because rewording `notify` to be unambiguous was
+# about to throw away a real signal: an ambiguous request had produced a
+# clarifying question, which is the RIGHT answer, and the old scenario
+# scored it as a failure. Keep both — one tests delivery, one tests
+# honesty about what's missing.
+
+
+def test_asking_for_the_missing_detail_passes() -> None:
+    scen = asks_before_acting_scenario()
+
+    res = scen.outcome_assert(
+        _traj(reply="How long after now would you like the reminder sent?", snapshot={})
+    )
+
+    assert res.passed
+    assert "asked" in res.reason
+
+
+def test_inventing_a_schedule_fails() -> None:
+    """The failure worth catching: guessing a time the user never gave."""
+    scen = asks_before_acting_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="Done, I'll remind you in an hour.",
+            snapshot={"cron_jobs": [{"message": "the roast needs basting", "at_ts": 1}]},
+        )
+    )
+
+    assert not res.passed
+    assert "invented a schedule" in res.reason
+
+
+def test_silently_pushing_now_is_also_flagged() -> None:
+    scen = asks_before_acting_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            reply="Sent.",
+            snapshot={"agent_messages": [{"title": "", "body": "the roast needs basting"}]},
+        )
+    )
+
+    assert not res.passed
+    assert "which reading" in res.reason
+
+
+def test_neither_asking_nor_acting_fails() -> None:
+    scen = asks_before_acting_scenario()
+
+    res = scen.outcome_assert(_traj(reply="OK.", snapshot={}))
+
+    assert not res.passed
+
+
+def test_the_ambiguous_wording_is_preserved_here() -> None:
+    """notify dropped 'reminding'; this scenario must keep it, or the
+    signal the reword removed is gone for good."""
+    text = str(asks_before_acting_scenario().turns[0]["content"]).lower()
+
+    assert "reminding" in text
+    assert "right now" not in text
