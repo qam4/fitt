@@ -83,7 +83,39 @@ to plan. Two live explanations remain — the prompt doesn't elicit it, or
 the tasks so far genuinely didn't need it — and nothing yet separates
 them.
 
-### Settled: gemma4 declines to plan because it doesn't need to
+### Correction: this measured the wrong model, and re-derived the spec
+
+Everything below is a result about **gemma4**, and Phase 12 was not built
+for gemma4. Its requirements are explicit — "this fails open-ended,
+multi-step turns on the **deliberately-weak free models FITT targets**",
+"we make a **weak, free model** competent by structuring the work" — and
+the trigger was a `hermes3:8b` failure where the operator had to
+hand-craft requests to match FITT's tool shapes, i.e. the human was doing
+the planner's job.
+
+So concluding "orchestration has no demonstrated use case" from a model
+that scores 15/15 flat is measuring the population least likely to
+benefit and generalising from it. The narrow claim that survives: *on the
+tasks in this suite, planning is unnecessary and gemma4 correctly skips
+it* — a statement about that binding, not about the feature.
+
+Two further corrections to what's written below:
+
+* **The "reframe" was not a finding.** Story 7.3 already defines the
+  measurement as *flat-loop fail vs planned success, same model*. I
+  re-derived the spec's own success criterion and presented it as an
+  insight. Reading the requirements first would have cost ten minutes and
+  pointed straight at hermes3.
+* **`forced` mode isn't a lever to reach for.** The requirements rule it
+  out by name and explain why (none of the three reference
+  implementations needed structural forcing; all elect). Under-election is
+  Story 7.5's *measurement*, handled by the recovery net plus a stronger
+  per-alias planner prompt — forcing is a fallback to add only if a model
+  proves chronically unable *with* those, and then deliberately.
+
+The hermes3 flat-vs-planned measurement is the real experiment.
+
+### On gemma4: declines to plan because it doesn't need to
 
 Third run of the pair, with `deadline_sweep` properly specified:
 

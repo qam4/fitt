@@ -475,8 +475,15 @@ tasks didn't need it) and task 77 is what separates them.
   **General constraint recorded:** a scenario asserting a multi-item side
   effect must supply every parameter the action needs and pre-authorise it,
   because the harness has no human to confirm with. DONE 2026-08-14.
-- [x] 75. **Separate the two explanations for non-election.** ANSWERED
-  2026-08-14, and the answer reframes the question.
+- [~] 75. **Separate the two explanations for non-election.** Answered for
+  **gemma4** only — which is the wrong model to ask. Phase 12's
+  requirements target "the deliberately-weak free models FITT targets" and
+  Story 7.3 defines success as *flat-loop fail vs planned success, same
+  model*; gemma4 passes everything flat, so it cannot show a delta by
+  construction. Re-open against hermes3 (7/14 flat). Note also that the
+  "reframe" recorded below is a re-derivation of Story 7.3's stated
+  criterion, and that `forced` mode — listed earlier as a lever — is ruled
+  out by name in the requirements, with reasons.
 
   With `deadline_sweep` properly specified: **flat 15/15, planned 15/15**,
   judge 15/15 both. gemma4 passed the sweep *on the flat loop* — five
