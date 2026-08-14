@@ -94,6 +94,24 @@ def test_scenario_intent_naming_a_missing_tool_is_also_an_orphan() -> None:
     assert report.orphan_checks == ["gone_tool"]
 
 
+def test_render_states_that_the_denominator_is_tools_only() -> None:
+    """The number is easy to over-read, and it was.
+
+    An audit found auth, cost, fallback routing, approval resolution, the
+    audit chain, rate limiting, boot warnings, the startup hooks and the
+    CLI largely unmeasured while this command reported "0 uncovered" —
+    all true, because none of them is a tool. Saying so in the output is
+    cheaper than relying on the reader to remember the scope."""
+    rendered = build_coverage(
+        ["read_file"], contract_checked=["read_file"], judged_intent=[]
+    ).render()
+
+    assert "TOOLS ONLY" in rendered
+    assert "0 uncovered" in rendered
+    for subsystem in ("auth", "cost", "fallback", "audit chain", "boot warnings"):
+        assert subsystem in rendered, f"the scope caveat no longer names {subsystem}"
+
+
 def test_render_says_the_judged_column_is_intent_not_evidence() -> None:
     """Load-bearing caveat: a scenario can pass by another route while
     the tool it names never fires."""

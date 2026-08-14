@@ -553,3 +553,92 @@ async def test_default_alias_falls_back_to_first_when_no_fitt_default(
     app = create_app(cfg)
     runner: CronRunner = app.state.cron_runner
     assert runner._default_alias() == "my-custom-alias"
+
+
+# ------------------------------------------- eval-run approval wiring
+#
+# Audit finding, 2026-08-13. `create_app` passes the approval middleware
+# INTO CronRunner at construction, so the runner holds its own reference.
+# The e2e harness swapped `app.state.approval` for an auto-approver and
+# never reached the runner — and the `cron_fires` scenario runs a real
+# agent session through it. A cron with an unset `approval_mode` (the
+# default the model creates) would therefore hit the un-wrapped
+# middleware, block for the 10-minute `approval_timeout_secs`, then
+# reject — and be reported as a model failure.
+
+
+def test_the_cron_runner_holds_its_own_approval_reference(app: Any) -> None:
+    """The hazard itself, pinned. If this ever stops being true the
+    helper below is redundant — but silently fixing it elsewhere must not
+    leave the helper looking pointless."""
+    runner: CronRunner = app.state.cron_runner
+
+    app.state.approval = "swapped-out"
+
+    assert runner._approval is not app.state.approval
+
+
+def test_auto_approve_for_eval_reaches_the_cron_runner(app: Any) -> None:
+    from gateway.e2e_driver import auto_approve_for_eval
+
+    auto_approve_for_eval(app)
+
+    runner: CronRunner = app.state.cron_runner
+    assert isinstance(app.state.approval, _AutoApproveWrapper)
+    assert isinstance(runner._approval, _AutoApproveWrapper), (
+        "the cron runner still holds the un-wrapped middleware, so a cron "
+        "firing would block on an approval no one can tap"
+    )
+    assert runner._approval is app.state.approval
+
+
+async def test_an_ask_bucket_tool_in_a_cron_firing_does_not_block_after_the_fix(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The behaviour the reference bug caused, end to end.
+
+    An ASK-bucket tool inside a cron whose `approval_mode` is unset must
+    run rather than wait for a human. Without the fix this test hangs on
+    `approval_timeout_secs` and then records a rejection."""
+    from gateway.e2e_driver import auto_approve_for_eval
+
+    ran: list[str] = []
+
+    async def _impl(args: dict, ctx: ToolContext) -> ToolResult:
+        ran.append("yes")
+        return ToolResult.ok("did it")
+
+    app.state.tool_registry.register(
+        Tool(
+            name="needs_a_tap",
+            description="an ASK-bucket tool",
+            schema={"type": "object", "properties": {}},
+            callable=_impl,
+            default_bucket=ApprovalBucket.ASK,
+        )
+    )
+    auto_approve_for_eval(app)
+
+    calls = iter(
+        [
+            _fake_completion(tool_calls=[make_tool_call("call-1", "needs_a_tap", {})]),
+            _fake_completion(content="done"),
+        ]
+    )
+
+    async def fake(**kwargs: Any) -> Any:
+        return next(calls)
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    await app.state.cron_runner.fire(
+        CronJob(
+            id="ask-bucket",
+            name="ask",
+            message="use the tool",
+            schedule=CronSchedule(kind="every", every_secs=60),
+            # approval_mode deliberately unset — the default a model creates.
+        )
+    )
+
+    assert ran == ["yes"], "the ASK-bucket tool never ran; approval blocked the firing"

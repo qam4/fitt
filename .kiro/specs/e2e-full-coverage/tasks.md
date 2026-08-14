@@ -157,7 +157,66 @@ Status legend: `[x]` done, `[ ]` not yet.
   runs. Every cell is indicative until it's multi-sampled.
 
 
-## Roadmap-derived gaps (added 2026-08-12)
+## Coverage audit (2026-08-13) — read this before the gap lists
+
+The 2026-08-12 pass below called itself an audit. It was a **listing**:
+one bullet per roadmap phase, written from `FITT_ROADMAP.md`'s phase
+list. Task 29 read "planned mode has a spec and no e2e coverage" —
+technically true, and it hid three concrete facts that one level of
+investigation turned up a day later (the driver has no mode concept at
+all; every matrix cell is the flat loop and nothing says so; the
+routing gate into the orchestrator is untested). If that bullet was
+shallow, the rest were, and anything without its own roadmap phase was
+never looked at.
+
+So it was redone properly on 2026-08-13, enumerating from the code
+rather than the roadmap. **The single structural finding, which explains
+why the first pass had to miss what it missed:**
+
+> No measurement layer in the repo can see a cross-cutting subsystem.
+> `fitt eval coverage`'s denominator is the tool registry, and the
+> contract layer calls `tool.callable(args, ctx)` directly — bypassing
+> approval, the deny list, the audit log, the rate limiter, artifact
+> hoisting and the agent loop. So it measures *tool implementations*,
+> never *the path a tool is reached by*. Auth, cost accounting, fallback
+> routing, approval-policy resolution, the HMAC audit chain, rate
+> limiting, boot warnings, the startup hooks, the CLI and Open WebUI are
+> outside both axes **by construction, not by oversight.**
+
+The 2026-08-12 pass correctly spotted that Phases A-F were
+registry-scoped — and then added items that were still mostly *features
+with tools or scenarios*. The infrastructure spine stayed unmeasured, and
+"0 uncovered" was reported while it was. (`tool_coverage.py`'s render now
+states its own scope out loud, and `test_tool_coverage.py` pins that.)
+
+Three more things the audit turned up that are worth stating before the
+lists, because they change how the existing numbers should be read:
+
+1. **`samples=1`, and no config is recorded.** `fitt eval e2e` pins five
+   things on the loaded config (FITT_HOME, `fitt-default`, the memory
+   paths, auto-approve, and `record_llm_requests` at Tier 3) and
+   **inherits everything else from the operator's `config.yaml`. Zero
+   config values reach the report or the sidecar.** ~15 settings can
+   change a verdict — see task 47. Two of them turned out to be live
+   defects, now fixed (tasks 48, 49).
+2. **Several assertions are weaker than the matrix implies.** `chitchat`
+   requires a reply and *zero* tool calls, so it gets *more* likely to
+   pass as the tool subsystem breaks. `_routing_assert` returns "noisy
+   but right", so a model firing all three of `cron_add`/`todo_add`/
+   `send_message` on every request passes all three routing scenarios.
+   `asks_before_acting` accepts any reply containing "?". See task 50.
+3. **"31 contract-checked" includes ~8 tools that don't run or don't
+   work**: four `skip_reason` skips report as `passed=True, skipped=True`;
+   `glob_search` and `project_shell` are `known_broken`; and five checks
+   (`todo_list`, `cron_list`, `learn_list`, `list_capabilities`,
+   `todowrite`) have no side-effect and no invalid-args case, so they
+   pass on any function returning a non-error `ToolResult`. See task 51.
+
+Method note for next time: an audit derived from a phase list can only
+find phases. Enumerate from the code, then ask of each item "which layer
+would catch this breaking, and would it actually fail?"
+
+## Roadmap-derived gaps (added 2026-08-12, kept for continuity)
 
 *(Not a roadmap phase. The lettered phases above are sections of this
 spec's plan; FITT's roadmap phases are numbered — 4.5, 9, 12 — and the
@@ -302,6 +361,174 @@ FITT actually advertises, and *that* premise needs pinning too.
   turn's own `tool_calls`. The general rule now recorded in
   observed-issues: snapshot-only asserts are only safe when they can
   attribute the side effect to the turn. DONE 2026-08-13.
+
+## Audit findings (added 2026-08-13)
+
+Everything the 2026-08-12 listing missed. Ordered by whether a *wrong
+conclusion* is currently reachable, not by size.
+
+### Fixed on discovery
+
+- [x] 48. **The cron runner held the un-wrapped approval middleware.**
+  `create_app` passes `app.state.approval` *into* `CronRunner` at
+  construction, and the harness swapped `app.state.approval` for the
+  auto-approver afterwards — so the runner kept the real one. The
+  `cron_fires` scenario runs a real agent session through that runner, and
+  a cron with `approval_mode` unset (the default a model creates) would
+  hit an ASK-bucket tool, block for the 10-minute `approval_timeout_secs`,
+  reject, and be recorded as a model failure. It survived only because the
+  tool it happens to call is AUTO-bucket. Fixed by
+  `e2e_driver.auto_approve_for_eval(app)`, which owns the hazard in one
+  place; three tests, one pinning the construction-capture itself.
+  DONE 2026-08-13.
+- [x] 49. **Eval logs escaped the isolated run home.**
+  `isolate_memory_paths` promised "every FITT_HOME-derived path" and
+  checked only `cfg.memory`, so `cfg.logging.dir` — resolved at config
+  load, before `FITT_HOME` is redirected — kept pointing at the operator's
+  real `~/.fitt/logs`, appending eval runs' logs and, under
+  `server.log_bodies`, their full request bodies. Exactly the class the
+  function's own docstring warns about, one field family over, invisible
+  because the assertion's scope was narrower than the claim. Renamed
+  `isolate_run_paths`, now redirects and asserts over `logging` too.
+  DONE 2026-08-13.
+
+### Wrong conclusions currently reachable
+
+- [ ] 47. **Pin and record the harness config.** `fitt eval e2e` inherits
+  ~15 outcome-changing settings from the operator's config and records
+  none of them, so two operators can produce different numbers under the
+  same DUT name and no artifact shows why. **Pin** (the harness must
+  decide, not the operator): `tools:` buckets + `per_client` (a `block`
+  fails whole scenarios as model failures), `orchestration:`/`prompts:`,
+  `approval_detach_threshold_secs` (pure wall-clock on the loop — a slow
+  turn returns the "⏳ Approval pending…" placeholder *as the graded
+  reply*), `loop_brake_enabled`, `memory.enabled`, `web.search_backend`,
+  `max_history_chars`, artifact-hoist thresholds, `prefetch_enabled`, the
+  send_message limiter. **Record** (DUT identity or a deliberate choice):
+  the client tag — and fail loud if the selected token is tagged
+  `coding-agent`, which is router-mode and would fail all 14 — the
+  fallback chain plus per-turn `fallback_used` (a transport blip silently
+  measures the *fallback* model under the DUT's name), `num_ctx` /
+  `backend` / `endpoint`, the warm/VRAM facts the harness already computes
+  and prints and then throws away, `upstream_timeout_secs` (and derive
+  httpx's timeout from it instead of hardcoding 300s), `--judge-detail`,
+  and a hash of registered tool names+descriptions. One `harness` object
+  in the sidecar covers it; most values are already in hand.
+- [ ] 50. **Tighten three assertions that pass for the wrong reasons.**
+  `chitchat` demands a reply and zero tool calls, so it gets *more* likely
+  to pass as the tool subsystem breaks — it needs a positive signal that
+  tools were available and correctly declined. `_routing_assert`'s "noisy
+  but right" branch passes a model that fires all three routing tools on
+  every request; treat firing the other two as a failure, since routing is
+  the thing under test. `asks_before_acting` accepts any "?" — "I don't
+  know, does that help?" passes.
+- [ ] 51. **Make the contract count honest.** ~8 of "31 contract-checked"
+  either don't execute (four `skip_reason` skips report `passed=True`) or
+  are `known_broken` (`glob_search`, `project_shell`), and five checks
+  assert only "didn't error" (`todo_list`, `cron_list`, `learn_list`,
+  `list_capabilities`, `todowrite` — a `cron_list` returning a constant
+  empty string passes). Report executed / skipped / known-broken /
+  assertion-free as separate numbers, and give the five real assertions.
+- [ ] 52. **Re-examine `EXEMPT` rather than trusting its reasons.** R2.3
+  requires a reason be recorded and all three have one, but two point at
+  judged scenarios that are themselves weak: `send_message`'s substitute
+  sends exactly one message so it can never reach the rate limit, and
+  `news_summary` can't see fabrication (task 43). An exemption should name
+  a substitute *and* be re-checked when that substitute changes.
+
+### The infrastructure spine — no coverage in any layer
+
+- [ ] 53. **Nothing enters the app's lifespan.** Seven startup hooks
+  (`_start_mcp`, `_stop_mcp`, `_start_cron_scheduler`, `_start_event_pruner`,
+  `_start_history_pruner`, `_populate_context_windows`, `_run_boot_probe`)
+  are all `# pragma: no cover`, and the e2e conftest documents *not*
+  entering lifespan as a feature. No test in the repo starts the app the
+  way production does. Consequence for the judged suite specifically:
+  `httpx.ASGITransport` never fires startup, so **MCP servers are never
+  spawned** — the report describes a tool surface the operator's real
+  gateway doesn't have, and `unsupported` can't detect a tool they have
+  and the harness didn't. This is the parent of several items below.
+- [ ] 54. **MCP has never spawned a real subprocess.** Every test in
+  `test_mcp.py` patches `create_subprocess_exec`; the boot hook is
+  uncovered. In production MCP tools also push past the 40-tool capability
+  block cap, truncating it — which would change the prompt for all 14
+  scenarios.
+- [ ] 55. **Cost accounting is never asserted end to end.** `estimate_cost`
+  is unit + property tested and `fitt cost` is tested against a
+  hand-written log file, but no test drives an HTTP chat request and
+  asserts a cost was computed and logged. Deleting the call site in
+  `chat.py` passes the whole suite.
+- [ ] 56. **The audit chain is never verified over real turns.**
+  `AuditLog` is thoroughly tested in isolation (including tamper
+  detection); `verify()` has never run against a log produced by real
+  turns, and `fitt audit verify` has no test. This is the security story.
+- [ ] 57. **The capability-gap log's wiring is untested**, and
+  `fitt capability-gaps` has no test — Principle 8's actual mechanism.
+  Tests seed the store by hand.
+- [ ] 58. **Fallback routing above the router.** `fallback_used` is
+  computed and unit-tested with `litellm.acompletion` patched; nothing
+  asserts it reaches the response, the structured log or `/v1/status`, nor
+  that "no auto-retry on semantic errors" holds through `chat.py`. Phase 1,
+  Property 6.
+- [ ] 59. **`num_ctx` from config to wire.** Tested at the router with a
+  hand-set field; untested that a `config.yaml` value reaches the request,
+  and `context_window.py`'s *discovered* windows and the *configured*
+  `num_ctx` answer the same question and never meet in a test. The gemma4
+  one-token failure is why this matters.
+- [ ] 60. **Real SSH execution.** Every integration test stubs
+  `run_shell`. `ssh_probe`, `fitt ssh test`, and the `ensure_key` failure
+  branch have no wiring coverage — half of the Phase 4 design.
+- [ ] 61. **Two of four boot-warning families never asserted at boot.**
+  `check_missing_api_keys` and `check_tool_consistency` are tested as pure
+  functions only. And the one warning test that *does* check boot asserts a
+  patched logger was called — it would pass if the logging config sent that
+  record nowhere. Principle 11's whole surface.
+- [ ] 62. **`fitt memory reindex` with a real embedder**, plus the
+  dimension-mismatch guard that tells operators to reindex. Tested only
+  with a fake embedder; the CLI path that builds a real one is untested.
+- [ ] 63. **~35 CLI subcommands have no test at all**, including all of
+  `session`, all of `project`, all of `ssh`, `config check`, `memory *`,
+  `mcp *`, `audit verify`, `capability-gaps`, `tasks`, `scenario run`,
+  `profile alias` — and `eval e2e` / `eval contracts` / `eval coverage`
+  themselves. Several are an operator's only route to a subsystem.
+- [ ] 64. **Open WebUI has no test of any kind.** The one live-fire defect
+  (`OPENAI_API_BASE_URL` is PersistentConfig, so compose env is decorative
+  after first boot) is documented prose with no regression guard.
+- [ ] 65. **`/v1/models` is served without auth**, exposing the alias list
+  and `fitt_*` extension fields (model ids, backends). A test asserts the
+  200-without-header as correct behaviour; nothing asks whether it should
+  be. Decide deliberately, then pin the decision.
+
+### Gate tested, component tested, wire between them untested
+
+The shape of task 46, found in four more places.
+
+- [ ] 66. **Per-client approval overrides.** `project_shell`'s
+  `webui: BLOCK` baked-in default lives only at the `create_app` call
+  site. Nothing sends `X-FITT-Client: webui` at `/v1/chat/completions` and
+  asserts the resolved bucket. Dropping `per_client_defaults=` would pass
+  everything — and the e2e conftest, which hardcodes `client_tag="webui"`,
+  exercises ASK for that tool, contradicting the baked default.
+- [ ] 67. **The send_message rate limiter's construction.** The production
+  ceiling (60s / 10) is hardcoded at the call site and the
+  `tools.send_message.window_secs` config override is never asserted.
+  Doubly invisible: EXEMPT from contracts, and the judged scenario sends
+  one message.
+- [ ] 68. **The retrieval wiring block.** Untested that binding
+  `memory.embedding_alias` registers `memory_search`, that a bad alias
+  degrades to a warning instead of killing boot, and that `MemoryIndexer`
+  actually receives turns. A break here reports as *unsupported* — which
+  the coverage design treats as benign.
+- [ ] 69. **The Telegram bot's own suite is fake on both sides.** Task 30
+  asks whether it's sufficient; the answer should be informed by this:
+  every bot test uses `respx` / `_FakeGateway` / `AsyncMock`, and the
+  gateway-side approval e2e uses a hand-written approver rather than
+  `fitt_telegram_bot.approval`. Each half of the approval feature is
+  tested against a stand-in for the other.
+- [ ] 70. **History truncation is measured and never surfaced.**
+  `truncated_bytes` is computed and property-tested; nothing asserts the
+  operator or model is ever told context was dropped — no event, no
+  turn-event field, no `/v1/status` counter.
 
 ## Judge enhancements (added 2026-08-12)
 

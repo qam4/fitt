@@ -66,43 +66,74 @@ def test_provider_is_built_at_the_configured_path(monkeypatch: Any, tmp_path: Pa
 # the retrieval index (eval turns landing in real memory) and skills_dir
 # (the loader scanning the real dir, so a planted fixture was invisible
 # and a working feature reported "the model never loaded the recipe").
-# isolate_memory_paths enumerates them and asserts, so the next added
+# isolate_run_paths enumerates them and asserts, so the next added
 # path field fails loudly instead of leaking.
 
 
-def test_isolate_memory_paths_redirects_every_path_field(tmp_path: Path) -> None:
-    from gateway.e2e_driver import isolate_memory_paths
+def test_isolate_run_paths_redirects_every_path_field(tmp_path: Path) -> None:
+    from gateway.e2e_driver import isolate_run_paths
 
     run_home = tmp_path / "run"
     cfg = _config()
 
-    isolate_memory_paths(cfg, run_home)
+    isolate_run_paths(cfg, run_home)
 
-    for name, value in vars(cfg.memory).items():
-        if isinstance(value, Path):
-            assert run_home in value.parents, f"{name} escapes the run home: {value}"
+    for section in (cfg.memory, cfg.logging):
+        for name, value in vars(section).items():
+            if isinstance(value, Path):
+                assert run_home in value.parents, f"{name} escapes the run home: {value}"
 
 
-def test_isolate_memory_paths_covers_skills_and_index(tmp_path: Path) -> None:
+def test_isolate_run_paths_covers_skills_and_index(tmp_path: Path) -> None:
     """The two that actually leaked."""
-    from gateway.e2e_driver import isolate_memory_paths
+    from gateway.e2e_driver import isolate_run_paths
 
     run_home = tmp_path / "run"
-    cfg = isolate_memory_paths(_config(), run_home)
+    cfg = isolate_run_paths(_config(), run_home)
 
     assert cfg.memory.skills_dir == run_home / "skills"
     assert cfg.memory.index_path == run_home / "memory" / "index.db"
 
 
-def test_isolate_memory_paths_raises_on_an_unredirected_field(tmp_path: Path) -> None:
+def test_isolate_run_paths_covers_the_log_dir(tmp_path: Path) -> None:
+    """The third leak, found by audit 2026-08-13.
+
+    Only `cfg.memory` was redirected and only `cfg.memory` was asserted
+    over, so an eval run appended to the operator's real `~/.fitt/logs` —
+    including full request bodies under `server.log_bodies`. The
+    assertion couldn't catch it because its scope was narrower than the
+    function's promise."""
+    from gateway.e2e_driver import isolate_run_paths
+
+    run_home = tmp_path / "run"
+    cfg = isolate_run_paths(_config(), run_home)
+
+    assert cfg.logging.dir == run_home / "logs"
+
+
+def test_isolate_run_paths_raises_on_an_unredirected_field(tmp_path: Path) -> None:
     """A newly added FITT_HOME-derived path must fail loudly here."""
-    from gateway.e2e_driver import isolate_memory_paths
+    from gateway.e2e_driver import isolate_run_paths
 
     run_home = tmp_path / "run"
     cfg = _config()
-    isolate_memory_paths(cfg, run_home)
+    isolate_run_paths(cfg, run_home)
     # Simulate a field added later that nobody remembered to redirect.
     object.__setattr__(cfg.memory, "new_thing_dir", Path("/somewhere/else"))
 
     with pytest.raises(AssertionError, match="new_thing_dir"):
-        isolate_memory_paths(cfg, run_home)
+        isolate_run_paths(cfg, run_home)
+
+
+def test_isolate_run_paths_raises_on_an_unredirected_logging_field(tmp_path: Path) -> None:
+    """The assertion has to cover every section it redirects, or the next
+    leak is invisible in exactly the way the log dir was."""
+    from gateway.e2e_driver import isolate_run_paths
+
+    run_home = tmp_path / "run"
+    cfg = _config()
+    isolate_run_paths(cfg, run_home)
+    object.__setattr__(cfg.logging, "archive_dir", Path("/somewhere/else"))
+
+    with pytest.raises(AssertionError, match="archive_dir"):
+        isolate_run_paths(cfg, run_home)

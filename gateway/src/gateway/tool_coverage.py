@@ -5,6 +5,16 @@ of 34 tools were exercised; what is it now?" Counting by eye is how a
 newly registered tool stays invisible for weeks, so this derives the
 answer from the registry rather than from a number in a document.
 
+**Scope, stated up front because the number is easy to over-read.** The
+denominator is the tool registry. FITT's cross-cutting subsystems — auth,
+cost accounting, fallback routing, approval-policy resolution, the
+HMAC audit chain, rate limiting, boot warnings, the startup hooks, the
+CLI, Open WebUI — are not tools and therefore cannot appear here at all.
+"0 uncovered" means "every registered tool has a check", not "FITT is
+covered". An audit on 2026-08-13 found the infrastructure spine largely
+unmeasured while this reported 0 uncovered, so the render says so out
+loud rather than leaving the reader to infer it.
+
 Two axes, deliberately not summed into one percentage:
 
 * **contract** — a deterministic offline check calls the tool directly
@@ -108,6 +118,14 @@ class CoverageReport:
             f"{self.judged_count} named by a judged scenario, "
             f"{len(self.exempt_entries)} exempt, "
             f"{len(self.uncovered)} uncovered",
+            "",
+            "SCOPE — this counts TOOLS ONLY. The denominator is the tool "
+            "registry, so '0 uncovered' says nothing about FITT's "
+            "cross-cutting subsystems: auth, cost accounting, fallback "
+            "routing, approval-policy resolution, the audit chain, rate "
+            "limiting, boot warnings, startup hooks, the CLI, Open WebUI. "
+            "None of those is a tool, so none can appear here — by "
+            "construction, not by oversight.",
             "",
             "The judged column is INTENT, not evidence: it means a scenario "
             "aims to drive the tool, not that a model did. See "

@@ -1883,7 +1883,12 @@ def eval_e2e_cmd(
     from datetime import UTC, datetime
 
     from .config import fitt_home
-    from .e2e_driver import build_http_dispatch, isolate_memory_paths, snapshot_app
+    from .e2e_driver import (
+        auto_approve_for_eval,
+        build_http_dispatch,
+        isolate_run_paths,
+        snapshot_app,
+    )
     from .e2e_eval import (
         SetupContext,
         aggregate,
@@ -1975,19 +1980,16 @@ def eval_e2e_cmd(
     # One place for every FITT_HOME-derived path, and it asserts. Two
     # separate leaks (the retrieval index, then the skills dir) came from
     # redirecting these ad hoc and forgetting one.
-    isolate_memory_paths(cfg, iso_home)
+    isolate_run_paths(cfg, iso_home)
     _console.print(f"[dim]isolated run home: {iso_home}[/dim]")
 
     from .app import create_app
-    from .cron_runner import _AutoApproveWrapper
 
     app = create_app(cfg)
-    # No human is here to tap approvals, so ASK-bucket tools (e.g.
-    # cron_add for the reminder scenario) would otherwise block until
-    # timeout and reject. Auto-approve them for the eval run — the deny
-    # list is still enforced by the wrapper. Same posture as the cron
-    # runner and profile runner.
-    app.state.approval = _AutoApproveWrapper(app.state.approval)
+    # No human is here to tap approvals. Wrapping app.state.approval
+    # alone is insufficient — the cron runner captured the middleware at
+    # construction; see auto_approve_for_eval.
+    auto_approve_for_eval(app)
 
     # VRAM hygiene (Principle: clean measurement). On an ollama DUT,
     # evict any other models resident on its endpoint and warm the DUT,

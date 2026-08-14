@@ -231,8 +231,8 @@ def _timeline_from_turns(app: Any, session_id: str) -> tuple[dict[str, Any], ...
     return tuple(out)
 
 
-def isolate_memory_paths(cfg: Any, run_home: Path) -> Any:
-    """Point every FITT_HOME-derived memory path at ``run_home``.
+def isolate_run_paths(cfg: Any, run_home: Path) -> Any:
+    """Point every FITT_HOME-derived path at ``run_home``.
 
     Enumerated in one place on purpose. These paths are ``Field(
     default_factory=lambda: fitt_home() / ...)``, so they're resolved when
@@ -246,6 +246,12 @@ def isolate_memory_paths(cfg: Any, run_home: Path) -> Any:
     * ``skills_dir`` forgotten -> the loader scanned the real skills dir
       and found none of the fixture, so a working skills feature reported
       "the model never loaded the recipe".
+    * ``logging.dir`` forgotten -> an eval run's logs, including full
+      request bodies when ``server.log_bodies`` is on, appended to the
+      operator's real ``~/.fitt/logs``. Found by audit 2026-08-13: this
+      function promised "every FITT_HOME-derived path" and checked only
+      ``cfg.memory``, so the assertion below couldn't see it. A scope
+      narrower than the claim is how the first two leaked too.
 
     Returns the mutated config for chaining; also asserts the result, so a
     newly added path field fails loudly here rather than leaking."""
@@ -257,18 +263,49 @@ def isolate_memory_paths(cfg: Any, run_home: Path) -> Any:
             "index_path": run_home / "memory" / "index.db",
         }
     )
+    cfg.logging = cfg.logging.model_copy(update={"dir": run_home / "logs"})
+
     stray = [
-        f"{name}={value}"
-        for name, value in vars(cfg.memory).items()
+        f"{section}.{name}={value}"
+        for section, model in (("memory", cfg.memory), ("logging", cfg.logging))
+        for name, value in vars(model).items()
         if isinstance(value, Path) and run_home not in value.parents and value != run_home
     ]
     if stray:
         raise AssertionError(
             "eval config still points outside the isolated run home: "
             + ", ".join(sorted(stray))
-            + " — add it to isolate_memory_paths()"
+            + " — add it to isolate_run_paths()"
         )
     return cfg
+
+
+def auto_approve_for_eval(app: Any) -> None:
+    """Route every approval decision through the auto-approver.
+
+    No human is present to tap an approval, so an ASK-bucket tool would
+    block for ``approval_timeout_secs`` and then reject. The deny list is
+    still enforced by the wrapper.
+
+    Setting ``app.state.approval`` is not enough, and that's the whole
+    reason this is a function. ``create_app`` passes the middleware *into*
+    ``CronRunner`` at construction, so the runner holds its own reference
+    and a later swap on ``app.state`` never reaches it. The ``cron_fires``
+    scenario runs a real agent session through that runner: a cron whose
+    ``approval_mode`` is unset (the default the model creates) would hit
+    the un-wrapped middleware and hang for the 10-minute approval timeout
+    before rejecting — reported as a model failure. It survives today only
+    because the tool it happens to call is AUTO-bucket.
+
+    Found by audit 2026-08-13. Any future component that captures the
+    middleware at construction belongs in this function."""
+    from .cron_runner import _AutoApproveWrapper
+
+    wrapper = _AutoApproveWrapper(app.state.approval)
+    app.state.approval = wrapper
+    runner = getattr(app.state, "cron_runner", None)
+    if runner is not None:
+        runner._approval = wrapper
 
 
 def ensure_session(app: Any, session_id: str) -> None:
