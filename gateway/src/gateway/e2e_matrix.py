@@ -81,11 +81,28 @@ def load_sidecars(eval_dir: Path) -> list[dict[str, Any]]:
     return sorted(out, key=lambda d: str(d.get("ts", "")))
 
 
+def column_label(run: dict[str, Any]) -> str:
+    """The grid column a run belongs in: the DUT, split by agent loop.
+
+    A model driven by the plan->execute orchestrator is a different
+    subject from the same model on the flat loop — that's the entire point
+    of measuring both — so they cannot share a column. Keyed on DUT alone,
+    a planned run would silently overwrite the flat one and the
+    comparison it exists for would be unviewable.
+
+    ``flat`` and ``unrecorded`` share a column deliberately: runs from
+    before ``--mode`` existed were flat in practice, so a newer *pinned*
+    flat run should replace them rather than sit beside them."""
+    dut = str(run["dut"])
+    return f"{dut} [planned]" if str(run.get("mode", "")) == "planned" else dut
+
+
 def latest_per_dut(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Keep only each DUT's most recent run (input sorted oldest first)."""
+    """Keep only the most recent run per column (input sorted oldest
+    first). Columns are DUT x loop mode — see :func:`column_label`."""
     latest: dict[str, dict[str, Any]] = {}
     for run in runs:
-        latest[str(run["dut"])] = run
+        latest[column_label(run)] = run
     return latest
 
 
@@ -151,9 +168,20 @@ def render_standing(standing: Standing) -> str:
             f"- `{dut}`"
             + (f" ({run['model']})" if run.get("model") else "")
             + f" — {run.get('ts', 'unknown time')}, samples={run.get('samples', 1)}, "
+            + f"loop={run.get('mode', 'unrecorded')}, "
             + f"objective {run.get('objective_passed', '?')}/{run.get('total', '?')}, "
             + f"judge: {judge}"
         )
+
+    if any(str(r.get("mode", "unrecorded")) == "unrecorded" for r in standing.runs.values()):
+        lines += [
+            "",
+            "`loop=unrecorded` predates `--mode`, when the agent loop came "
+            "from whatever `orchestration:` the operator's config held rather "
+            "than from anything the run pinned. Those cells were the flat "
+            "loop in practice, but nothing established it — re-run with an "
+            "explicit `--mode` before citing them.",
+        ]
 
     graded = judges - {"no judge"}
     if len(graded) > 1:

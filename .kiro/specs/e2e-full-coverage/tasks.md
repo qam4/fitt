@@ -133,8 +133,8 @@ Status legend: `[x]` done, `[ ]` not yet.
   re-reads) + `requires_features` so a skills-off deployment reports
   unsupported instead of a model failure. **Live: gemma4 PASSES** —
   loaded the recipe and applied it.
-- [ ] 19. Planned-mode orchestration: same scenario via `--mode planned`,
-  compared against flat. (R4)
+- [x] 19. Planned-mode orchestration: same scenario via `--mode planned`,
+  compared against flat. (R4) DONE 2026-08-14 — see tasks 71-74.
 - [ ] 20. Prefetch: with `prefetch_enabled`, recall works with no
   `memory_search` call — and the cross-session assertion must learn
   about this FOURTH recall channel before this lands, or it will report
@@ -361,6 +361,91 @@ FITT actually advertises, and *that* premise needs pinning too.
   turn's own `tool_calls`. The general rule now recorded in
   observed-issues: snapshot-only asserts are only safe when they can
   attribute the side effect to the turn. DONE 2026-08-13.
+
+## Planner coverage (added 2026-08-14)
+
+Closes task 19 and the first half of task 29. Ordered as built, because
+each step was a precondition for the next: without the mode pin the
+scenario is meaningless, and without the session fix the mechanism
+assertion always reads "no plan".
+
+- [x] 71. **`--mode flat|planned` on `fitt eval e2e`, pinned and
+  recorded.** Sets `orchestration.<alias>.enabled` for the DUT **and**
+  `fitt-default`: `is_orchestrated` keys on the *alias name* while the
+  command only repointed fitt-default's *model id*, so a config that
+  orchestrated one name gave a half-orchestrated run — graded turns on one
+  loop, cron firings on the other. Fails loud (exit 2) if `--mode planned`
+  is asked for without `prompt_resolver` / `plan_store` on `app.state`,
+  rather than silently degrading to flat while the report says "planned"
+  (Principle 11). `mode` is written to the sidecar; older sidecars read as
+  `unrecorded` rather than being back-filled as `flat`, because they were
+  flat in practice but nothing pinned it. DONE 2026-08-14.
+- [x] 72. **The matrix splits columns by loop mode.** `latest_per_dut`
+  keyed on DUT alone, so a planned run silently overwrote the flat run for
+  the same model — destroying the comparison it was run for. Columns are
+  now DUT x mode (`gemma4` / `gemma4 [planned]`); `flat` and `unrecorded`
+  deliberately share a column so a newer pinned run supersedes an old
+  unpinned one, and the render calls out `loop=unrecorded` as
+  uninterpretable. DONE 2026-08-14.
+- [x] 73. **`multi_step_chain` — a scenario that actually rewards
+  sequencing.** Phase 12's close-out deferred orchestration-readiness
+  because `daily_news_summary` doesn't need sequencing. This one has a real
+  dependency chain: read the todo list, schedule a reminder for the item
+  that has a date in it, then summarise what was scheduled. Step 2's
+  arguments are only knowable from step 1's output. Todos are planted as a
+  **pre-boot fixture**, so the first step is a genuine read of state the
+  model didn't author. The assert is keyword-filtered (`passport` /
+  `mattress`) per the cross-talk discipline, distinguishes
+  stopped-after-step-2 from acted-on-the-wrong-item, and — unlike the
+  routing scenarios — treats scheduling both items as a failure, because
+  the request said only the dated ones. Runs in both modes, so it *is* the
+  flat-vs-planned comparison. DONE 2026-08-14.
+- [x] 74. **`planner_elects_a_plan` — the mechanism, split from the
+  outcome.** Same request, gated on the `planning` feature so a flat run
+  reports *unsupported* instead of failing (the `memory_search` lesson).
+  Asserts a plan of >= 2 steps exists **and** that at least one was marked
+  complete — a plan the model didn't work is its own failure. Distinguishes
+  "elected not to plan", which is the confound that invalidated the Phase
+  12 comparison: hermes3 planned 0% of the time, so flat-vs-planned was
+  flat-vs-flat. Required `snapshot_app` to gain `plan_items`, and the
+  driver to pass the **scenario's** session id — the plan store is keyed by
+  session, so the previous default of `"main"` would have made every plan
+  look un-elected. DONE 2026-08-14.
+
+### First result (2026-08-14, gemma4:12b-it-qat, judge pinned)
+
+| loop | objective | judge |
+|---|---|---|
+| flat | **15/15** | 13/15 |
+| planned | 15/16 | 15/16 |
+
+The one planned-mode failure is the finding: **gemma4 elected not to
+plan.** Trace was `todo_list, todo_list, cron_add, send_message` — it did
+the work and never called `todowrite`.
+
+That **falsifies Phase 12 task 23's explanation.** It found hermes3 at 0%
+election and reasoned it was "too weak … regardless of harness". gemma4
+scores 15/15 and passed the new three-step dependency chain on the *flat*
+loop, first try. A capable model declining to plan means the bottleneck is
+**elicitation, not capability** — 2 of 2 models measured. Both
+flat-vs-planned comparisons in FITT's history were therefore
+flat-vs-flat.
+
+- [ ] 75. **Make models elect to plan.** The planner prompt is the
+  bottleneck, now on evidence rather than inference. In cost order:
+  strengthen the plan-step prompt (per-alias tuning, Phase 12 Story 2.4);
+  bind `planner_alias` to a model that does plan; or implement the
+  deferred `forced` planning mode (Phase 12 design D3) as the structural
+  fallback. `planner_elects_a_plan` is now the measurement for all three —
+  it fails today, so any of them can be A/B'd against it.
+- [ ] 76. **Multi-sample before citing any flat-vs-planned delta.** Both
+  columns are `samples=1`. Two identical runs 12 minutes apart also
+  disagreed on two *judge* verdicts (`reminder`, `asks_before_acting`), so
+  the judge columns are no more comparable than the objective ones.
+
+Remaining from task 29: nothing structural. What's left is measurement,
+plus task 75 — which is the interesting half, and it's Phase 12 work
+rather than harness work.
 
 ## Audit findings (added 2026-08-13)
 

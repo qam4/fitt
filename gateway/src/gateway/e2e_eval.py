@@ -643,6 +643,13 @@ def judge_model_from_command(command: str | None) -> str | None:
     return UNPINNED_JUDGE
 
 
+UNRECORDED_MODE = "unrecorded"
+"""Sidecars written before ``--mode`` existed. They were all the flat
+loop in practice, but that was an accident of the operator's config
+rather than something the run pinned, so they are labelled honestly
+rather than back-filled as ``flat``."""
+
+
 def report_to_dict(
     report: E2EReport,
     *,
@@ -650,6 +657,7 @@ def report_to_dict(
     model: str | None = None,
     samples: int = 1,
     judge_command: str | None = None,
+    mode: str | None = None,
     ts: str | None = None,
 ) -> dict[str, Any]:
     """Serialise a run for the tracked feature/model matrix.
@@ -658,13 +666,20 @@ def report_to_dict(
     the whole scenario list (not just the failures) so the matrix can
     tell "this model was never measured on that scenario" apart from
     "it failed", and records ``judge_command`` because an unpinned judge
-    silently invalidates comparisons between runs."""
+    silently invalidates comparisons between runs.
+
+    ``mode`` is the agent loop that ran (``flat`` / ``planned``). It has
+    the same rationale as ``judge_model``: a result is uninterpretable
+    without knowing what produced it, and this one was invisible for the
+    whole life of the harness — the loop was chosen by whatever
+    ``orchestration:`` the operator's config happened to hold."""
     return {
         "schema": SIDECAR_SCHEMA,
         "dut": dut,
         "model": model,
         "ts": ts or datetime.now(UTC).isoformat(timespec="seconds"),
         "samples": samples,
+        "mode": mode or UNRECORDED_MODE,
         "judge_command": judge_command,
         "judge_model": judge_model_from_command(judge_command),
         "objective_passed": report.objective_passed,

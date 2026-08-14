@@ -11,8 +11,10 @@ from gateway.e2e_scenarios import (
     cron_fires_scenario,
     memory_recall_cross_session_scenario,
     memory_recall_scenario,
+    multi_step_chain_scenario,
     news_scenario,
     notify_scenario,
+    planner_elects_a_plan_scenario,
     reminder_scenario,
     routing_push_now_scenario,
     routing_timed_reminder_scenario,
@@ -309,6 +311,8 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
         "routing_timed",
         "routing_untimed",
         "routing_push_now",
+        "multi_step_chain",
+        "planner_elects_a_plan",
     }
     for s in scens:
         assert s.turns and s.rubric  # all judged + non-empty
@@ -756,3 +760,180 @@ def test_right_tool_plus_extra_noise_still_passes() -> None:
 
     assert res.passed
     assert "noisy but right" in res.reason
+
+
+# ------------------------------------------- multi-step sequencing
+#
+# The gap Phase 12 left: orchestration shipped with fake-driven unit tests
+# and no judged coverage, and its own close-out deferred
+# "orchestration-readiness" because daily_news_summary doesn't need
+# sequencing. These two are the pair — outcome, and mechanism.
+
+
+def test_all_three_steps_passes() -> None:
+    scen = multi_step_chain_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "cron_jobs": [{"message": "renew the passport", "at_ts": 1}],
+                "agent_messages": [{"title": "", "body": "Scheduled: passport renewal"}],
+            }
+        )
+    )
+
+    assert res.passed
+
+
+def test_stopping_after_the_reminder_names_the_step_it_reached() -> None:
+    """Two of three steps is the interesting partial failure — it's what
+    an unsequenced run looks like."""
+    scen = multi_step_chain_scenario()
+
+    res = scen.outcome_assert(
+        _traj(snapshot={"cron_jobs": [{"message": "renew the passport", "at_ts": 1}]})
+    )
+
+    assert not res.passed
+    assert "step 2 of 3" in res.reason
+
+
+def test_scheduling_the_undated_item_is_a_distinct_failure() -> None:
+    """The discriminating half: picking the right item is only possible by
+    having read the list, so acting on the wrong one is evidence the read
+    never happened."""
+    scen = multi_step_chain_scenario()
+
+    res = scen.outcome_assert(
+        _traj(snapshot={"cron_jobs": [{"message": "look into a new mattress", "at_ts": 1}]})
+    )
+
+    assert not res.passed
+    assert "without reading the list" in res.reason
+
+
+def test_scheduling_both_items_fails() -> None:
+    """Belt-and-braces is wrong here — the request said only dated ones.
+    Contrast the routing scenarios, where extra noise is tolerated."""
+    scen = multi_step_chain_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "cron_jobs": [
+                    {"message": "renew the passport", "at_ts": 1},
+                    {"message": "look into a new mattress", "at_ts": 2},
+                ],
+                "agent_messages": [{"title": "", "body": "passport + mattress"}],
+            }
+        )
+    )
+
+    assert not res.passed
+    assert "undated" in res.reason
+
+
+def test_the_chain_plants_its_todos_pre_boot() -> None:
+    """The first step must be a read of state the model didn't author, or
+    it isn't a dependency chain."""
+    scen = multi_step_chain_scenario()
+
+    assert scen.fixture_files
+    rel, content = scen.fixture_files[0]
+    assert rel == "todos.md"
+    assert "passport" in content and "mattress" in content
+
+
+def test_the_chain_is_immune_to_other_scenarios_crons() -> None:
+    """Keyword-filtered, per the cross-talk discipline: other scenarios
+    leave crons for 'doctor' and 'laundry' in the shared run home."""
+    scen = multi_step_chain_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "cron_jobs": [
+                    {"message": "call the doctor", "at_ts": 1},
+                    {"message": "move the laundry", "at_ts": 2},
+                    {"message": "renew the passport", "at_ts": 3},
+                ],
+                "agent_messages": [{"title": "", "body": "passport"}],
+            }
+        )
+    )
+
+    assert res.passed
+
+
+def test_a_worked_plan_passes() -> None:
+    scen = planner_elects_a_plan_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "plan_items": [
+                    {"text": "read todos", "status": "completed"},
+                    {"text": "set reminder", "status": "completed"},
+                    {"text": "send summary", "status": "pending"},
+                ]
+            }
+        )
+    )
+
+    assert res.passed
+    assert "completed 2" in res.reason
+
+
+def test_electing_not_to_plan_says_the_turn_ran_flat() -> None:
+    """The confound that invalidated the Phase 12 comparison: hermes3
+    elected to plan 0% of the time, so 'planned mode' was flat vs flat."""
+    scen = planner_elects_a_plan_scenario()
+
+    res = scen.outcome_assert(_traj(snapshot={"plan_items": []}))
+
+    assert not res.passed
+    assert "executed flat" in res.reason
+
+
+def test_a_one_step_plan_is_not_sequencing() -> None:
+    scen = planner_elects_a_plan_scenario()
+
+    res = scen.outcome_assert(_traj(snapshot={"plan_items": [{"text": "do it"}]}))
+
+    assert not res.passed
+    assert "one-step" in res.reason
+
+
+def test_a_plan_with_no_completed_step_fails() -> None:
+    """Electing a plan and not working it is the failure mode the
+    orchestrator's recovery ladder exists for."""
+    scen = planner_elects_a_plan_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "plan_items": [
+                    {"text": "read todos", "status": "pending"},
+                    {"text": "set reminder", "status": "pending"},
+                ]
+            }
+        )
+    )
+
+    assert not res.passed
+    assert "didn't work" in res.reason
+
+
+def test_the_planner_scenario_is_gated_on_the_planning_feature() -> None:
+    """A flat run must report unsupported, not fail. Same discipline that
+    stopped memory_search's absence reading as a model failure."""
+    scen = planner_elects_a_plan_scenario()
+
+    assert scen.requires_features == ("planning",)
+    assert "--mode planned" in scen.requires_hint
+
+
+def test_both_sequencing_scenarios_drive_the_same_request() -> None:
+    """Outcome and mechanism must be measured on one task, or the
+    flat-vs-planned comparison compares two different things."""
+    assert planner_elects_a_plan_scenario().turns == multi_step_chain_scenario().turns

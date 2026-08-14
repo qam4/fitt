@@ -30,6 +30,7 @@ def _run(
     *,
     ts: str = "2026-08-11T10:00:00+00:00",
     model: str | None = None,
+    mode: str = "flat",
 ) -> dict[str, Any]:
     """scenarios: (name, status, objective)."""
     return {
@@ -38,6 +39,7 @@ def _run(
         "model": model,
         "ts": ts,
         "samples": 1,
+        "mode": mode,
         "judge_command": "kiro-cli chat --model claude-sonnet-4.5",
         "judge_model": "claude-sonnet-4.5",
         "objective_passed": sum(1 for _, st, o in scenarios if st == "scored" and o == "pass"),
@@ -219,3 +221,72 @@ def test_render_flags_an_unpinned_judge() -> None:
     rendered = render_standing(build_standing([run]))
 
     assert "unpinned judge" in rendered
+
+
+# ------------------------------------------- loop mode as a column axis
+#
+# A model on the plan->execute orchestrator is a different subject from the
+# same model on the flat loop. Keyed on DUT alone, the planned run silently
+# overwrote the flat one — destroying the comparison it was run for.
+
+
+def test_flat_and_planned_runs_get_separate_columns() -> None:
+    flat = _run("gemma4", [("multi_step_chain", "scored", "fail")], mode="flat")
+    planned = _run(
+        "gemma4",
+        [("multi_step_chain", "scored", "pass")],
+        mode="planned",
+        ts="2026-08-14T10:00:00+00:00",
+    )
+
+    standing = build_standing([flat, planned])
+
+    assert standing.duts == ["gemma4", "gemma4 [planned]"]
+    assert standing.cell("multi_step_chain", "gemma4") == CELL_FAIL
+    assert standing.cell("multi_step_chain", "gemma4 [planned]") == CELL_PASS
+
+
+def test_a_newer_flat_run_replaces_an_unrecorded_one() -> None:
+    """Pre-`--mode` runs were flat in practice, so a pinned flat run should
+    supersede them rather than sit in its own column forever."""
+    old = _run("gemma4", [("todo", "scored", "fail")], ts="2026-08-01T10:00:00+00:00")
+    old["mode"] = "unrecorded"
+    new = _run("gemma4", [("todo", "scored", "pass")], ts="2026-08-14T10:00:00+00:00", mode="flat")
+
+    standing = build_standing([old, new])
+
+    assert standing.duts == ["gemma4"]
+    assert standing.cell("todo", "gemma4") == CELL_PASS
+
+
+def test_provenance_names_the_loop() -> None:
+    rendered = render_standing(
+        build_standing([_run("gemma4", [("todo", "scored", "pass")], mode="planned")])
+    )
+
+    assert "loop=planned" in rendered
+
+
+def test_unrecorded_loop_is_called_out_as_uninterpretable() -> None:
+    run = _run("gemma4", [("todo", "scored", "pass")])
+    run["mode"] = "unrecorded"
+
+    rendered = render_standing(build_standing([run]))
+
+    assert "loop=unrecorded" in rendered
+    assert "nothing established it" in rendered
+
+
+def test_a_pinned_run_does_not_trigger_the_unrecorded_warning() -> None:
+    rendered = render_standing(
+        build_standing([_run("gemma4", [("todo", "scored", "pass")], mode="flat")])
+    )
+
+    assert "nothing established it" not in rendered
+
+
+def test_latest_per_dut_keys_on_mode_too() -> None:
+    flat = _run("m", [("t", "scored", "pass")], mode="flat")
+    planned = _run("m", [("t", "scored", "pass")], mode="planned")
+
+    assert sorted(latest_per_dut([flat, planned])) == ["m", "m [planned]"]

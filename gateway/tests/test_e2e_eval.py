@@ -672,3 +672,39 @@ async def test_report_names_the_split_and_which_way_it_went() -> None:
     assert "Disagreements: 1" in rendered
     assert "asks_before_acting (objective=FAIL, judge=PASS)" in rendered
     assert "suspect the scenario" in rendered
+
+
+# ------------------------------------------- the loop that ran
+#
+# Audit finding: the harness never pinned or recorded which agent loop ran.
+# `is_orchestrated` is keyed on the alias, the command never set
+# `cfg.orchestration`, so the loop came from whatever the operator's config
+# happened to hold. Every recorded run was the flat loop and no artifact
+# said so — a whole standing matrix of uninterpretable provenance.
+
+
+def _sidecar(**kwargs: Any) -> dict[str, Any]:
+    from gateway.e2e_eval import E2EResult, report_to_dict
+
+    res = E2EResult(
+        scenario="s",
+        trajectory=E2ETrajectory(scenario="s", turns=[], run=RunResult(reply="r")),
+        outcome=OutcomeResult(True, "ok"),
+        verdict=JudgeVerdict.unjudged("off"),
+    )
+    return report_to_dict(aggregate([res]), dut="fitt-ec2-gemma4", **kwargs)
+
+
+def test_sidecar_records_the_loop_mode() -> None:
+    assert _sidecar(mode="planned")["mode"] == "planned"
+    assert _sidecar(mode="flat")["mode"] == "flat"
+
+
+def test_an_unrecorded_mode_is_labelled_not_assumed_flat() -> None:
+    """Older sidecars were flat *in practice*, but nothing pinned it, so
+    back-filling them as "flat" would assert something the run never
+    established."""
+    from gateway.e2e_eval import UNRECORDED_MODE
+
+    assert _sidecar()["mode"] == UNRECORDED_MODE
+    assert UNRECORDED_MODE != "flat"

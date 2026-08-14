@@ -108,6 +108,19 @@ def snapshot_app(app: Any, *, session_id: str = "main", event_tail: int = 20) ->
         except Exception:  # pragma: no cover - defensive
             snap["lessons_text"] = ""
 
+    # The plan the orchestrator's planner pass elected, if any. Flat-loop
+    # turns leave this empty, which is the honest reading: no plan was
+    # elected because no planner ran. `[]` and "elected not to plan" are
+    # deliberately NOT distinguished here — the scenario that cares gates
+    # itself on the planning feature, so it only ever sees planned runs.
+    plan_store = getattr(app.state, "plan_store", None)
+    if plan_store is not None:
+        try:
+            plan = plan_store.get(session_id)
+            snap["plan_items"] = [i.to_dict() for i in plan.items] if plan is not None else []
+        except Exception:  # pragma: no cover - defensive
+            snap["plan_items"] = []
+
     return snap
 
 

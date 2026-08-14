@@ -33,6 +33,79 @@ doc.
 
 ---
 
+## Plan election is the bottleneck, and it isn't model weakness
+
+**First observed:** 2026-08-14, first judged flat-vs-planned run
+(gemma4:12b-it-qat, 16 scenarios each mode, judge pinned to
+claude-sonnet-5).
+**Tag:** orchestration / Phase 12 / planner prompt.
+
+The planner scenario Phase 12 never had. Results:
+
+| loop | objective | judge |
+|---|---|---|
+| flat | **15/15** | 13/15 |
+| planned | 15/16 | 15/16 |
+
+The single failure in planned mode is the whole finding:
+`planner_elects_a_plan` — **gemma4 elected not to plan.** Its tool trace
+was `todo_list, todo_list, cron_add, send_message`: it did the work
+correctly and never called `todowrite`.
+
+**This falsifies the standing explanation.** Phase 12 task 23 found
+hermes3:8b elects to plan 0% of the time and reasoned it "may simply be
+too weak … regardless of harness". gemma4 is not weak — it scores 15/15
+across the whole set, and it passed the new three-step dependency chain
+(read the todo list → schedule only the dated item → summarise) **on the
+flat loop**, first try. A capable model declining to plan means the
+bottleneck is **elicitation, not capability**: the planner prompt isn't
+getting models to elect, on 2 of 2 models measured.
+
+So the honest state of planned mode: *still no demonstrated benefit, and
+now for a known reason.* Both flat-vs-planned comparisons to date were
+effectively flat-vs-flat, because in each the model declined to plan.
+Levers, in order of cost: strengthen the plan-step prompt (per-alias
+tuning, Story 2.4); use `planner_alias` so a model that does plan
+produces the plan; or the deferred `forced` planning mode (design D3),
+which is the structural fallback if prompting can't elicit election.
+
+**Also: gemma4 doesn't obviously need it.** It sequenced a real
+dependency chain flat. That's an argument for planning being a
+weak-model aid rather than a general upgrade — one scenario, n=1, so
+indicative only, but it points the same way as the two null
+comparisons.
+
+### `<|tool_response>` leaked into a user-visible reply again
+
+The flat run's `reminder` reply was the literal string
+`<|tool_response>`. The cron was created correctly, so the objective
+check passed on the side effect and only the **judge** saw that the user
+would be shown garbage — the disagreement line surfaced it. Fourth
+distinct thing that one report line has caught. The same scenario passed
+in the planned run minutes later, so the leak is intermittent. Still the
+open backlog item; this is the first capture with a pinned judge.
+
+### The judge's cross-talk error is reduced, not fixed
+
+`asks_before_acting` in the flat run: reply "Would you like me to remind
+you at 9 AM or 9 PM today?", `tools: (none)` — the model asked, which is
+the correct answer. The judge said it "invented both the reminder subject
+and the date". That's the same cumulative-snapshot misreading the
+2026-08-13 prompt note was meant to stop; the identical scenario passed in
+the planned run. So the note helps intermittently and doesn't fix the
+class. Un-anchoring (spec task 34) is the actual fix.
+
+### Judge verdicts moved between two identical runs
+
+Same DUT, same judge model, same scenarios, ~12 minutes apart: `reminder`
+and `asks_before_acting` both went judge=FAIL in flat and judge=PASS in
+planned. One of those two flips has a real cause (the token leak); the
+other is judge noise. Either way the *judge* columns are not comparable
+at `samples=1` — a caveat that already applies to the objective columns
+and applies at least as strongly here.
+
+---
+
 ## Scenario cross-talk finally bit: a correct model failed for another scenario's cron
 
 **First observed:** 2026-08-13, `asks_before_acting` on

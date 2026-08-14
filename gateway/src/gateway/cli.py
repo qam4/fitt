@@ -1850,6 +1850,19 @@ def eval_all_cmd(timeout_s: float, suite: str, config_file: Path | None) -> None
         "waiting."
     ),
 )
+@click.option(
+    "--mode",
+    type=click.Choice(["flat", "planned"]),
+    default="flat",
+    help=(
+        "Which agent loop to measure. 'flat' pins the current loop; "
+        "'planned' pins the Phase 12 plan->execute orchestrator. This is "
+        "PINNED, not inherited: before it existed the loop was decided by "
+        "whatever `orchestration:` the operator's config happened to have, "
+        "so every recorded run was the flat loop and nothing said so. The "
+        "mode is written to the sidecar."
+    ),
+)
 @click.option("--config-file", type=click.Path(path_type=Path), default=None)
 def eval_e2e_cmd(
     dut: str,
@@ -1863,6 +1876,7 @@ def eval_e2e_cmd(
     judge_detail: str,
     exclusive: bool,
     tunnel_wait: float,
+    mode: str,
     config_file: Path | None,
 ) -> None:
     """Run the judged end-to-end scenarios against a live DUT.
@@ -1881,6 +1895,7 @@ def eval_e2e_cmd(
     import re
     import shlex
     from datetime import UTC, datetime
+    from functools import partial
 
     from .config import fitt_home
     from .e2e_driver import (
@@ -1961,6 +1976,21 @@ def eval_e2e_cmd(
     # whole run measures one model.
     # Unknown-alias validation already happened above, so this index is safe.
     cfg.aliases = {**cfg.aliases, "fitt-default": cfg.aliases[dut]}
+
+    # Pin the loop rather than inheriting it. `is_orchestrated` keys on the
+    # ALIAS NAME, and the line above only repointed fitt-default's *model
+    # id* — so a config that orchestrated one of the two names would give a
+    # half-orchestrated run: graded turns on one loop, cron firings on the
+    # other. Set both names explicitly, in both directions.
+    from .config import AliasOrchestrationConfig
+
+    orchestrated = mode == "planned"
+    cfg.orchestration = {
+        **cfg.orchestration,
+        dut: AliasOrchestrationConfig(enabled=orchestrated),
+        "fitt-default": AliasOrchestrationConfig(enabled=orchestrated),
+    }
+    _console.print(f"[dim]loop: {mode} (pinned for {dut} and fitt-default)[/dim]")
 
     # Scenario fixtures land BEFORE create_app: some state is only read at
     # boot. Skills are the case in point — SkillsLoader scans once at
@@ -2072,6 +2102,26 @@ def eval_e2e_cmd(
         available_features.append("skills")
     if getattr(cfg.memory, "embedding_alias", None):
         available_features.append("retrieval")
+    if orchestrated:
+        # Fail loud rather than silently running flat (Principle 11). The
+        # chat handler's gate needs all three, and a missing collaborator
+        # would otherwise degrade to the flat loop while the report said
+        # "planned" — the exact confusion --mode exists to remove.
+        missing_deps = [
+            name
+            for name, obj in (
+                ("prompt_resolver", getattr(app.state, "prompt_resolver", None)),
+                ("plan_store", getattr(app.state, "plan_store", None)),
+            )
+            if obj is None
+        ]
+        if missing_deps:
+            _console.print(
+                f"[red]--mode planned needs {', '.join(missing_deps)} on app.state[/red] — "
+                "the chat handler would silently fall back to the flat loop"
+            )
+            sys.exit(2)
+        available_features.append("planning")
     features = set(available_features)
     unsupported_names = [
         scen.name
@@ -2099,7 +2149,10 @@ def eval_e2e_cmd(
                     await run_scenario(
                         scen,
                         dispatch=dispatch,
-                        snapshot=lambda: snapshot_app(app),
+                        # Bind the session per scenario: the plan store is
+                        # keyed by session, so the default "main" would
+                        # make every plan look un-elected.
+                        snapshot=partial(snapshot_app, app, session_id=session_id),
                         judge=judge,
                         judge_timeline=(judge_detail in ("verbose", "max")),
                         available_tools=available_tools,
@@ -2117,7 +2170,7 @@ def eval_e2e_cmd(
     out_path = out or (fitt_home() / "eval" / f"e2e-{ts}.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        f"# Judged e2e report — dut=`{dut}` samples={samples} judge={use_judge}",
+        f"# Judged e2e report — dut=`{dut}` mode=`{mode}` samples={samples} judge={use_judge}",
         "",
         "## Summary",
         "",
@@ -2167,6 +2220,7 @@ def eval_e2e_cmd(
                 model=getattr(cfg.resolve_alias(dut)[0], "model", None),
                 samples=samples,
                 judge_command=judge_command if use_judge else None,
+                mode=mode,
             ),
             indent=2,
         ),
@@ -2294,7 +2348,11 @@ def eval_matrix(eval_dir: Path | None, out: Path | None) -> None:
     directory = eval_dir or (fitt_home() / "eval")
     standing = build_standing(load_sidecars(directory))
     rendered = render_standing(standing)
-    _console.print(rendered)
+    # markup=False: the table is data, and a column label like
+    # "fitt-ec2-gemma4 [planned]" is otherwise eaten as a Rich style tag —
+    # the console showed a trailing space where the loop mode should be
+    # while the written file was correct.
+    _console.print(rendered, markup=False)
 
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
