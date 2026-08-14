@@ -452,6 +452,19 @@ tasks didn't need it) and task 77 is what separates them.
   one shared pre-boot run home, so the last silently wins; a test now
   asserts a single `todos.md` fixture across the seed set.
   DONE 2026-08-14.
+- [x] 78. **Fix `deadline_sweep`'s own underspecification.** Its first
+  wording failed 0-of-3 on *both* loops, and the trace showed why: gemma4
+  identified exactly the right three items, left the undated ones alone,
+  proposed firing two days early, and asked before creating three crons.
+  The request ("make sure I get reminded … in time") named no lead time, so
+  asking about an invented parameter was correct — and is what
+  `asks_before_acting` rewards. Two scenarios in one suite with opposite
+  incentives. Fixed by supplying the lead time and explicit permission
+  ("go ahead … no need to check with me first"), with premise tests pinning
+  both, plus one asserting `asks_before_acting` never grants permission.
+  **General constraint recorded:** a scenario asserting a multi-item side
+  effect must supply every parameter the action needs and pre-authorise it,
+  because the harness has no human to confirm with. DONE 2026-08-14.
 - [ ] 75. **Separate the two explanations for non-election.** Re-run the
   pair on `deadline_sweep`. If a capable model still declines on a task
   that genuinely rewards planning, elicitation is implicated and the

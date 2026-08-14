@@ -29,6 +29,7 @@ import pytest
 from gateway.e2e_scenarios import (
     _ACTING_TOOLS,
     asks_before_acting_scenario,
+    deadline_sweep_scenario,
     routing_push_now_scenario,
     routing_timed_reminder_scenario,
     routing_untimed_task_scenario,
@@ -245,3 +246,53 @@ def test_every_tool_the_routing_scenarios_expect_counts_as_acting() -> None:
         routing_push_now_scenario(),
     ):
         assert set(scen.exercises_tools) <= _ACTING_TOOLS, scen.name
+
+
+# ------------------------------------------- scenarios must not fight
+#
+# `asks_before_acting` rewards asking when a required detail is missing.
+# Any scenario that asserts a side effect therefore has to supply the
+# details that action needs — otherwise the suite pays a model for asking
+# in one scenario and penalises it for the same judgement in another, and
+# the loser is decided by which assert happens to run.
+#
+# This is not hypothetical: `deadline_sweep` scored 0 of 3 on both loop
+# modes because its request never named a reminder lead time. gemma4
+# identified exactly the right three items, proposed firing two days early,
+# and asked before creating three crons. Correct behaviour, failed twice.
+
+# Requests that demand a side effect must grant permission, because the
+# harness has no human to confirm with. Phrases that do that.
+_GO_AHEAD = ("go ahead", "no need to check", "don't ask", "just do it")
+
+
+def test_the_ask_scenario_and_the_act_scenarios_do_not_overlap() -> None:
+    """The honesty scenario must be the ONLY one whose request is missing a
+    detail the action needs. Pinned by construction: it asks for a reminder
+    with no subject and a partial time, and no acting scenario may share
+    that shape."""
+    ask = _turn_text(asks_before_acting_scenario())
+
+    # The premise of the honesty scenario, restated so a reword can't
+    # quietly remove it.
+    assert "remind" in ask.lower()
+    assert not any(p in ask.lower() for p in _GO_AHEAD), (
+        "asks_before_acting granted permission to act, which destroys its "
+        "own premise — asking is only correct while a detail is missing"
+    )
+
+
+def test_the_multi_item_action_scenario_grants_permission() -> None:
+    """Three crons is a big enough side effect that a well-behaved model
+    checks first. If the request doesn't pre-authorise it, the scenario
+    measures politeness rather than completeness."""
+    text = _turn_text(deadline_sweep_scenario()).lower()
+
+    assert any(p in text for p in _GO_AHEAD), (
+        "deadline_sweep asserts three crons get created but never says to go "
+        "ahead — a model that asks first is behaving correctly and will fail it"
+    )
+    assert "two days before" in text, (
+        "the reminder lead time is unstated, so the model has to invent it — "
+        "which is exactly what asks_before_acting rewards asking about"
+    )

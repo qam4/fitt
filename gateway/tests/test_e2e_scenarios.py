@@ -832,17 +832,36 @@ def test_the_sweep_interleaves_dated_and_undated_items() -> None:
     assert "garage" in lines[-1], "and another must come last"
 
 
-def test_the_request_states_a_goal_not_a_procedure() -> None:
-    """The whole reason this scenario replaced multi_step_chain: if the
-    prompt enumerates the steps, a plan just restates it and declining to
-    plan is reasonable."""
+def test_the_request_does_not_leak_the_count_or_the_selection() -> None:
+    """The planning-relevant properties: the model must derive how many
+    items qualify and which. If the prompt says "three", or names them,
+    there is nothing left to keep track of."""
     text = str(deadline_sweep_scenario().turns[0]["content"]).lower()
 
     assert "todo list" in text
-    for procedural in ("first", "then", "set a reminder for", "text me"):
-        assert procedural not in text, f"the request went back to enumerating steps: {procedural!r}"
-    # And it must not leak the count the model is supposed to derive.
     assert "three" not in text and "3" not in text
+    for named in ("insurance", "passport", "dentist"):
+        assert named not in text, f"the request named {named!r} instead of leaving it to be found"
+
+
+def test_the_request_supplies_the_lead_time_and_permission_to_act() -> None:
+    """Both clauses are load-bearing, learned the hard way.
+
+    The first wording said only "make sure I get reminded about every one
+    of them in time" — no lead time. gemma4 read the list, identified
+    exactly the right three items, left the undated ones alone, proposed
+    firing two days early, and then *asked* before creating three crons.
+    That is precisely the behaviour `asks_before_acting` exists to reward,
+    so the two scenarios were pulling in opposite directions and this one
+    scored 0 of 3 on a technicality of its own making.
+
+    General constraint this pins for any scenario asserting a multi-item
+    side effect: supply every parameter the action needs AND say to go
+    ahead, or it is really a test of whether the model asks."""
+    text = str(deadline_sweep_scenario().turns[0]["content"]).lower()
+
+    assert "two days before" in text, "no lead time given, so asking becomes the right answer"
+    assert "go ahead" in text and "no need to check" in text
 
 
 def test_the_sweep_is_immune_to_other_scenarios_crons() -> None:

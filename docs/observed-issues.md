@@ -83,6 +83,48 @@ to plan. Two live explanations remain — the prompt doesn't elicit it, or
 the tasks so far genuinely didn't need it — and nothing yet separates
 them.
 
+### And the replacement failed the same way — fourth instance
+
+`deadline_sweep` (below) scored **0 of 3 on both loop modes**. Not a
+partial sweep: it scheduled nothing. The trace says why. gemma4 read the
+list, identified exactly the right three dated items, left the two undated
+ones alone, proposed a sensible lead time, and asked:
+
+> "I found three tasks in your todo list with specific deadlines… To make
+> sure you don't miss these, I'll set up reminders for each of them to fire
+> **two days before** the deadline. Would you…"
+
+The request was *"make sure I get reminded about every one of them in
+time"* — which never says **when**. So the model had to invent a lead time,
+and asking about an invented parameter is exactly what
+`asks_before_acting` exists to reward. **Two scenarios in one suite were
+pulling in opposite directions**, and which one a model "failed" came down
+to whichever assert happened to be running.
+
+Fixed by supplying both missing pieces: the lead time ("two days before")
+and explicit permission ("go ahead and create them, no need to check with
+me first"). Two premise tests pin it — one that `deadline_sweep` grants
+permission and names the lead time, one that `asks_before_acting` never
+grants permission, since that would destroy its own premise.
+
+**The general constraint, now written down:** a scenario asserting a
+multi-item side effect must supply every parameter the action needs AND
+pre-authorise it. The harness has no human to confirm with, so a request
+that leaves anything open is really a test of whether the model asks.
+
+### Four asserts, one cause
+
+Fourth time this month an assertion punished correct behaviour:
+`asks_before_acting` blamed for another scenario's leftover cron;
+`memory_recall` demanding a tool when history sufficed; `multi_step_chain`
+demanding a plan for an enumerated procedure; `deadline_sweep` demanding
+action on an underspecified request. The common cause is not carelessness
+about any one case — it is writing the check from **what I wanted to
+observe** rather than from **what the request actually entitles the model
+to do**. The cheap discipline that would have caught all four: before
+writing the assert, ask "what is the best possible behaviour here?" and
+confirm the assert scores *that* as a pass.
+
 ### The fix, both halves
 
 `multi_step_chain` is retired and replaced by **`deadline_sweep`**: five

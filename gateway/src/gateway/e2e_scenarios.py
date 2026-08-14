@@ -741,12 +741,25 @@ def _deadline_sweep_assert() -> OutcomeAssert:
 
 
 def deadline_sweep_scenario() -> TaskScenario:
-    """A goal, not a procedure: three deadlines to catch, count unstated.
+    """Three deadlines to catch, count and selection unstated.
 
     Runs in both loop modes, so this is the flat-vs-planned comparison
     `multi_step_chain` couldn't be. Five todos are planted pre-boot, three
-    of them dated; the request states an outcome and leaves the model to
-    derive the steps and the count."""
+    of them dated; the model derives *which* and *how many* from the data.
+
+    **The lead time is given and permission to act is explicit**, and both
+    clauses are load-bearing. The first wording ("make sure I get reminded
+    about every one of them in time") named no lead time, so gemma4 read
+    the list correctly, identified exactly the right three, proposed firing
+    two days early — and then *asked before creating three crons*. Which is
+    the behaviour `asks_before_acting` exists to reward: a missing time is
+    a thing to ask about. Two scenarios in one suite were pulling in
+    opposite directions, and this one lost on a technicality of its own
+    making.
+
+    General constraint for any future scenario that asserts a *multi-item
+    side effect*: supply every parameter the action needs and say to go
+    ahead, or it is really a test of whether the model asks."""
     return TaskScenario(
         name="deadline_sweep",
         fixture_files=(("todos.md", _SWEEP_TODOS),),
@@ -754,8 +767,9 @@ def deadline_sweep_scenario() -> TaskScenario:
             {
                 "role": "user",
                 "content": (
-                    "I keep missing deadlines on my todo list. Make sure I get "
-                    "reminded about every one of them in time."
+                    "I keep missing deadlines on my todo list. Set a reminder two "
+                    "days before each one that has a date — go ahead and create "
+                    "them, no need to check with me first."
                 ),
             }
         ],
