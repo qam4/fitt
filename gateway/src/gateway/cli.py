@@ -2202,6 +2202,25 @@ def eval_e2e_cmd(
         lines += [
             f"- loop_status: `{run.loop_status}`" + (f" — {run.error}" if run.error else ""),
             f"- tools: {', '.join(run.tool_sequence) or '(none)'}",
+        ]
+        # Args + results per call. The judge has had these since Tier 1
+        # while the human-readable report showed only "name:err" — so
+        # diagnosing a failing tool call meant re-running the whole set
+        # just to see what was sent. That cost a full evening once
+        # (hermes3's todowrite erroring on 6 of 9 plan elections).
+        for c in run.tool_calls:
+            call_status = "ok" if c.get("ok", True) else "ERROR"
+            call_args = json.dumps(c.get("args", {}), ensure_ascii=False, default=str)
+            if len(call_args) > 400:
+                call_args = call_args[:400] + "…"
+            call_result = str(c.get("result", "")).replace("\n", " ")
+            if len(call_result) > 300:
+                call_result = call_result[:300] + "…"
+            lines.append(
+                f"    - `{c.get('name', '?')}` {call_status} — args={call_args} "
+                f"-> {call_result or '(no result)'}"
+            )
+        lines += [
             f"- reply: {reply or '(empty)'}",
             "",
         ]

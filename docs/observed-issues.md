@@ -83,7 +83,84 @@ to plan. Two live explanations remain — the prompt doesn't elicit it, or
 the tasks so far genuinely didn't need it — and nothing yet separates
 them.
 
-### Correction: this measured the wrong model, and re-derived the spec
+## hermes3 DOES elect to plan — and `todowrite` errors when it does
+
+**First observed:** 2026-08-14, hermes3:8b flat vs planned, 16 scenarios
+each, judge pinned to claude-sonnet-5.
+**Tag:** orchestration / Phase 12 / tool schema fumble.
+
+The measurement Phase 12 was actually written for — its requirements
+target "the deliberately-weak free models FITT targets" and were
+triggered by a hermes3 failure.
+
+| loop | objective | judge |
+|---|---|---|
+| flat | 6/15 (40%) | 6/14 |
+| planned | 8/15 (53%) | 6/15 |
+
+**The +2 is not a planning win.** The two scenarios that flipped are
+`memory_recall` and `routing_timed` — both **single-step**, nothing for a
+plan to sequence. `deadline_sweep`, the multi-step task, **fails in both
+modes**. Given hermes3 has scored 3/7 and 4/7 on identical runs, two
+single-step flips at n=1 is well inside its noise. No planning delta has
+been demonstrated.
+
+**What the run did establish, and it reverses two of my earlier claims.**
+hermes3 elects to plan in **9 of 15 scenarios** — so "three models, zero
+elections" and "elicitation is the bottleneck" were both wrong, in
+opposite directions. The problem is what happens *after* election:
+
+```
+cron_fires                   todowrite:err, cron_add:ok
+notify                       todowrite:err, todowrite:ok, send_message:ok
+memory_recall_cross_session  todowrite:err, todowrite:ok
+skills                       todowrite:err                 <- only call; empty reply
+todo                         todowrite:ok, todo_add:ok
+todo_lifecycle               todowrite:ok, todo_add:ok, todo_done:ok
+routing_timed                todowrite:ok, cron_add:ok
+routing_untimed              todowrite:err, cron_add:err
+deadline_sweep               todowrite:ok                  <- planned, executed nothing
+```
+
+**`todowrite` errors on 6 of 9 elections.** The judge called it "a
+malformed todowrite". On `skills` it was the *only* tool call and the turn
+returned an **empty reply** — so a fumbled plan-tool call can take out the
+whole turn. That is precisely the failure class the Phase 12 requirements
+name as the reason the phase exists: "the observed failures of the bound
+model (`hermes3:8b`) have been **harness** failures — schema fumble-traps,
+narration under large prompts — not a capability ceiling."
+
+Planning also made `skills` *worse*: flat failed it by never calling
+`read_file`; planned failed it with no reply at all.
+
+**Not yet known: the exact error string.** `_tool_todowrite` rejects on
+four paths — `todos` not a list, an item that isn't an object, missing or
+empty `text`, or a `status` outside `PLAN_STATUSES`. The likely fumble is
+a plain array of strings (`["step one", "step two"]`) rather than objects,
+which is how models usually emit a todo list, or an invented status value.
+**Do not fix on that guess** — the next run will show it, because the
+report now prints per-call args and results.
+
+That omission is itself the lesson: the judge has had args and results
+since Tier 1 while the human-readable report showed only `name:err`, so
+diagnosing a failing tool call meant re-running the whole set. Fixed.
+
+Once the error is known, the fix belongs in the "flatten the fumble
+surface" family that `edit_file` already got: coerce a list of strings
+into `{"text": ...}`, normalise an unknown status to `pending`, and make
+the error name the expected shape.
+
+Two smaller notes. `deadline_sweep` on hermes3 produced a plan and then
+*asked* — "Shall we proceed?" — after echoing "No need to confirm for each
+one", so it ignored the explicit go-ahead the request now carries; that's
+a model failure rather than a scenario defect this time. And
+`planner_elects_a_plan` reported "elected not to plan" while
+`deadline_sweep` — the identical request in a sibling session — elected,
+so that scenario's single-run verdict is not representative of the model.
+
+---
+
+## Correction: the gemma4 planner result measured the wrong model
 
 Everything below is a result about **gemma4**, and Phase 12 was not built
 for gemma4. Its requirements are explicit — "this fails open-ended,

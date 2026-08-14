@@ -499,14 +499,33 @@ tasks didn't need it) and task 77 is what separates them.
   **Conclusion: on gemma4, orchestration has no demonstrated use case.**
   Leaving it off (the default) is correct for this binding. That is a
   real answer, not a gap.
-- [ ] 79. **If planning is revisited, do it on a weaker model or a harder
-  task — not on gemma4.** The null result above is specific to a model
-  that passes everything flat. hermes3 scores 7/14 flat and is the
-  population planning might actually help; a task gemma4's flat loop
-  genuinely fails (longer horizon, more items, a real mid-task branch)
-  would be the other way in. Until one of those exists there is nothing
-  to measure, so the earlier levers (plan-prompt tuning, `planner_alias`,
-  the deferred `forced` mode) have no target and shouldn't be built.
+- [x] 79. **Measure planning on the model it was built for.** DONE
+  2026-08-14: hermes3:8b, flat 6/15 vs planned 8/15. **No planning win** —
+  the two scenarios that flipped are single-step (`memory_recall`,
+  `routing_timed`), `deadline_sweep` fails in both modes, and hermes3's
+  known 3/7-vs-4/7 noise covers a two-scenario swing at n=1.
+
+  What it did establish reverses two earlier claims: **hermes3 elects to
+  plan in 9 of 15 scenarios**, so neither "zero elections" nor
+  "elicitation is the bottleneck" holds. The problem is after election —
+  see task 80.
+- [ ] 80. **`todowrite` errors on 6 of hermes3's 9 plan elections.** The
+  judge called it "a malformed todowrite"; on `skills` it was the only
+  tool call and the turn returned an **empty reply**, so a fumbled
+  plan-tool call can destroy a turn. This is the exact failure class the
+  Phase 12 requirements cite as the phase's reason for existing ("schema
+  fumble-traps… not a capability ceiling"). `_tool_todowrite` rejects on
+  four paths: `todos` not a list, a non-object item, missing/empty `text`,
+  or a status outside `PLAN_STATUSES`. The likely fumble is a plain array
+  of strings, or an invented status — **but do not fix on that guess.**
+  The report now prints per-call args and results, so the next hermes3
+  planned run names it. Then apply the `edit_file` treatment: coerce
+  strings to `{"text": ...}`, normalise unknown statuses to `pending`, and
+  make the error state the expected shape.
+- [x] 81. **Print tool args and results in the e2e report.** The judge has
+  had them since Tier 1 while the markdown showed only `name:err`, so
+  diagnosing a failing tool call meant re-running the whole set — which is
+  what task 80 cost. DONE 2026-08-14.
 - [ ] 76. **Multi-sample before citing any flat-vs-planned delta.** Both
   columns are `samples=1`. Two identical runs 12 minutes apart also
   disagreed on two *judge* verdicts (`reminder`, `asks_before_acting`), so
