@@ -668,130 +668,140 @@ def routing_push_now_scenario() -> TaskScenario:
     )
 
 
-# ------------------------------------------- multi-step sequencing
+# ------------------------------------------- a task that WARRANTS a plan
 #
 # The scenario Phase 12 never had. Its task-24 close-out deferred
-# "orchestration-readiness" as a capability dimension for a specific
-# reason: `daily_news_summary` doesn't NEED sequencing, so flat-vs-planned
-# on it measures nothing, and the one comparison run (hermes3, n=5) found
-# no benefit — while the same model turned out to elect a plan 0% of the
-# time, making it flat vs flat.
+# "orchestration-readiness" because `daily_news_summary` doesn't NEED
+# sequencing, so flat-vs-planned on it measures nothing.
 #
-# This one has a real dependency chain: the second step's arguments can
-# only be known by reading the first step's output, and the third
-# summarises the second. Nothing can be reordered or guessed.
+# The first attempt here (`multi_step_chain`, retired 2026-08-14 after one
+# live run) made the same mistake one level up. It asked: "Look at my todo
+# list. For any item that has a date, set a reminder for it. Then text me a
+# summary." That enumerates three steps in order, and exactly one todo
+# qualified — so a plan would have restated the prompt verbatim with
+# nothing to keep track of. gemma4 declined to plan and completed it
+# correctly, which is defensible judgement rather than a failure; the
+# assertion calling that a failure was punishing good behaviour, and the
+# "elicitation is the bottleneck" conclusion drawn from it was not
+# supported by the task.
+#
+# What planning is actually for, and what this task has instead: a GOAL
+# rather than a procedure (the model derives the steps), a step count that
+# comes from the DATA rather than the prompt (so completeness has to be
+# tracked), and enough items that dropping one is a live risk.
 
-_CHAIN_DATED = "renew the passport before 2026-09-30"
-_CHAIN_UNDATED = "look into a new mattress"
+_SWEEP_DATED = (
+    "file the insurance claim by 2026-09-18",
+    "renew the passport before 2026-09-30",
+    "book the dentist for 2026-10-07",
+)
+_SWEEP_UNDATED = ("look into a new mattress", "tidy the garage")
 
-_CHAIN_TODOS = f"""# Todos
+_SWEEP_TODOS = "# Todos\n\n## Open\n\n" + "".join(
+    f"- [ ] {t}\n" for t in (_SWEEP_UNDATED[0], *_SWEEP_DATED, _SWEEP_UNDATED[1])
+)
 
-## Open
-
-- [ ] {_CHAIN_UNDATED}
-- [ ] {_CHAIN_DATED}
-"""
+_SWEEP_KEYWORDS = ("insurance", "passport", "dentist")
 
 
-def _multi_step_chain_assert() -> OutcomeAssert:
-    """Did all three dependent steps happen, and only for the right item?
+def _deadline_sweep_assert() -> OutcomeAssert:
+    """Completeness under multiplicity — what planning is meant to buy.
 
-    Deliberately checks the *end state* rather than the tool sequence:
-    what matters is that the work landed, not the route. But it does
-    check the discriminating part — a cron for the dated todo and NOT for
-    the undated one, which is only possible by having read the list."""
+    Three items qualify, two don't, and the request never says how many or
+    which. Two-of-three is the interesting failure: it is exactly what
+    losing track looks like, and exactly what a tracked plan should
+    prevent. So the reason names which landed and which didn't, making a
+    partial sweep legible rather than just "fail".
+
+    The undated items are interleaved with the dated ones in the fixture,
+    so a model that simply reminds about the first N items it sees gets it
+    wrong — selection has to be by content."""
 
     def _a(traj: E2ETrajectory) -> OutcomeResult:
-        crons = traj.snapshot.get("cron_jobs", [])
-        texts = [str(j.get("message", "")).lower() for j in crons]
-        for_dated = [t for t in texts if "passport" in t]
-        for_undated = [t for t in texts if "mattress" in t]
-        pushed = [
-            f"{m.get('title', '')} {m.get('body', '')}".lower()
-            for m in traj.snapshot.get("agent_messages", [])
-        ]
-        summarised = [p for p in pushed if "passport" in p]
+        texts = [str(j.get("message", "")).lower() for j in traj.snapshot.get("cron_jobs", [])]
+        hit = [k for k in _SWEEP_KEYWORDS if any(k in t for t in texts)]
+        missed = [k for k in _SWEEP_KEYWORDS if k not in hit]
+        spurious = [k for k in ("mattress", "garage") if any(k in t for t in texts)]
 
-        if not for_dated:
-            if for_undated:
-                return OutcomeResult(
-                    False,
-                    "scheduled the UNDATED todo and not the dated one — "
-                    "it acted without reading the list",
-                )
-            return OutcomeResult(False, "no reminder created for the dated todo")
-        if for_undated:
+        if spurious:
             return OutcomeResult(
                 False,
-                "scheduled the undated todo too — the request said only the ones with a date",
+                f"scheduled undated item(s) {', '.join(spurious)} — swept the "
+                "whole list instead of the ones with deadlines",
             )
-        if not summarised:
+        if missed:
             return OutcomeResult(
                 False,
-                "scheduled the reminder but never sent the summary — "
-                f"stopped after step 2 of 3 ({len(pushed)} message(s) sent)",
+                f"scheduled {len(hit)} of 3 deadlines ({', '.join(hit) or 'none'}) "
+                f"— missed {', '.join(missed)}",
             )
-        return OutcomeResult(
-            True, "read the list, scheduled only the dated item, and summarised it"
-        )
+        return OutcomeResult(True, f"scheduled all 3 deadlines: {', '.join(hit)}")
 
     return _a
 
 
-def multi_step_chain_scenario() -> TaskScenario:
-    """Three dependent steps: read -> act on what you read -> report.
+def deadline_sweep_scenario() -> TaskScenario:
+    """A goal, not a procedure: three deadlines to catch, count unstated.
 
-    Runs in both loop modes on purpose, so it can serve as the
-    flat-vs-planned comparison the Phase 12 close-out couldn't make. The
-    todos are planted as a *pre-boot fixture* rather than created by the
-    model, so the first step is a genuine read of state it didn't author
-    (and so the two items are stable across runs)."""
+    Runs in both loop modes, so this is the flat-vs-planned comparison
+    `multi_step_chain` couldn't be. Five todos are planted pre-boot, three
+    of them dated; the request states an outcome and leaves the model to
+    derive the steps and the count."""
     return TaskScenario(
-        name="multi_step_chain",
-        fixture_files=(("todos.md", _CHAIN_TODOS),),
+        name="deadline_sweep",
+        fixture_files=(("todos.md", _SWEEP_TODOS),),
         turns=[
             {
                 "role": "user",
                 "content": (
-                    "Look at my todo list. For any item that has a date, set a "
-                    "reminder for it. Then text me a summary of what you scheduled."
+                    "I keep missing deadlines on my todo list. Make sure I get "
+                    "reminded about every one of them in time."
                 ),
             }
         ],
-        outcome_assert=_multi_step_chain_assert(),
+        outcome_assert=_deadline_sweep_assert(),
         rubric=(
-            "The task had three dependent steps: read the todo list, schedule a "
-            "reminder for the item with a date in it (the passport renewal, not "
-            "the mattress), then send a summary message. Did the assistant do all "
-            "three, and does the summary describe what it actually scheduled?"
+            "The todo list held three items with dates (insurance claim, passport, "
+            "dentist) and two without. The user asked to be reminded about every "
+            "deadline, without saying how many there were. Did the assistant catch "
+            "all three and leave the undated items alone?"
         ),
-        exercises_tools=("todo_list", "cron_add", "send_message"),
+        exercises_tools=("todo_list", "cron_add"),
     )
 
 
 def _planner_elects_assert() -> OutcomeAssert:
-    """Did the planner pass actually produce a plan?
+    """Did the planner pass produce a plan, and did the model work it?
 
     Split from the outcome check for the same reason ``memory_recall`` and
     ``memory_recall_cross_session`` are separate: the outcome can be
-    reached without the mechanism, so demanding the mechanism in the same
-    assertion conflates "didn't work" with "worked another way". Here the
-    mechanism is the whole point — planning's leverage cannot be measured
-    on a run where the model declined to plan, which is exactly what
-    invalidated the Phase 12 comparison."""
+    reached without the mechanism.
+
+    **No plan is INCONCLUSIVE, not a failure.** The first version called it
+    a failure, which was wrong twice over. A model that reaches the right
+    answer without a plan hasn't failed; and what such a run actually
+    establishes is that *it cannot tell you anything about planning* —
+    the definition of inconclusive. It is also the confound that voided
+    both of FITT's flat-vs-planned comparisons, so it belongs excluded from
+    the rates and named loudly, not quietly counted as a model defect.
+
+    Electing a plan and then not working it IS a failure — that's the
+    recovery ladder's territory, and it's a claim about the model."""
 
     def _a(traj: E2ETrajectory) -> OutcomeResult:
         items = traj.snapshot.get("plan_items", [])
         if not items:
             return OutcomeResult(
                 False,
-                "the planner pass ran but the model elected not to plan — "
-                "so this turn executed flat, whatever the mode says",
+                "the model elected not to plan, so this turn executed flat — "
+                "nothing here measures planning either way",
+                inconclusive=True,
             )
         if len(items) < 2:
             return OutcomeResult(
                 False,
                 f"a one-step 'plan' isn't sequencing: {items[0].get('text', '')!r}",
+                inconclusive=True,
             )
         done = [i for i in items if i.get("status") == "completed"]
         steps = "; ".join(str(i.get("text", "")) for i in items)
@@ -807,23 +817,28 @@ def _planner_elects_assert() -> OutcomeAssert:
 
 
 def planner_elects_a_plan_scenario() -> TaskScenario:
-    """The planner mechanism itself, on the same multi-step task.
+    """The planner mechanism, on a task that actually warrants a plan.
+
+    Retargeted from ``multi_step_chain``, whose request enumerated its own
+    steps — so declining to plan there was reasonable, and the
+    "elicitation is the bottleneck" reading drawn from it was not
+    supported.
 
     Gated on the ``planning`` feature, so a flat-loop run reports
     *unsupported* rather than failing — a switched-off loop is a
     deployment fact, not a model result (the ``memory_search`` lesson).
     """
-    chain = multi_step_chain_scenario()
+    sweep = deadline_sweep_scenario()
     return TaskScenario(
         name="planner_elects_a_plan",
-        fixture_files=chain.fixture_files,
-        turns=chain.turns,
+        fixture_files=sweep.fixture_files,
+        turns=sweep.turns,
         outcome_assert=_planner_elects_assert(),
         rubric=(
-            "This turn ran through the plan->execute orchestrator on a task with "
-            "three dependent steps. Does the reply show the assistant working a "
-            "plan — reading the list first, then acting on what it found — rather "
-            "than guessing or doing the steps out of order?"
+            "This turn ran through the plan->execute orchestrator on a goal whose "
+            "steps and step-count weren't given: three of five todos have dates and "
+            "each needs its own reminder. Does the reply show the assistant working "
+            "through them deliberately rather than handling one and stopping?"
         ),
         requires_features=("planning",),
         requires_hint=(
@@ -934,6 +949,6 @@ def seed_scenarios() -> list[TaskScenario]:
         routing_timed_reminder_scenario(),
         routing_untimed_task_scenario(),
         routing_push_now_scenario(),
-        multi_step_chain_scenario(),
+        deadline_sweep_scenario(),
         planner_elects_a_plan_scenario(),
     ]

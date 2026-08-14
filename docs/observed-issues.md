@@ -33,12 +33,12 @@ doc.
 
 ---
 
-## Plan election is the bottleneck, and it isn't model weakness
+## Planner coverage: a first result, and a conclusion withdrawn
 
 **First observed:** 2026-08-14, first judged flat-vs-planned run
 (gemma4:12b-it-qat, 16 scenarios each mode, judge pinned to
 claude-sonnet-5).
-**Tag:** orchestration / Phase 12 / planner prompt.
+**Tag:** orchestration / Phase 12 / scenario design.
 
 The planner scenario Phase 12 never had. Results:
 
@@ -47,33 +47,65 @@ The planner scenario Phase 12 never had. Results:
 | flat | **15/15** | 13/15 |
 | planned | 15/16 | 15/16 |
 
-The single failure in planned mode is the whole finding:
-`planner_elects_a_plan` — **gemma4 elected not to plan.** Its tool trace
-was `todo_list, todo_list, cron_add, send_message`: it did the work
-correctly and never called `todowrite`.
+The single planned-mode failure was `planner_elects_a_plan`: **gemma4
+elected not to plan.** Its tool trace was `todo_list, todo_list,
+cron_add, send_message` — it did the work correctly and never called
+`todowrite`.
 
-**This falsifies the standing explanation.** Phase 12 task 23 found
-hermes3:8b elects to plan 0% of the time and reasoned it "may simply be
-too weak … regardless of harness". gemma4 is not weak — it scores 15/15
-across the whole set, and it passed the new three-step dependency chain
-(read the todo list → schedule only the dated item → summarise) **on the
-flat loop**, first try. A capable model declining to plan means the
-bottleneck is **elicitation, not capability**: the planner prompt isn't
-getting models to elect, on 2 of 2 models measured.
+### The conclusion I drew from that was wrong
 
-So the honest state of planned mode: *still no demonstrated benefit, and
-now for a known reason.* Both flat-vs-planned comparisons to date were
-effectively flat-vs-flat, because in each the model declined to plan.
-Levers, in order of cost: strengthen the plan-step prompt (per-alias
-tuning, Story 2.4); use `planner_alias` so a model that does plan
-produces the plan; or the deferred `forced` planning mode (design D3),
-which is the structural fallback if prompting can't elicit election.
+I wrote that this "falsifies" Phase 12's model-weakness explanation and
+proves the bottleneck is **elicitation** — the planner prompt failing to
+get models to elect. The operator's question was whether the *task* was
+conducive to planning. It wasn't, and that reading doesn't survive it.
 
-**Also: gemma4 doesn't obviously need it.** It sequenced a real
-dependency chain flat. That's an argument for planning being a
-weak-model aid rather than a general upgrade — one scenario, n=1, so
-indicative only, but it points the same way as the two null
-comparisons.
+The scenario asked: *"Look at my todo list. For any item that has a date,
+set a reminder for it. Then text me a summary of what you scheduled."*
+Three problems, all mine:
+
+* **The steps are enumerated, in order.** A plan would restate the prompt
+  verbatim. There is nothing to derive.
+* **Exactly one todo qualified.** No tracking burden, so nothing for a
+  plan to keep hold of.
+* **Nothing branches.** No step's existence depends on an earlier result.
+
+So gemma4 declining to plan was plausibly *correct judgement* on a task
+that didn't warrant one — and the assertion that called it a failure was
+punishing good behaviour. Third time this month I've built an assert that
+does that. The pattern in all three: I wrote the check from what I wanted
+to observe rather than from what the task actually demands of the model.
+
+**What still stands:** planned mode has no demonstrated benefit, both
+flat-vs-planned comparisons in FITT's history were effectively
+flat-vs-flat, and gemma4 sequenced a real (if easy) multi-step task on
+the flat loop. **What's withdrawn:** any claim about *why* models decline
+to plan. Two live explanations remain — the prompt doesn't elicit it, or
+the tasks so far genuinely didn't need it — and nothing yet separates
+them.
+
+### The fix, both halves
+
+`multi_step_chain` is retired and replaced by **`deadline_sweep`**: five
+todos planted pre-boot, three with dates, interleaved with two without,
+and the request states a *goal* — "I keep missing deadlines on my todo
+list. Make sure I get reminded about every one of them in time." No steps
+given, no count given, so the model must derive both, and completeness
+across three items is a live risk. A test asserts the request stays
+goal-shaped (no "first"/"then", no leaked count), because the failure mode
+was the wording drifting procedural.
+
+And **no plan is now `inconclusive`, not `FAIL`.** That was wrong twice
+over: a model that reaches the right answer without a plan hasn't failed,
+and what such a run establishes is precisely that *it cannot tell you
+anything about planning* — the definition the harness already has a state
+for. It is also the confound that voided both comparisons, so it belongs
+excluded from the rates and named loudly. Electing a plan and then not
+working it stays a real failure; that's a claim about the model.
+
+Retiring rather than keeping `multi_step_chain` was forced by a second
+issue: both scenarios plant `todos.md`, fixtures are written into one
+shared run home pre-boot, so the last one silently wins. A test now
+asserts only one `todos.md` fixture exists across the seed set.
 
 ### `<|tool_response>` leaked into a user-visible reply again
 

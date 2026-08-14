@@ -419,25 +419,47 @@ assertion always reads "no plan".
 | flat | **15/15** | 13/15 |
 | planned | 15/16 | 15/16 |
 
-The one planned-mode failure is the finding: **gemma4 elected not to
-plan.** Trace was `todo_list, todo_list, cron_add, send_message` — it did
-the work and never called `todowrite`.
+The one planned-mode failure was `planner_elects_a_plan`: **gemma4 elected
+not to plan.** Trace was `todo_list, todo_list, cron_add, send_message` —
+it did the work and never called `todowrite`.
 
-That **falsifies Phase 12 task 23's explanation.** It found hermes3 at 0%
-election and reasoned it was "too weak … regardless of harness". gemma4
-scores 15/15 and passed the new three-step dependency chain on the *flat*
-loop, first try. A capable model declining to plan means the bottleneck is
-**elicitation, not capability** — 2 of 2 models measured. Both
-flat-vs-planned comparisons in FITT's history were therefore
-flat-vs-flat.
+**The conclusion first drawn from that is withdrawn.** I read it as
+falsifying Phase 12 task 23's model-weakness explanation and proving the
+bottleneck is *elicitation*. The task doesn't support that: it enumerated
+its three steps in order and exactly one todo qualified, so a plan would
+have restated the prompt with nothing to track. Declining was plausibly
+correct judgement, and the assertion calling it a failure was punishing
+good behaviour — the third assert this month to do that.
 
-- [ ] 75. **Make models elect to plan.** The planner prompt is the
-  bottleneck, now on evidence rather than inference. In cost order:
-  strengthen the plan-step prompt (per-alias tuning, Phase 12 Story 2.4);
-  bind `planner_alias` to a model that does plan; or implement the
-  deferred `forced` planning mode (Phase 12 design D3) as the structural
-  fallback. `planner_elects_a_plan` is now the measurement for all three —
-  it fails today, so any of them can be A/B'd against it.
+What stands: no demonstrated benefit from planned mode, both historical
+comparisons were effectively flat-vs-flat, and gemma4 sequenced an easy
+multi-step task flat. What's withdrawn: any claim about *why* models
+decline. Two explanations remain live (the prompt doesn't elicit it; the
+tasks didn't need it) and task 77 is what separates them.
+
+- [x] 77. **Replace the task with one that warrants a plan, and make
+  no-plan `inconclusive`.** `multi_step_chain` retired; `deadline_sweep`
+  replaces it — five todos planted pre-boot, three dated, interleaved with
+  two undated, and the request states a *goal* ("I keep missing deadlines
+  … make sure I get reminded about every one of them in time") with no
+  steps and no count. The model must derive both, and completeness across
+  three items is a live risk. A test asserts the request stays goal-shaped
+  (no "first"/"then", no leaked count) since the failure mode is the
+  wording drifting procedural. No plan now returns `inconclusive` rather
+  than `FAIL`: a model that succeeds without one hasn't failed, and such a
+  run establishes only that it can't measure planning. Retiring rather
+  than keeping the old scenario was forced — both plant `todos.md` into
+  one shared pre-boot run home, so the last silently wins; a test now
+  asserts a single `todos.md` fixture across the seed set.
+  DONE 2026-08-14.
+- [ ] 75. **Separate the two explanations for non-election.** Re-run the
+  pair on `deadline_sweep`. If a capable model still declines on a task
+  that genuinely rewards planning, elicitation is implicated and the
+  levers are: strengthen the plan-step prompt (Phase 12 Story 2.4), bind
+  `planner_alias` to a model that does plan, or implement the deferred
+  `forced` mode (Phase 12 design D3). If it elects, the earlier
+  non-election was task-appropriate and there was never a prompt problem.
+  Either way `planner_elects_a_plan` is the measurement.
 - [ ] 76. **Multi-sample before citing any flat-vs-planned delta.** Both
   columns are `samples=1`. Two identical runs 12 minutes apart also
   disagreed on two *judge* verdicts (`reminder`, `asks_before_acting`), so

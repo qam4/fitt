@@ -9,9 +9,9 @@ from gateway.e2e_scenarios import (
     asks_before_acting_scenario,
     chitchat_scenario,
     cron_fires_scenario,
+    deadline_sweep_scenario,
     memory_recall_cross_session_scenario,
     memory_recall_scenario,
-    multi_step_chain_scenario,
     news_scenario,
     notify_scenario,
     planner_elects_a_plan_scenario,
@@ -311,7 +311,7 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
         "routing_timed",
         "routing_untimed",
         "routing_push_now",
-        "multi_step_chain",
+        "deadline_sweep",
         "planner_elects_a_plan",
     }
     for s in scens:
@@ -770,95 +770,91 @@ def test_right_tool_plus_extra_noise_still_passes() -> None:
 # sequencing. These two are the pair — outcome, and mechanism.
 
 
-def test_all_three_steps_passes() -> None:
-    scen = multi_step_chain_scenario()
+def _sweep_crons(*keywords: str) -> dict:
+    return {
+        "cron_jobs": [{"message": f"reminder: {k}", "at_ts": i} for i, k in enumerate(keywords)]
+    }
 
-    res = scen.outcome_assert(
-        _traj(
-            snapshot={
-                "cron_jobs": [{"message": "renew the passport", "at_ts": 1}],
-                "agent_messages": [{"title": "", "body": "Scheduled: passport renewal"}],
-            }
-        )
-    )
+
+def test_catching_all_three_deadlines_passes() -> None:
+    scen = deadline_sweep_scenario()
+
+    res = scen.outcome_assert(_traj(snapshot=_sweep_crons("insurance", "passport", "dentist")))
 
     assert res.passed
 
 
-def test_stopping_after_the_reminder_names_the_step_it_reached() -> None:
-    """Two of three steps is the interesting partial failure — it's what
-    an unsequenced run looks like."""
-    scen = multi_step_chain_scenario()
+def test_a_partial_sweep_names_what_it_missed() -> None:
+    """Two of three is the failure planning is supposed to prevent, so the
+    reason has to make it legible rather than just saying 'fail'."""
+    scen = deadline_sweep_scenario()
+
+    res = scen.outcome_assert(_traj(snapshot=_sweep_crons("insurance", "passport")))
+
+    assert not res.passed
+    assert "2 of 3" in res.reason
+    assert "missed dentist" in res.reason
+
+
+def test_doing_nothing_reports_none_rather_than_an_empty_list() -> None:
+    scen = deadline_sweep_scenario()
+
+    res = scen.outcome_assert(_traj(snapshot={}))
+
+    assert not res.passed
+    assert "0 of 3" in res.reason and "none" in res.reason
+
+
+def test_sweeping_the_undated_items_too_is_a_distinct_failure() -> None:
+    """Selection has to be by content. Reminding about everything is the
+    lazy way to score 3/3, and it's wrong."""
+    scen = deadline_sweep_scenario()
 
     res = scen.outcome_assert(
-        _traj(snapshot={"cron_jobs": [{"message": "renew the passport", "at_ts": 1}]})
+        _traj(snapshot=_sweep_crons("insurance", "passport", "dentist", "mattress"))
     )
 
     assert not res.passed
-    assert "step 2 of 3" in res.reason
+    assert "swept the whole list" in res.reason
 
 
-def test_scheduling_the_undated_item_is_a_distinct_failure() -> None:
-    """The discriminating half: picking the right item is only possible by
-    having read the list, so acting on the wrong one is evidence the read
-    never happened."""
-    scen = multi_step_chain_scenario()
+def test_the_sweep_interleaves_dated_and_undated_items() -> None:
+    """A model that reminds about the first N items it sees must fail, so
+    the qualifying items can't be contiguous in the fixture."""
+    scen = deadline_sweep_scenario()
 
-    res = scen.outcome_assert(
-        _traj(snapshot={"cron_jobs": [{"message": "look into a new mattress", "at_ts": 1}]})
-    )
-
-    assert not res.passed
-    assert "without reading the list" in res.reason
-
-
-def test_scheduling_both_items_fails() -> None:
-    """Belt-and-braces is wrong here — the request said only dated ones.
-    Contrast the routing scenarios, where extra noise is tolerated."""
-    scen = multi_step_chain_scenario()
-
-    res = scen.outcome_assert(
-        _traj(
-            snapshot={
-                "cron_jobs": [
-                    {"message": "renew the passport", "at_ts": 1},
-                    {"message": "look into a new mattress", "at_ts": 2},
-                ],
-                "agent_messages": [{"title": "", "body": "passport + mattress"}],
-            }
-        )
-    )
-
-    assert not res.passed
-    assert "undated" in res.reason
-
-
-def test_the_chain_plants_its_todos_pre_boot() -> None:
-    """The first step must be a read of state the model didn't author, or
-    it isn't a dependency chain."""
-    scen = multi_step_chain_scenario()
-
-    assert scen.fixture_files
     rel, content = scen.fixture_files[0]
+    lines = [ln for ln in content.splitlines() if ln.startswith("- [ ]")]
+
     assert rel == "todos.md"
-    assert "passport" in content and "mattress" in content
+    assert len(lines) == 5
+    assert "mattress" in lines[0], "an undated item must come first"
+    assert "garage" in lines[-1], "and another must come last"
 
 
-def test_the_chain_is_immune_to_other_scenarios_crons() -> None:
+def test_the_request_states_a_goal_not_a_procedure() -> None:
+    """The whole reason this scenario replaced multi_step_chain: if the
+    prompt enumerates the steps, a plan just restates it and declining to
+    plan is reasonable."""
+    text = str(deadline_sweep_scenario().turns[0]["content"]).lower()
+
+    assert "todo list" in text
+    for procedural in ("first", "then", "set a reminder for", "text me"):
+        assert procedural not in text, f"the request went back to enumerating steps: {procedural!r}"
+    # And it must not leak the count the model is supposed to derive.
+    assert "three" not in text and "3" not in text
+
+
+def test_the_sweep_is_immune_to_other_scenarios_crons() -> None:
     """Keyword-filtered, per the cross-talk discipline: other scenarios
     leave crons for 'doctor' and 'laundry' in the shared run home."""
-    scen = multi_step_chain_scenario()
+    scen = deadline_sweep_scenario()
 
     res = scen.outcome_assert(
         _traj(
-            snapshot={
-                "cron_jobs": [
-                    {"message": "call the doctor", "at_ts": 1},
-                    {"message": "move the laundry", "at_ts": 2},
-                    {"message": "renew the passport", "at_ts": 3},
-                ],
-                "agent_messages": [{"title": "", "body": "passport"}],
-            }
+            snapshot=_sweep_crons(
+                "call the doctor", "move the laundry", "insurance", "passport", "dentist"
+            )
         )
     )
 
@@ -884,14 +880,17 @@ def test_a_worked_plan_passes() -> None:
     assert "completed 2" in res.reason
 
 
-def test_electing_not_to_plan_says_the_turn_ran_flat() -> None:
-    """The confound that invalidated the Phase 12 comparison: hermes3
-    elected to plan 0% of the time, so 'planned mode' was flat vs flat."""
+def test_electing_not_to_plan_is_inconclusive_not_a_failure() -> None:
+    """Corrected 2026-08-14. Calling it a failure was wrong twice over: a
+    model that gets the right answer without a plan hasn't failed, and what
+    the run establishes is that it can't tell you anything about planning.
+    It's also the confound that voided both flat-vs-planned comparisons, so
+    it must be excluded from the rates rather than counted as a defect."""
     scen = planner_elects_a_plan_scenario()
 
     res = scen.outcome_assert(_traj(snapshot={"plan_items": []}))
 
-    assert not res.passed
+    assert res.inconclusive
     assert "executed flat" in res.reason
 
 
@@ -900,8 +899,28 @@ def test_a_one_step_plan_is_not_sequencing() -> None:
 
     res = scen.outcome_assert(_traj(snapshot={"plan_items": [{"text": "do it"}]}))
 
-    assert not res.passed
+    assert res.inconclusive
     assert "one-step" in res.reason
+
+
+def test_a_plan_that_was_not_worked_is_a_real_failure_not_inconclusive() -> None:
+    """The line between the two: declining to plan says nothing about the
+    model, but electing a plan and abandoning it is a claim about it."""
+    scen = planner_elects_a_plan_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "plan_items": [
+                    {"text": "a", "status": "pending"},
+                    {"text": "b", "status": "pending"},
+                ]
+            }
+        )
+    )
+
+    assert not res.passed
+    assert not res.inconclusive
 
 
 def test_a_plan_with_no_completed_step_fails() -> None:
@@ -936,4 +955,17 @@ def test_the_planner_scenario_is_gated_on_the_planning_feature() -> None:
 def test_both_sequencing_scenarios_drive_the_same_request() -> None:
     """Outcome and mechanism must be measured on one task, or the
     flat-vs-planned comparison compares two different things."""
-    assert planner_elects_a_plan_scenario().turns == multi_step_chain_scenario().turns
+    assert planner_elects_a_plan_scenario().turns == deadline_sweep_scenario().turns
+
+
+def test_only_one_todos_fixture_exists_across_the_seed_set() -> None:
+    """Fixtures are written into one shared run home before boot, so two
+    scenarios planting the same path means the last one silently wins. That
+    collision is what retired multi_step_chain rather than being worked
+    around."""
+    planters = [s.name for s in seed_scenarios() for rel, _ in s.fixture_files if rel == "todos.md"]
+    contents = {
+        content for s in seed_scenarios() for rel, content in s.fixture_files if rel == "todos.md"
+    }
+
+    assert len(contents) == 1, f"conflicting todos.md fixtures planted by {planters}"
