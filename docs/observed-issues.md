@@ -83,6 +83,46 @@ to plan. Two live explanations remain — the prompt doesn't elicit it, or
 the tasks so far genuinely didn't need it — and nothing yet separates
 them.
 
+### Settled: gemma4 declines to plan because it doesn't need to
+
+Third run of the pair, with `deadline_sweep` properly specified:
+
+| loop | objective | judge | planner_elects_a_plan |
+|---|---|---|---|
+| flat | **15/15** | 15/15 | n/a (feature off) |
+| planned | **15/15** | 15/15 | **inconclusive** — elected not to plan |
+
+gemma4 passed `deadline_sweep` **on the flat loop**: five todos, selection
+and count derived from the data, three crons created, undated items left
+alone. And it declined to plan in planned mode — a third non-election, now
+on a task that was purpose-built to reward planning.
+
+**The reframe that follows, and it's the useful part.** For a capable
+model, a planning-conducive task is *by definition one the flat loop
+fails*. I designed for "rewards sequencing" when the operational test is
+"flat can't do it" — and gemma4's flat loop handled derived selection,
+derived count, and three side effects without breaking a sweat. There was
+nothing for a plan to fix, so declining was correct. Three non-elections,
+all on tasks the model could complete flat, is consistent with good
+judgement rather than a broken planner prompt.
+
+That closes the question this scenario was built for, in the negative and
+usefully: **on gemma4, orchestration has no demonstrated use case.** Not
+"planning is broken" — there is simply no task in the suite that the flat
+loop fails, and until one exists, enabling orchestration buys a planner
+pass per turn for nothing. Leaving it off (the default) is the right
+setting for this binding.
+
+Two ways forward, neither urgent. Find a task gemma4's flat loop actually
+fails — probably longer horizon, more items, or a genuine mid-task
+branch — which is the only honest way to measure planning's value. Or bind
+a weaker model, where the null result may not hold: hermes3 scores 7/14
+flat and is the population planning might actually help.
+
+`planner_elects_a_plan` is doing its job: it reports **inconclusive**, is
+excluded from both rates, and shows `?` in the standing matrix — recording
+the fact without distorting the model's score.
+
 ### And the replacement failed the same way — fourth instance
 
 `deadline_sweep` (below) scored **0 of 3 on both loop modes**. Not a

@@ -412,11 +412,21 @@ assertion always reads "no plan".
   session, so the previous default of `"main"` would have made every plan
   look un-elected. DONE 2026-08-14.
 
-### First result (2026-08-14, gemma4:12b-it-qat, judge pinned)
+### Result (2026-08-14, gemma4:12b-it-qat, judge pinned)
+
+Final, after two scenario-design fixes (tasks 77, 78):
+
+| loop | objective | judge | planner_elects_a_plan |
+|---|---|---|---|
+| flat | **15/15** | 15/15 | n/a (feature off) |
+| planned | **15/15** | 15/15 | inconclusive — elected not to plan |
+
+The first attempt read differently and is kept below because the two
+withdrawals are the useful part of the record:
 
 | loop | objective | judge |
 |---|---|---|
-| flat | **15/15** | 13/15 |
+| flat | 15/15 | 13/15 |
 | planned | 15/16 | 15/16 |
 
 The one planned-mode failure was `planner_elects_a_plan`: **gemma4 elected
@@ -465,14 +475,31 @@ tasks didn't need it) and task 77 is what separates them.
   **General constraint recorded:** a scenario asserting a multi-item side
   effect must supply every parameter the action needs and pre-authorise it,
   because the harness has no human to confirm with. DONE 2026-08-14.
-- [ ] 75. **Separate the two explanations for non-election.** Re-run the
-  pair on `deadline_sweep`. If a capable model still declines on a task
-  that genuinely rewards planning, elicitation is implicated and the
-  levers are: strengthen the plan-step prompt (Phase 12 Story 2.4), bind
-  `planner_alias` to a model that does plan, or implement the deferred
-  `forced` mode (Phase 12 design D3). If it elects, the earlier
-  non-election was task-appropriate and there was never a prompt problem.
-  Either way `planner_elects_a_plan` is the measurement.
+- [x] 75. **Separate the two explanations for non-election.** ANSWERED
+  2026-08-14, and the answer reframes the question.
+
+  With `deadline_sweep` properly specified: **flat 15/15, planned 15/15**,
+  judge 15/15 both. gemma4 passed the sweep *on the flat loop* — five
+  todos, selection and count derived from the data, three crons created,
+  undated items untouched — and still elected not to plan.
+
+  So: not an elicitation problem. For a capable model a
+  planning-conducive task is *by definition one the flat loop fails*, and
+  this suite has none. I designed for "rewards sequencing" when the
+  operational test is "flat can't do it". Three non-elections, all on
+  tasks the model could complete flat, is good judgement.
+
+  **Conclusion: on gemma4, orchestration has no demonstrated use case.**
+  Leaving it off (the default) is correct for this binding. That is a
+  real answer, not a gap.
+- [ ] 79. **If planning is revisited, do it on a weaker model or a harder
+  task — not on gemma4.** The null result above is specific to a model
+  that passes everything flat. hermes3 scores 7/14 flat and is the
+  population planning might actually help; a task gemma4's flat loop
+  genuinely fails (longer horizon, more items, a real mid-task branch)
+  would be the other way in. Until one of those exists there is nothing
+  to measure, so the earlier levers (plan-prompt tuning, `planner_alias`,
+  the deferred `forced` mode) have no target and shouldn't be built.
 - [ ] 76. **Multi-sample before citing any flat-vs-planned delta.** Both
   columns are `samples=1`. Two identical runs 12 minutes apart also
   disagreed on two *judge* verdicts (`reminder`, `asks_before_acting`), so

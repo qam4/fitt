@@ -20,15 +20,15 @@ hand-editing this file.
 | routing_timed | pass | pass | pass | pass |
 | routing_untimed | pass | pass | FAIL | pass |
 | routing_push_now | pass | pass | pass | pass |
-| multi_step_chain | pass | pass | - | - |
-| planner_elects_a_plan | n/a | FAIL | - | - |
+| deadline_sweep | pass | pass | - | - |
+| planner_elects_a_plan | n/a | ? | - | - |
 
 Legend: `pass` objective check passed · `FAIL` failed · `n/a` feature not available on this deployment · `?` ran but didn't exercise what it tests · `-` not measured for this model.
 
 Runs folded in (latest per model):
 
-- `fitt-ec2-gemma4` (gemma4:12b-it-qat) — 2026-08-14T16:55:29+00:00, samples=1, loop=flat, objective 15/15, judge: claude-sonnet-5
-- `fitt-ec2-gemma4 [planned]` (gemma4:12b-it-qat) — 2026-08-14T17:07:29+00:00, samples=1, loop=planned, objective 15/16, judge: claude-sonnet-5
+- `fitt-ec2-gemma4` (gemma4:12b-it-qat) — 2026-08-14T19:46:59+00:00, samples=1, loop=flat, objective 15/15, judge: claude-sonnet-5
+- `fitt-ec2-gemma4 [planned]` (gemma4:12b-it-qat) — 2026-08-14T19:59:16+00:00, samples=1, loop=planned, objective 15/15, judge: claude-sonnet-5
 - `fitt-ec2-hermes` (hermes3:8b) — 2026-08-13T18:16:02+00:00, samples=1, loop=unrecorded, objective 7/14, judge: claude-sonnet-5
 - `fitt-ec2-qwen3` (qwen3:14b) — 2026-08-13T18:28:04+00:00, samples=1, loop=unrecorded, objective 12/14, judge: claude-sonnet-5
 

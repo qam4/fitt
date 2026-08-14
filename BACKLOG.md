@@ -29,6 +29,22 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
+- **Orchestration: leave it off on gemma4 (answered 2026-08-14).** Phase
+  12's plan->execute loop now has judged e2e coverage
+  (`fitt eval e2e --mode flat|planned`, plus `deadline_sweep` and
+  `planner_elects_a_plan`), and the answer is a clean negative: **flat
+  15/15, planned 15/15**, and gemma4 elects not to plan even on a task
+  built to reward it. It passes that task on the flat loop — five todos,
+  selection and count derived from the data, three crons — so there is
+  nothing for a plan to fix, and declining is good judgement rather than a
+  broken planner prompt (three non-elections, all on tasks the model can
+  do flat). The reframe worth keeping: for a capable model a
+  planning-conducive task is *by definition one the flat loop fails*, and
+  the suite has none. So orchestration stays off (the default) for this
+  binding, and the plan-prompt / `planner_alias` / `forced`-mode levers
+  have no target to aim at. Revisit only on a weaker model (hermes3 is
+  7/14 flat, the population planning might help) or a task gemma4's flat
+  loop genuinely fails.
 - **Per-model-family handling: keep it configuration, not code (framing,
   2026-08-10).** Today's session shows some model behaviour genuinely
   IS family-specific, so decide the shape before it leaks into `if
