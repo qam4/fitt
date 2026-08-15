@@ -416,3 +416,63 @@ def _bump_mtime(path: Path) -> None:
 
     stat = path.stat()
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+
+
+# ------------------------------------------- day/week units
+#
+# Found by a live hermes3 planned run, 2026-08-14: asked to set reminders
+# two days before each deadline it reached for `every 2d`, was refused, and
+# abandoned the task. A day is the most natural unit for a personal
+# assistant's recurring reminder, and its absence read to the model as
+# "scheduling is broken".
+
+
+def test_every_n_days_is_accepted() -> None:
+    for spec in ("every 2d", "every 2 days", "every 1 day"):
+        sched = parse_schedule_spec(spec)
+        assert sched.kind == "every"
+        assert sched.every_secs == (2 * 86400 if spec != "every 1 day" else 86400), spec
+
+
+def test_every_n_weeks_is_accepted() -> None:
+    for spec in ("every 1w", "every 1 week", "every 2 weeks", "every 3wks"):
+        sched = parse_schedule_spec(spec)
+        assert sched.kind == "every"
+        assert sched.every_secs % 604800 == 0, spec
+
+
+def test_in_n_days_resolves_to_a_one_shot() -> None:
+    sched = parse_schedule_spec("in 3 days", now=1_000_000.0)
+
+    assert sched.kind == "at"
+    assert sched.at_ts == 1_000_000.0 + 3 * 86400
+
+
+def test_hours_still_win_over_the_new_units() -> None:
+    """The alternation is order-sensitive: 'hour' must not lose to 'h', and
+    adding 'w'/'d' must not shadow a longer unit."""
+    assert parse_schedule_spec("every 1 hour").every_secs == 3600
+    assert parse_schedule_spec("every 1h").every_secs == 3600
+    assert parse_schedule_spec("every 30 minutes").every_secs == 1800
+    assert parse_schedule_spec("every 45s").every_secs == 45
+    assert parse_schedule_spec("every 60").every_secs == 60
+
+
+def test_a_calendar_unit_points_at_cron_instead_of_listing_forms() -> None:
+    """'every 1 month' isn't a typo — it's a real intent an interval can't
+    express, since a month isn't a fixed number of seconds. Saying so beats
+    re-listing the forms that just failed."""
+    with pytest.raises(InvalidSchedule) as e:
+        parse_schedule_spec("every 1 month")
+
+    msg = str(e.value)
+    assert "calendar recurrence" in msg
+    assert "cron 0 9 1 * *" in msg
+
+
+def test_months_are_not_silently_treated_as_30_days() -> None:
+    """A fixed-seconds month would drift by up to three days and diverge
+    from what the user meant, which is worse than refusing."""
+    for spec in ("every 1 month", "every 2 months", "every 1 year"):
+        with pytest.raises(InvalidSchedule):
+            parse_schedule_spec(spec)

@@ -84,9 +84,20 @@ async def test_todowrite_rejects_empty_text() -> None:
     assert "text" in result.payload
 
 
-async def test_todowrite_rejects_bad_status() -> None:
+async def test_todowrite_keeps_the_plan_when_the_status_is_junk() -> None:
+    """Deliberate contract change, 2026-08-14. This test previously asserted
+    an unknown status was an ERROR.
+
+    Rejecting the whole write threw away a usable plan over a metadata
+    field: the step text is the payload, and `todowrite` is the planner's
+    only output channel, so a rejected call can cost the entire turn (a live
+    hermes3 run produced an empty reply that way). An unrecognised status now
+    normalises to `pending`. Recorded here rather than silently deleted,
+    because a test flipping direction should be visible in review."""
     result = await _tool().callable({"todos": [{"text": "x", "status": "wat"}]}, _ctx(PlanStore()))
-    assert result.is_error
+
+    assert not result.is_error
+    assert '"status": "pending"' in result.payload
 
 
 async def test_todowrite_fails_readably_without_store() -> None:
@@ -107,3 +118,76 @@ def test_todowrite_schema_requires_text_per_item(missing: str) -> None:
     item_schema = schema["properties"]["todos"]["items"]
     assert missing in item_schema["required"]
     assert item_schema["additionalProperties"] is False
+
+
+# ------------------------------------------- fumble surface
+#
+# Measured 2026-08-14 on a live hermes3:8b planned run: it elected to plan
+# in 9 of 15 scenarios and sent `{"todos": ["step one", "step two"]}` every
+# time, getting back "todos[0] must be an object with a 'text' field". On
+# one scenario the failed plan call was the turn's ONLY tool call and the
+# user got an empty reply. todowrite is the planner's sole output channel,
+# so a fumble here costs the whole turn — the exact "schema fumble-trap"
+# class the Phase 12 requirements cite as the phase's reason for existing.
+
+
+async def test_a_plain_list_of_strings_is_accepted() -> None:
+    """The shape models actually emit for a task list."""
+    store = PlanStore()
+
+    res = await _tool().callable({"todos": ["fetch the news", "summarise it"]}, _ctx(store))
+
+    assert not res.is_error
+    plan = store.get("main")
+    assert plan is not None
+    assert [i.text for i in plan.items] == ["fetch the news", "summarise it"]
+    assert [i.status for i in plan.items] == ["pending", "pending"]
+
+
+async def test_strings_and_objects_can_be_mixed() -> None:
+    store = PlanStore()
+
+    res = await _tool().callable(
+        {"todos": ["read the list", {"text": "act on it", "status": "done"}]}, _ctx(store)
+    )
+
+    assert not res.is_error
+    plan = store.get("main")
+    assert plan is not None
+    assert [(i.text, i.status) for i in plan.items] == [
+        ("read the list", "pending"),
+        ("act on it", "done"),
+    ]
+
+
+async def test_a_near_miss_status_is_normalised_not_rejected() -> None:
+    """The status is metadata; the step text is the payload. Failing a whole
+    plan because a model wrote "completed" instead of "done" trades a usable
+    plan for a pedantic error."""
+    store = PlanStore()
+
+    res = await _tool().callable(
+        {
+            "todos": [
+                {"text": "a", "status": "completed"},
+                {"text": "b", "status": "in-progress"},
+                {"text": "c", "status": "not_started"},
+                {"text": "d", "status": "banana"},
+            ]
+        },
+        _ctx(store),
+    )
+
+    assert not res.is_error
+    plan = store.get("main")
+    assert plan is not None
+    assert [i.status for i in plan.items] == ["done", "in_progress", "pending", "pending"]
+
+
+async def test_a_non_string_non_object_step_still_errors_readably() -> None:
+    """Coercion has a limit, and the message must show the accepted shape."""
+    res = await _tool().callable({"todos": [42]}, _ctx(PlanStore()))
+
+    assert res.is_error
+    assert "plain string" in res.payload
+    assert '"text"' in res.payload

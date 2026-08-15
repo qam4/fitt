@@ -133,13 +133,52 @@ narration under large prompts — not a capability ceiling."
 Planning also made `skills` *worse*: flat failed it by never calling
 `read_file`; planned failed it with no reply at all.
 
-**Not yet known: the exact error string.** `_tool_todowrite` rejects on
-four paths — `todos` not a list, an item that isn't an object, missing or
-empty `text`, or a `status` outside `PLAN_STATUSES`. The likely fumble is
-a plain array of strings (`["step one", "step two"]`) rather than objects,
-which is how models usually emit a todo list, or an invented status value.
-**Do not fix on that guess** — the next run will show it, because the
-report now prints per-call args and results.
+### Both causes, captured and fixed
+
+Re-ran with per-call args in the report. **Two** fumble-traps, not one.
+
+**1. `todowrite` rejected a plain array of strings.** Every failing call
+looked like this, verbatim:
+
+```
+args={"todos": ["Try to remember the combination",
+                "If you can't recall it, look for a written record"]}
+-> todos[0] must be an object with a 'text' field
+```
+
+A list of strings is how a model naturally writes a task list, and FITT
+demanded `[{"text": ...}]`. Now coerced. An unrecognised `status` is also
+normalised to `pending` instead of failing the write — "completed" vs
+"done" must not cost a turn. That last one flipped an existing test from
+"rejects bad status" to "keeps the plan"; the change is deliberate and
+annotated in the test rather than quietly deleted.
+
+**2. `cron_add` had no day or week units** — and this is what actually
+killed `deadline_sweep`, not planning. Asked for reminders two days before
+each deadline, hermes3 reached for `every 2d` and got
+`could not parse schedule spec`. `_UNIT_SECS` stopped at hours. A day is
+the most natural unit for a personal assistant's recurring reminder, and
+its absence read to the model as "scheduling is broken" — it gave up.
+Days and weeks are now accepted (`2d`, `2 days`, `1w`, `3wks`).
+
+Months and years stay refused on purpose: a month isn't a fixed number of
+seconds, so an interval would drift and silently diverge from intent. But
+`every 1 month` isn't a typo either — it's a real intent this grammar
+can't express — so the error now names the alternative rather than
+re-listing the forms that just failed:
+
+> `'every 1 month'` is a calendar recurrence, which 'every' can't express…
+> Use a cron expression instead: `cron 0 9 1 * *` is 9am on the 1st of
+> every month.
+
+Verified by replaying hermes3's exact arguments: the string list now
+writes a two-step plan, `every 2d` resolves to 172800s, and `every 1 month`
+returns the pointer to `cron`.
+
+**So `deadline_sweep`'s failure was never about planning.** Both models
+failed it for harness reasons — gemma4 because the request was
+underspecified, hermes3 because `cron_add` couldn't express the schedule it
+wanted. Whether planning helps that task is *still* unmeasured.
 
 That omission is itself the lesson: the judge has had args and results
 since Tier 1 while the human-readable report showed only `name:err`, so

@@ -509,19 +509,39 @@ tasks didn't need it) and task 77 is what separates them.
   plan in 9 of 15 scenarios**, so neither "zero elections" nor
   "elicitation is the bottleneck" holds. The problem is after election —
   see task 80.
-- [ ] 80. **`todowrite` errors on 6 of hermes3's 9 plan elections.** The
-  judge called it "a malformed todowrite"; on `skills` it was the only
-  tool call and the turn returned an **empty reply**, so a fumbled
-  plan-tool call can destroy a turn. This is the exact failure class the
-  Phase 12 requirements cite as the phase's reason for existing ("schema
-  fumble-traps… not a capability ceiling"). `_tool_todowrite` rejects on
-  four paths: `todos` not a list, a non-object item, missing/empty `text`,
-  or a status outside `PLAN_STATUSES`. The likely fumble is a plain array
-  of strings, or an invented status — **but do not fix on that guess.**
-  The report now prints per-call args and results, so the next hermes3
-  planned run names it. Then apply the `edit_file` treatment: coerce
-  strings to `{"text": ...}`, normalise unknown statuses to `pending`, and
-  make the error state the expected shape.
+- [x] 80. **Two fumble-traps found and fixed.** DONE 2026-08-14 after
+  re-running with per-call args visible.
+
+  **`todowrite` rejected a plain array of strings** — every failing call
+  was `{"todos": ["step one", "step two"]}` answered with
+  `todos[0] must be an object with a 'text' field`. That's how a model
+  naturally writes a task list. Now coerced; an unrecognised `status`
+  normalises to `pending` rather than failing the write. On `skills` the
+  rejected call had been the turn's only tool call and the user got an
+  empty reply — `todowrite` is the planner's sole output channel, so a
+  fumble there costs everything. Exactly the class the Phase 12
+  requirements cite as the phase's reason for existing.
+
+  **`cron_add` had no day or week units** — and this, not planning, is
+  what killed `deadline_sweep`. hermes3 asked for `every 2d` to get a
+  reminder two days early and was refused; `_UNIT_SECS` stopped at hours.
+  Days and weeks accepted now. Months/years still refused (a month isn't
+  fixed seconds, so an interval would drift), but the error names the
+  `cron` alternative instead of re-listing the forms that just failed.
+
+  Verified by replaying hermes3's exact arguments. Note the test flip:
+  "rejects bad status" became "keeps the plan", annotated in place rather
+  than deleted.
+
+  **Consequence for task 79:** `deadline_sweep` failed on *both* models
+  for harness reasons — gemma4 on an underspecified request, hermes3 on an
+  inexpressible schedule. Whether planning helps a multi-step task is
+  still unmeasured; task 82 is the re-run.
+- [ ] 82. **Re-measure hermes3 flat vs planned with both traps fixed.**
+  Every prior comparison ran with `todowrite` failing 6 of 9 elections and
+  `cron_add` unable to express the schedule the task needed, so no
+  previous number says anything about planning. Multi-sample this time
+  (task 76): hermes3's noise covers a two-scenario swing at n=1.
 - [x] 81. **Print tool args and results in the e2e report.** The judge has
   had them since Tier 1 while the markdown showed only `name:err`, so
   diagnosing a failing tool call meant re-running the whole set — which is

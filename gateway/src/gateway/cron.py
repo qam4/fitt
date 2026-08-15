@@ -128,15 +128,25 @@ class CronSchedule:
 # --------------------------------------------------------------- schedule parser
 
 
+# Order alternatives longest-first so ``hour`` wins over ``h`` inside
+# "every 1 hour". Without this, the regex greedily matches ``h`` and then
+# ``our`` is left dangling before ``$``.
+#
+# Days and weeks were missing until 2026-08-14, when a live eval showed
+# hermes3 asking for ``every 2d`` to get a reminder two days before a
+# deadline and being refused. A day is the most natural unit for a
+# personal assistant's recurring reminder, and its absence read to the
+# model as "scheduling is broken" — it gave up on the task.
+_UNIT_ALTERNATION = (
+    r"seconds|minutes|hours|weeks|hour|week|days|day|sec|secs|min|mins|hr|hrs|wk|wks|s|m|h|d|w"
+)
+
 _SPEC_EVERY = re.compile(
-    # Order alternatives longest-first so ``hour`` wins over ``h``
-    # inside "every 1 hour". Without this, the regex greedily
-    # matches ``h`` and then ``our`` is left dangling before ``$``.
-    r"""^\s*every\s+(?P<n>\d+)\s*(?P<unit>seconds|minutes|hours|hour|sec|secs|min|mins|hr|hrs|s|m|h)?\s*$""",
+    rf"""^\s*every\s+(?P<n>\d+)\s*(?P<unit>{_UNIT_ALTERNATION})?\s*$""",
     re.IGNORECASE,
 )
 _SPEC_IN = re.compile(
-    r"""^\s*in\s+(?P<n>\d+)\s*(?P<unit>seconds|minutes|hours|hour|sec|secs|min|mins|hr|hrs|s|m|h)\s*$""",
+    rf"""^\s*in\s+(?P<n>\d+)\s*(?P<unit>{_UNIT_ALTERNATION})\s*$""",
     re.IGNORECASE,
 )
 _SPEC_AT = re.compile(r"""^\s*at\s+(?P<ts>\S.*?)\s*$""", re.IGNORECASE)
@@ -156,7 +166,25 @@ _UNIT_SECS = {
     "hrs": 3600,
     "hour": 3600,
     "hours": 3600,
+    "d": 86400,
+    "day": 86400,
+    "days": 86400,
+    "w": 604800,
+    "wk": 604800,
+    "wks": 604800,
+    "week": 604800,
+    "weeks": 604800,
 }
+"""Fixed-length units only.
+
+Months and years are deliberately absent: they aren't a fixed number of
+seconds, so ``every 1 month`` as an interval would drift by up to three
+days a month and silently diverge from what the user meant. Calendar
+recurrence is what ``cron`` expressions are for, and the error below says
+so rather than leaving the model to guess."""
+
+_CALENDAR_UNITS = ("month", "months", "year", "years", "quarter", "quarters")
+"""Units a model reaches for that only a cron expression can express."""
 
 
 def parse_schedule_spec(
@@ -224,10 +252,23 @@ def parse_schedule_spec(
             raise InvalidSchedule(f"invalid cron expression: {expr!r}")
         return CronSchedule(kind="cron", cron_expr=expr, timezone=tz)
 
+    # A calendar unit isn't a typo — it's a real intent this grammar
+    # can't express as an interval. Name the alternative instead of
+    # listing the forms that just failed.
+    lowered = spec.lower()
+    if any(u in lowered for u in _CALENDAR_UNITS):
+        raise InvalidSchedule(
+            f"{spec!r} is a calendar recurrence, which 'every' can't express "
+            "(a month isn't a fixed number of seconds). Use a cron "
+            "expression instead: 'cron 0 9 1 * *' is 9am on the 1st of "
+            "every month, 'cron 0 9 1 1 *' is 9am every 1 January."
+        )
+
     raise InvalidSchedule(
         f"could not parse schedule spec: {spec!r}. "
-        "Expected one of: 'every N', 'every Nm', 'in N minutes', "
-        "'at <iso|epoch>', 'cron <5-field expr>'."
+        "Expected one of: 'every N' (seconds), 'every 5m', 'every 2h', "
+        "'every 3d', 'every 1w', 'in N minutes', 'at <iso|epoch>', "
+        "'cron <5-field expr>'."
     )
 
 
