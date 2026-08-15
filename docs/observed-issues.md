@@ -175,10 +175,59 @@ Verified by replaying hermes3's exact arguments: the string list now
 writes a two-step plan, `every 2d` resolves to 172800s, and `every 1 month`
 returns the pointer to `cron`.
 
-**So `deadline_sweep`'s failure was never about planning.** Both models
-failed it for harness reasons — gemma4 because the request was
-underspecified, hermes3 because `cron_add` couldn't express the schedule it
-wanted. Whether planning helps that task is *still* unmeasured.
+### Re-measured with both traps fixed: planning still doesn't help
+
+| loop | objective | judge | `todowrite` |
+|---|---|---|---|
+| flat | **8/15** | 7/15 | — |
+| planned | 7/15 | 6/15 | **13 ok, 0 err** |
+
+The fumble fixes were worth having: hermes3's flat score went **6/15 →
+8/15** purely from `cron_add` accepting day units, and every plan election
+now succeeds where 6 of 9 used to fail. But planning itself still shows
+nothing — the single scenario that differs is `memory_recall`, single-step,
+i.e. noise at n=1 on a model with known 3/7-vs-4/7 variance.
+
+hermes3 now elects a plan in **13 of 15** scenarios. So election was never
+the problem, and neither was the plan tool. What the plans look like is:
+
+```
+todowrite args={"todos": [
+  {"id": "2022-03-15T12:00:00Z", "text": "Set a reminder two days before
+   the deadline for todos marked 'upcoming'"},
+  {"id": "2022-03-17T12:00:00Z", "text": "Set a reminder two days before
+   the deadline for todos marked 'upcoming'"}]}
+cron_add args={"schedule_spec": "every 2d",
+               "text": "Check upcoming todos for ones due tomorrow"}
+```
+
+**This is a genuine capability failure, no harness defect involved.** On
+`deadline_sweep` hermes3 never called `todo_list` — it never read the data
+— wrote two near-identical vague steps with nonsense ids, substituted *one
+generic recurring cron* for three specific reminders, and then told the
+user "it will automatically create reminders two days before each
+deadline": a fabricated capability. The judge named it precisely.
+
+**The finding: hermes3's plans restate the goal instead of decomposing
+it.** "Set a reminder two days before the deadline for todos marked
+'upcoming'" is the request paraphrased, not a step an executor can run —
+and the plan tool's own schema asks for steps that are "concrete,
+tool-oriented". So the plan cannot guide execution, which is why having
+one changes nothing.
+
+That is evidence *against* the phase's founding hypothesis for this model
+— "a competent small model is under-harnessed rather than incapable". The
+harness traps are now gone and hermes3 still can't do the task. Two
+qualifications: n=1 on one task, and Story 2.4 names the untried lever —
+a stronger per-alias planner prompt, since the failure is specifically
+plan *quality*. That lever now has a target and a measurement
+(`planner_elects_a_plan` rejected this run's output as "a one-step 'plan'
+isn't sequencing").
+
+### Earlier, before the fixes: both models failed for harness reasons
+
+gemma4 because the request was underspecified, hermes3 because `cron_add`
+couldn't express the schedule it wanted.
 
 That omission is itself the lesson: the judge has had args and results
 since Tier 1 while the human-readable report showed only `name:err`, so

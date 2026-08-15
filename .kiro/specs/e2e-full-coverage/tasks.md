@@ -537,11 +537,37 @@ tasks didn't need it) and task 77 is what separates them.
   for harness reasons — gemma4 on an underspecified request, hermes3 on an
   inexpressible schedule. Whether planning helps a multi-step task is
   still unmeasured; task 82 is the re-run.
-- [ ] 82. **Re-measure hermes3 flat vs planned with both traps fixed.**
-  Every prior comparison ran with `todowrite` failing 6 of 9 elections and
-  `cron_add` unable to express the schedule the task needed, so no
-  previous number says anything about planning. Multi-sample this time
-  (task 76): hermes3's noise covers a two-scenario swing at n=1.
+- [x] 82. **Re-measured hermes3 with both traps fixed.** DONE 2026-08-14:
+  flat **8/15**, planned 7/15, `todowrite` **13 ok / 0 err** (was 6 of 9
+  failing). The fumble fixes were real value — flat rose 6/15 → 8/15 from
+  the `cron_add` day units alone — but planning still shows no benefit; the
+  one differing scenario is single-step, i.e. noise at n=1.
+
+  hermes3 elects a plan in **13 of 15** scenarios, so neither election nor
+  the plan tool was ever the obstacle. The obstacle is **plan quality**:
+  its steps restate the goal instead of decomposing it ("Set a reminder two
+  days before the deadline for todos marked 'upcoming'", twice, with
+  nonsense ids), so the plan can't guide execution. On `deadline_sweep` it
+  never called `todo_list`, substituted one generic `every 2d` cron for
+  three specific reminders, and told the user it would "automatically
+  create reminders two days before each deadline" — a fabricated
+  capability the judge caught. A genuine capability failure with no harness
+  defect left in the path.
+
+  That is evidence against the phase's founding hypothesis for this model
+  ("a competent small model is under-harnessed rather than incapable").
+  Qualifications: n=1, one task.
+- [ ] 83. **The one untried lever: a stronger per-alias planner prompt
+  (Phase 12 Story 2.4).** It now has a target and a measurement. The
+  failure is specifically plan quality, and `planner_elects_a_plan` already
+  rejects hermes3's output as "a one-step 'plan' isn't sequencing" — so a
+  prompt change can be A/B'd against it directly. Note what this is *not*:
+  `forced` mode is still ruled out by the requirements, and the problem was
+  never getting hermes3 to plan.
+- [ ] 84. **Multi-sample before citing any of these numbers.** Everything
+  above is `samples=1` on a model that has scored 3/7 and 4/7 on identical
+  runs (task 76). The direction of the planning result has been stable
+  across three runs, but the magnitudes are not evidence.
 - [x] 81. **Print tool args and results in the e2e report.** The judge has
   had them since Tier 1 while the markdown showed only `name:err`, so
   diagnosing a failing tool call meant re-running the whole set — which is
