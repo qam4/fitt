@@ -59,6 +59,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 _log = logging.getLogger(__name__)
@@ -76,6 +78,14 @@ _CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
 _PROBE_COMMAND = "echo probe"
 _PROBE_EXPECTED = "probe"
 _PROBE_TIMEOUT_S = 3.0
+
+_NEGATIVE_TTL_S = 60.0
+"""How long a "no shell available" verdict is trusted before re-probing.
+
+Long enough that a genuinely shell-less hub isn't re-probing on every
+tool call (each attempt costs up to ``_PROBE_TIMEOUT_S`` per candidate),
+short enough that a transient fork failure clears itself within a minute
+instead of lasting until the next gateway restart."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,22 +136,48 @@ class ShellInterpreter:
 class LocalShellProbe:
     """Detect the local POSIX shell interpreter at gateway boot.
 
-    One instance per gateway process. :meth:`detect` is
-    idempotent — repeat calls return the cached result without
-    re-spawning subprocesses. Tests pass a fake by constructing
-    a ``LocalShellProbe`` with a preset interpreter.
+    One instance per gateway process. A *successful* :meth:`detect` is
+    cached for the process lifetime — an interpreter that worked doesn't
+    stop existing. Tests pass a fake by constructing a
+    ``LocalShellProbe`` with a preset interpreter.
+
+    A *failure* is cached only briefly (:data:`_NEGATIVE_TTL_S`).
+    Caching it forever meant one flaky probe disabled ``project_shell``
+    on every local project until the gateway restarted, with no retry
+    and nothing to tell the operator why. Observed on this hub: Git Bash
+    intermittently fails to fork with cygwin ``Win32 error 299`` /
+    ``error 5``, so the probe correctly concluded "no shell" — and then
+    that verdict outlived the transient condition by hours. Caching a
+    success forever is right; caching a transient failure forever is
+    not.
     """
 
     def __init__(
         self,
         *,
         preset: ShellInterpreter | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._cached: ShellInterpreter | None = preset
+        self._failed_at: float | None = None
+        self._clock = clock or time.monotonic
 
     async def detect(self) -> ShellInterpreter:
         if self._cached is not None:
-            return self._cached
+            if self._cached.available or self._failed_at is None:
+                return self._cached
+            if self._clock() - self._failed_at < _NEGATIVE_TTL_S:
+                return self._cached
+            # The negative result has aged out; re-probe. A shell that
+            # was missing may now be installed, and — the case that
+            # forced this — a fork that failed once may now succeed.
+            _log.info(
+                "shell.reprobing_after_failure",
+                extra={"ttl_s": _NEGATIVE_TTL_S},
+            )
+            self._cached = None
+            self._failed_at = None
+
         for label, prefix in _CANDIDATES:
             if await self._works(prefix):
                 resolved = ShellInterpreter(
@@ -150,6 +186,7 @@ class LocalShellProbe:
                     available=True,
                 )
                 self._cached = resolved
+                self._failed_at = None
                 _log.info(
                     "shell.interpreter_resolved",
                     extra={"label": label, "argv_prefix": list(prefix)},
@@ -161,11 +198,14 @@ class LocalShellProbe:
                 "hint": (
                     "no POSIX shell found on the hub. project_shell "
                     "will fail on local invocations until bash or WSL "
-                    "is installed. SSH-backed projects are unaffected."
+                    "is installed. SSH-backed projects are unaffected. "
+                    f"This verdict is re-probed after {_NEGATIVE_TTL_S:.0f}s, "
+                    "so a transient fork failure recovers on its own."
                 )
             },
         )
         self._cached = ShellInterpreter.none()
+        self._failed_at = self._clock()
         return self._cached
 
     # ------------------------------------------------ internals

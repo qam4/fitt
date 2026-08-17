@@ -472,38 +472,97 @@ async def test_grep_repo_rejects_nonstring_path_filter(
 # --------------------------------------------------------------- glob_search
 
 
-async def test_glob_search_builds_expected_argv(
+async def test_glob_search_shells_out_only_for_remote_projects(
     tool_registry: ToolRegistry, project_registry: ProjectRegistry
 ) -> None:
+    """An SSH-backed project still uses `find`, unchanged."""
     backend = FakeBackend(responses=[_ok(stdout="./README.md\n./docs/quickstart.md\n")])
     tool = tool_registry.lookup("glob_search")
+
     result = await tool.callable(
-        {"project": "hub", "pattern": "*.md"},
+        {"project": "remote", "pattern": "*.md"},
         _ctx(project_registry, backend),
     )
+
     assert not result.is_error
     assert "README.md" in result.payload
-    assert backend.calls[0]["cmd"] == [
-        "find",
-        ".",
-        "-type",
-        "f",
-        "-name",
-        "*.md",
-    ]
+    assert backend.calls[0]["ssh_host"] == "laptop.tailnet"
+    assert backend.calls[0]["cmd"] == ["find", ".", "-type", "f", "-name", "*.md"]
 
 
-async def test_glob_search_no_matches_is_ok(
-    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+async def test_glob_search_never_shells_out_for_a_local_project(
+    tool_registry: ToolRegistry, tmp_path: Path
 ) -> None:
-    backend = FakeBackend(responses=[_ok(stdout="")])
+    """The Windows defect, pinned.
+
+    This used to run `find . -type f -name <pattern>` everywhere. On a
+    Windows hub `find` resolves to Windows FIND.EXE — a text-search
+    utility with unrelated syntax — so the model got "FIND: Parameter
+    format not correct" instead of matches. FITT deploys on Windows, so a
+    core read-side tool must not depend on a POSIX binary being first on
+    PATH. Found by the tool-contract layer."""
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "README.md").write_text("x", encoding="utf-8")
+    (tmp_path / "docs" / "guide.md").write_text("y", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("z", encoding="utf-8")
+    reg = ProjectRegistry(tmp_path / "projects.yaml")
+    reg.add(Project(name="local", ssh_host="", path=str(tmp_path)))
+    backend = FakeBackend()
     tool = tool_registry.lookup("glob_search")
+
+    result = await tool.callable({"project": "local", "pattern": "*.md"}, _ctx(reg, backend))
+
+    assert not result.is_error
+    assert backend.calls == [], "a local project shelled out to `find`"
+    # Same shape the SSH path returns, so the model can't tell which
+    # backend answered: ./-prefixed, forward slashes, sorted.
+    assert result.payload.splitlines() == ["./README.md", "./docs/guide.md"]
+
+
+async def test_glob_search_local_no_matches_is_ok(
+    tool_registry: ToolRegistry, tmp_path: Path
+) -> None:
+    (tmp_path / "README.md").write_text("x", encoding="utf-8")
+    reg = ProjectRegistry(tmp_path / "projects.yaml")
+    reg.add(Project(name="local", ssh_host="", path=str(tmp_path)))
+    tool = tool_registry.lookup("glob_search")
+
     result = await tool.callable(
-        {"project": "hub", "pattern": "*.nope"},
-        _ctx(project_registry, backend),
+        {"project": "local", "pattern": "*.nope"}, _ctx(reg, FakeBackend())
     )
+
     assert not result.is_error
     assert result.payload == "(no matches)"
+
+
+async def test_glob_search_local_matches_only_the_filename(
+    tool_registry: ToolRegistry, tmp_path: Path
+) -> None:
+    """`find -name` matches the basename, not the path — keep that."""
+    (tmp_path / "md").mkdir()
+    (tmp_path / "md" / "thing.txt").write_text("x", encoding="utf-8")
+    reg = ProjectRegistry(tmp_path / "projects.yaml")
+    reg.add(Project(name="local", ssh_host="", path=str(tmp_path)))
+    tool = tool_registry.lookup("glob_search")
+
+    result = await tool.callable({"project": "local", "pattern": "*.md"}, _ctx(reg, FakeBackend()))
+
+    assert result.payload == "(no matches)"
+
+
+async def test_glob_search_local_reports_a_missing_directory(
+    tool_registry: ToolRegistry, project_registry: ProjectRegistry
+) -> None:
+    """The `hub` fixture points at a path that doesn't exist — that must
+    read as a clear error, not a crash."""
+    tool = tool_registry.lookup("glob_search")
+
+    result = await tool.callable(
+        {"project": "hub", "pattern": "*.md"}, _ctx(project_registry, FakeBackend())
+    )
+
+    assert result.is_error
+    assert "not a directory" in result.payload
 
 
 async def test_glob_search_surfaces_errors(
@@ -512,7 +571,7 @@ async def test_glob_search_surfaces_errors(
     backend = FakeBackend(responses=[_err(1, "find: invalid predicate\n")])
     tool = tool_registry.lookup("glob_search")
     result = await tool.callable(
-        {"project": "hub", "pattern": "*.md"},
+        {"project": "remote", "pattern": "*.md"},
         _ctx(project_registry, backend),
     )
     assert result.is_error

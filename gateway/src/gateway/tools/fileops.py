@@ -42,7 +42,11 @@ search) is a one-line change with deliberate review.
 
 from __future__ import annotations
 
+import asyncio
 import difflib
+import fnmatch
+import os
+from pathlib import Path
 from typing import Any
 
 from ._types import ApprovalBucket, Tool, ToolContext, ToolResult
@@ -512,9 +516,18 @@ async def _tool_glob_search(args: dict[str, Any], ctx: ToolContext) -> ToolResul
     if not isinstance(pattern, str) or not pattern:
         return ToolResult.error("Missing required argument: pattern")
 
-    # `find . -name <pattern>` walks the whole tree. We don't
-    # follow symlinks (default) so a loop in the filesystem can't
-    # wedge us.
+    # A local project is walked in Python; only a remote one shells out.
+    #
+    # This used to run `find . -type f -name <pattern>` everywhere. On a
+    # Windows hub `find` resolves to Windows FIND.EXE — a text-search
+    # utility with unrelated syntax — so the model got "FIND: Parameter
+    # format not correct" instead of matches or a readable error. FITT
+    # deploys on Windows, so a core read-side tool cannot depend on a
+    # POSIX binary being first on PATH. Found by the tool-contract layer,
+    # which is the only check that calls every tool directly.
+    if project.is_local:
+        return await asyncio.to_thread(_glob_search_local, project.path, pattern)
+
     result = await backend.run_shell(
         project,
         ["find", ".", "-type", "f", "-name", pattern],
@@ -528,6 +541,43 @@ async def _tool_glob_search(args: dict[str, Any], ctx: ToolContext) -> ToolResul
     if not out:
         return ToolResult.ok("(no matches)")
     return ToolResult.ok(_truncate(out, _GLOB_CAP_BYTES, "pattern"))
+
+
+def _glob_search_local(root: str, pattern: str) -> ToolResult:
+    """``find . -type f -name <pattern>`` in Python, matching its output.
+
+    Runs in a worker thread: a deep tree is slow enough to stall the
+    event loop. Paths come back ``./``-prefixed with forward slashes so a
+    local result is indistinguishable from the SSH one — the model
+    shouldn't be able to tell which backend answered.
+
+    ``os.walk`` doesn't follow symlinked directories by default, which
+    preserves the old behaviour's loop-safety."""
+    base = Path(root)
+    if not base.is_dir():
+        return ToolResult.error(f"project path is not a directory: {root}")
+
+    matches: list[str] = []
+    total_bytes = 0
+    for dirpath, _dirnames, filenames in os.walk(base):
+        for name in filenames:
+            if not fnmatch.fnmatch(name, pattern):
+                continue
+            rel = Path(dirpath, name).relative_to(base).as_posix()
+            line = f"./{rel}"
+            matches.append(line)
+            total_bytes += len(line) + 1
+            # Stop walking once past the cap; the truncation notice will
+            # say so. A repo with a million matches must not be read
+            # entirely into memory just to throw most of it away.
+            if total_bytes > _GLOB_CAP_BYTES * 2:
+                matches.sort()
+                return ToolResult.ok(_truncate("\n".join(matches), _GLOB_CAP_BYTES, "pattern"))
+
+    if not matches:
+        return ToolResult.ok("(no matches)")
+    matches.sort()
+    return ToolResult.ok(_truncate("\n".join(matches), _GLOB_CAP_BYTES, "pattern"))
 
 
 # --------------------------------------------------------------- write_file

@@ -98,11 +98,9 @@ def read_side_checks(project: str) -> list[ContractCheck]:
             valid_args=lambda ctx: {"project": project, "pattern": "*.py"},
             side_effect=lambda res, ctx: _assert_contains(res, "app.py"),
             invalid_args={"project": "no-such-project", "pattern": "*"},
-            known_broken=(
-                "on a Windows hub `find` resolves to Windows FIND.EXE, so the "
-                "tool returns 'FIND: Parameter format not correct' instead of "
-                "matches. Found by this layer 2026-08-12; see observed-issues"
-            ),
+            # known_broken removed 2026-08-14: a local project is now
+            # walked in Python instead of shelling out to `find`, so the
+            # Windows FIND.EXE collision this layer found is gone.
         ),
         ContractCheck(
             tool="grep_repo",
@@ -325,10 +323,13 @@ def write_side_checks(project: str) -> list[ContractCheck]:
             valid_args=lambda ctx: {"project": project, "command": "echo contract"},
             invalid_args={"project": "no-such-project", "command": "echo x"},
             known_broken=(
-                "needs a working POSIX shell. Git Bash on this host "
-                "intermittently fails to fork (cygwin Win32 error 299/5), and a "
-                "single failed boot probe is cached for the process lifetime, so "
-                "project_shell stays disabled until restart (spec task 25)"
+                "genuinely needs a working POSIX shell on the hub, so this "
+                "fails on a host without one — a deployment fact, not a code "
+                "defect. The *caching* half was fixed 2026-08-14: a failed "
+                "probe is now retried after 60s instead of disabling "
+                "project_shell until the gateway restarts. Git Bash on this "
+                "host still intermittently fails to fork (cygwin Win32 error "
+                "299/5), which is an environment problem"
             ),
         ),
     ]
