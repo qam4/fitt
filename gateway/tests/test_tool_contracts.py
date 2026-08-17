@@ -181,3 +181,67 @@ async def test_report_render_names_failures_and_gaps() -> None:
 
     assert "read_file: FAIL" in rendered
     assert "no check: brand_new" in rendered
+
+
+# ------------------------------------------- the mutating-project guard
+#
+# `fitt eval contracts` runs against an OPERATOR-REGISTERED project — there
+# is no throwaway fixture in that path. Pointed at a real repository,
+# write_file and edit_file create files in it and git_commit makes a real
+# commit. On 2026-08-14 a verification run against this repo committed
+# `contract.txt` and swept up the author's whole uncommitted working tree
+# under the message "contract fixture commit". Nothing was lost, but only
+# because the sweep happened to be benign.
+
+
+def _by_tool(checks: list) -> dict:  # type: ignore[type-arg]
+    return {c.tool: c for c in checks}
+
+
+def test_mutating_checks_are_skipped_by_default() -> None:
+    from gateway.tool_contract_suite import MUTATES_THE_PROJECT, default_checks
+
+    checks = _by_tool(default_checks("some-project", http_base_url="http://x"))
+
+    for name in MUTATES_THE_PROJECT:
+        assert name in checks, f"{name} vanished from the suite"
+        assert checks[name].skip_reason, f"{name} would mutate the project by default"
+        assert "--allow-project-writes" in checks[name].skip_reason
+
+
+def test_git_commit_is_treated_as_mutating() -> None:
+    """The specific one that wrote history."""
+    from gateway.tool_contract_suite import MUTATES_THE_PROJECT
+
+    assert "git_commit" in MUTATES_THE_PROJECT
+
+
+def test_opting_in_runs_the_mutating_checks() -> None:
+    from gateway.tool_contract_suite import MUTATES_THE_PROJECT, default_checks
+
+    checks = _by_tool(
+        default_checks("some-project", http_base_url="http://x", allow_project_writes=True)
+    )
+
+    for name in MUTATES_THE_PROJECT:
+        assert not checks[name].skip_reason, f"{name} stayed skipped despite the opt-in"
+
+
+def test_read_only_checks_are_unaffected_by_the_guard() -> None:
+    """The point of the default is to keep the suite useful, not to gut it."""
+    from gateway.tool_contract_suite import default_checks
+
+    checks = _by_tool(default_checks("some-project", http_base_url="http://x"))
+
+    for name in ("read_file", "list_directory", "grep_repo", "glob_search", "git_status"):
+        assert not checks[name].skip_reason, f"{name} should still run"
+
+
+def test_no_project_still_skips_everything_that_needs_one() -> None:
+    """The pre-existing behaviour must survive the new guard."""
+    from gateway.tool_contract_suite import default_checks
+
+    checks = _by_tool(default_checks("", http_base_url="http://x"))
+
+    assert checks["read_file"].skip_reason
+    assert "no project registered" in checks["read_file"].skip_reason

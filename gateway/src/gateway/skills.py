@@ -496,7 +496,19 @@ def _validate_fields(
         raise MissingRequiredField("missing 'description'")
 
     # Type checks (Requirement 2.10).
-    if not isinstance(name, str):
+    #
+    # `name` is the exception, because YAML 1.1 turns a bare `no`, `yes`,
+    # `on`, `off`, `y` or `n` into a bool — the "Norway problem". A skill
+    # directory called `no` therefore arrived here as `False` and was
+    # rejected outright, which contradicts this module's own rule that
+    # **the directory basename is canonical** and a frontmatter mismatch
+    # is a warning, not a rejection (Requirement 2.3). The field is
+    # informational; losing a whole skill because its name looked like a
+    # boolean is the wrong trade. Stringify and let the mismatch warning
+    # do its job. Found by a Hypothesis property test, 2026-08-14.
+    if isinstance(name, bool):
+        name = "yes" if name else "no"
+    elif not isinstance(name, str):
         raise WrongFieldType(f"name is {type(name).__name__}, expected str")
     if not isinstance(description, str):
         raise WrongFieldType(f"description is {type(description).__name__}, expected str")

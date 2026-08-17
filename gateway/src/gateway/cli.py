@@ -2257,8 +2257,23 @@ def eval_e2e_cmd(
 
 @eval_group.command("contracts")
 @click.option("--project", default=None, help="Registered project to run file/git checks against.")
+@click.option(
+    "--allow-project-writes",
+    is_flag=True,
+    default=False,
+    help=(
+        "Run the checks that MUTATE the named project: write_file and "
+        "edit_file create files in it, and git_commit makes a real commit. "
+        "Off by default — this command runs against an operator-registered "
+        "project, not a throwaway fixture, so pointing it at a working "
+        "repository would write history in the thing you're diagnosing. "
+        "Only pass this against a scratch checkout."
+    ),
+)
 @click.option("--config-file", type=click.Path(path_type=Path), default=None)
-def eval_contracts(project: str | None, config_file: Path | None) -> None:
+def eval_contracts(
+    project: str | None, allow_project_writes: bool, config_file: Path | None
+) -> None:
     """Check every registered tool's contract — no model, no tunnel.
 
     The judged scenarios measure whether a *model* picks the right tool.
@@ -2270,6 +2285,9 @@ def eval_contracts(project: str | None, config_file: Path | None) -> None:
     Deterministic and offline, so it can gate CI while the judged
     scenarios stay a dev/debug driver. Exits 1 on a real failure;
     known-broken entries are reported but don't fail the run.
+
+    The project-mutating checks are OFF unless you pass
+    --allow-project-writes; see that flag's help for why.
     """
     import asyncio
 
@@ -2318,7 +2336,11 @@ def eval_contracts(project: str | None, config_file: Path | None) -> None:
             run_contract_checks(
                 app.state.tool_registry,
                 ctx,
-                default_checks(target, http_base_url=base_url),
+                default_checks(
+                    target,
+                    http_base_url=base_url,
+                    allow_project_writes=allow_project_writes,
+                ),
                 exempt=EXEMPT,
             )
         )

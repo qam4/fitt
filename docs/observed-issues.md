@@ -70,10 +70,36 @@ reason rewritten — it genuinely needs a POSIX shell on the hub, and this
 host's fork failures are an environment problem. Only the caching was
 FITT's bug.
 
-**Small finding while verifying:** `fitt eval contracts --project <a real
-repo>` produces two failures that aren't defects — the read-side checks
-hardcode the fixture tree's layout (`src/app.py`), so pointing them at an
-actual repository fails on missing fixture paths. Spec task 85.
+### Verifying the fix committed to this repository
+
+Worth recording, because the cause is a design flaw and not just my
+carelessness. To check `glob_search` against a real tree I ran
+`fitt eval contracts --project home-ai-cluster` — and the suite's
+`git_commit` check **made a real commit in this repo** (`bc983ba`,
+"contract fixture commit"), sweeping up the entire uncommitted working
+tree along with a fixture file called `contract.txt`.
+
+The command has no throwaway fixture in its CLI path: `--project` names an
+**operator-registered** project, so `write_file` and `edit_file` create
+files in it and `git_commit` commits. Pointed at a working repository, a
+diagnostic command writes history in the thing it is diagnosing. Nothing
+was lost here, but only because the sweep happened to be benign.
+
+Fixed with a guard rather than a warning in the docs: `write_file`,
+`edit_file` and `git_commit` are now **skipped by default** with a reason
+naming the new `--allow-project-writes` flag, which should only ever be
+pointed at a scratch checkout. Verified by re-running the exact command
+that caused this — no commit, no `contract.txt`, and `glob_search: pass`.
+
+Two smaller notes from the same run. The read-side checks hardcode the
+fixture tree's layout (`src/app.py`), so `--project <a real repo>` still
+produces two failures that aren't defects (spec task 85). And a Hypothesis
+property test caught an unrelated pre-existing bug while I was verifying:
+a skill directory named `no` was rejected because YAML 1.1 parses a bare
+`no` as boolean `False` — the Norway problem. That contradicted the skills
+loader's own rule that the directory basename is canonical and a
+frontmatter mismatch is only a warning, so a bool `name` is now
+stringified instead of failing the skill.
 
 ---
 

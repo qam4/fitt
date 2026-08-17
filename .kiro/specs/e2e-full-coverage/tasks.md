@@ -67,13 +67,32 @@ Status legend: `[x]` done, `[ ]` not yet.
   reason rewritten: it genuinely needs a POSIX shell on the hub, and this
   host's Git Bash fork failures are an environment problem, not a code
   defect. Only the caching half was FITT's bug.
+- [x] 86. **`fitt eval contracts` could commit to the project it was
+  pointed at.** Found the hard way while verifying task 24: running it
+  with `--project home-ai-cluster` made a real commit in this repository
+  (`bc983ba`, "contract fixture commit") that swept up the whole
+  uncommitted working tree plus a fixture file. The CLI path has no
+  throwaway fixture — `--project` names an *operator-registered* project —
+  so `write_file` / `edit_file` create files in it and `git_commit`
+  commits. A diagnostic command must not write history in the thing it is
+  diagnosing. `write_file`, `edit_file` and `git_commit` are now skipped
+  by default with a reason naming the new `--allow-project-writes` flag.
+  Verified by re-running the exact command that caused it. DONE
+  2026-08-14.
 - [ ] 85. **`--project` on `fitt eval contracts` can't take a real repo.**
-  Noticed while verifying task 24. The read-side checks hardcode the
-  fixture tree's layout (`src/app.py`, a `contract-probe` string), so
-  pointing `--project` at an actual repo makes `read_file` and
-  `list_directory` fail on missing fixture paths — 2 failures that look
-  like defects and aren't. Either build the fixture inside the named
-  project, or make those checks discover a file instead of assuming one.
+  The read-side checks hardcode the fixture tree's layout (`src/app.py`, a
+  `contract-probe` string), so pointing `--project` at an actual repo makes
+  `read_file` and `list_directory` fail on missing fixture paths — 2
+  failures that look like defects and aren't. Either build the fixture
+  inside the named project, or make those checks discover a file instead of
+  assuming one.
+- [x] 87. **Skills: a directory named `no` was rejected (YAML Norway).**
+  Caught by a Hypothesis property test during the above. YAML 1.1 parses a
+  bare `no` / `yes` / `on` / `off` as a bool, so `name: no` arrived as
+  `False` and failed the type check — contradicting the loader's own rule
+  that the directory basename is canonical and a frontmatter mismatch is
+  only a warning. A bool `name` is now stringified. Unrelated to the
+  Windows work; pre-existing. DONE 2026-08-14.
 
 ## Phase B — Coverage report
 

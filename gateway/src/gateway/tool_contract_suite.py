@@ -419,19 +419,58 @@ def _assert_lesson_present(result: Any, ctx: Any) -> None:
     assert "contract fixture lesson" in block, f"lesson not in store: {block[:200]!r}"
 
 
-def default_checks(project: str, *, http_base_url: str | None = None) -> list[ContractCheck]:
+MUTATES_THE_PROJECT: frozenset[str] = frozenset({"write_file", "edit_file", "git_commit"})
+"""Checks that change the project they're pointed at.
+
+Off unless the caller opts in, because ``fitt eval contracts`` runs
+against an **operator-registered** project — there is no throwaway
+fixture in that path. Pointed at a real repository, `write_file` and
+`edit_file` create files in it and `git_commit` **makes a real commit**.
+
+Not hypothetical: on 2026-08-14 a verification run against this
+repository committed `contract.txt` and swept up the author's entire
+uncommitted working tree under the message "contract fixture commit".
+Nothing was lost, but only because the sweep happened to be benign. A
+diagnostic command must not be able to write history in the thing it's
+diagnosing."""
+
+
+def default_checks(
+    project: str,
+    *,
+    http_base_url: str | None = None,
+    allow_project_writes: bool = False,
+) -> list[ContractCheck]:
     """Every check this module knows about.
 
     Without a project, the file and git checks can't run at all — so they
     are *skipped with a reason*, not failed. A missing fixture says
     nothing about the tool, the same distinction the judged layer draws
-    with unsupported/inconclusive."""
+    with unsupported/inconclusive.
+
+    ``allow_project_writes`` gates :data:`MUTATES_THE_PROJECT`. Default
+    False: those checks are skipped with a reason rather than silently
+    editing and committing in whatever project was named."""
     needs_project = [
         *read_side_checks(project),
         *git_side_checks(project),
         *write_side_checks(project),
         *spec_checks(project),
     ]
+    if not allow_project_writes:
+        needs_project = [
+            replace(
+                c,
+                skip_reason=(
+                    "mutates the project (writes files / makes a real commit). "
+                    "Pass --allow-project-writes, and only against a scratch "
+                    "checkout you don't mind being committed to"
+                ),
+            )
+            if c.tool in MUTATES_THE_PROJECT
+            else c
+            for c in needs_project
+        ]
     if not project:
         needs_project = [
             replace(
