@@ -15,6 +15,7 @@ from gateway.e2e_scenarios import (
     news_scenario,
     notify_scenario,
     planner_elects_a_plan_scenario,
+    reminder_not_executed_scenario,
     reminder_scenario,
     routing_push_now_scenario,
     routing_timed_reminder_scenario,
@@ -311,6 +312,7 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
         "routing_timed",
         "routing_untimed",
         "routing_push_now",
+        "reminder_not_executed",
         "deadline_sweep",
         "planner_elects_a_plan",
     }
@@ -988,3 +990,124 @@ def test_only_one_todos_fixture_exists_across_the_seed_set() -> None:
     }
 
     assert len(contents) == 1, f"conflicting todos.md fixtures planted by {planters}"
+
+
+# ------------------------------------------- reminder must not be executed
+#
+# Live bug, 2026-08-17: "Can you remind me to check my emails in 15 minutes"
+# created the cron correctly and then the FIRING ran project_shell. The user
+# asked to be reminded; FITT went and tried to do it.
+
+
+def test_delivering_the_reminder_and_nothing_else_passes() -> None:
+    scen = reminder_not_executed_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "deliveries": [{"title": "", "body": "Time to check your emails"}],
+                "audit_calls": [
+                    {"tool": "cron_add", "session": "main"},
+                    {"tool": "send_message", "session": "cron:abc123:1786"},
+                ],
+            }
+        )
+    )
+
+    assert res.passed
+
+
+def test_running_a_shell_in_the_firing_fails() -> None:
+    """The reported bug. Note the reminder WAS delivered here — doing the
+    errand as well is still wrong, so delivery must not excuse it."""
+    scen = reminder_not_executed_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "deliveries": [{"title": "", "body": "checked your emails"}],
+                "audit_calls": [
+                    {"tool": "cron_add", "session": "main"},
+                    {"tool": "project_shell", "session": "cron:abc123:1786"},
+                ],
+            }
+        )
+    )
+
+    assert not res.passed
+    assert "project_shell" in res.reason
+    assert "not carried out" in res.reason
+
+
+def test_another_scenarios_web_search_is_not_blamed_on_the_firing() -> None:
+    """The audit log spans the whole run, so this assert has to name whose
+    actions it's judging.
+
+    Without the session scope it swept up `news_summary`'s legitimate
+    `web_search` and failed a run in which the model behaved correctly —
+    twice. The judge caught it both times and was right."""
+    scen = reminder_not_executed_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "deliveries": [{"title": "", "body": "Time to check your emails"}],
+                "audit_calls": [
+                    {"tool": "cron_add", "session": "e2e-reminder-not-executed-0"},
+                    {"tool": "web_search", "session": "e2e-news-summary-0"},
+                    {"tool": "send_message", "session": "cron:abc123:1786"},
+                ],
+            }
+        )
+    )
+
+    assert res.passed, res.reason
+
+
+def test_the_audit_log_is_what_catches_it() -> None:
+    """A cron firing runs in its own session, so the dispatched turn's
+    tool_calls cannot see it. Only the audit log spans both."""
+    scen = reminder_not_executed_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            tool_calls=({"name": "cron_add", "ok": True},),  # the turn looks clean
+            snapshot={
+                "deliveries": [{"title": "", "body": "emails"}],
+                "audit_calls": [{"tool": "project_shell", "session": "cron:abc123:1786"}],
+            },
+        )
+    )
+
+    assert not res.passed
+
+
+def test_send_message_is_not_treated_as_overreach() -> None:
+    """Pushing the reminder is the CORRECT action, so it must never count
+    against the scenario."""
+    from gateway.e2e_scenarios import _EXECUTING_TOOLS
+
+    assert "send_message" not in _EXECUTING_TOOLS
+    for read_tool in ("todo_list", "cron_list", "read_file"):
+        assert read_tool not in _EXECUTING_TOOLS
+
+
+def test_a_cron_that_never_delivered_is_distinguished_from_one_never_made() -> None:
+    scen = reminder_not_executed_scenario()
+
+    never_fired = scen.outcome_assert(
+        _traj(snapshot={"cron_jobs": [{"message": "check emails", "at_ts": 1}]})
+    )
+    never_made = scen.outcome_assert(_traj(snapshot={}))
+
+    assert "delivered no reminder" in never_fired.reason
+    assert "no cron created" in never_made.reason
+
+
+def test_the_scenario_uses_the_reported_wording() -> None:
+    """The bug was phrasing-sensitive — "remind me to X" is what makes the
+    stored text read as an errand. Don't let a reword lose the repro."""
+    text = str(reminder_not_executed_scenario().turns[0]["content"]).lower()
+
+    assert "remind me to" in text
+    assert "email" in text

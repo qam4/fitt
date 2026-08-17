@@ -29,6 +29,28 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
+- **Bound what a cron firing may do (from the 2026-08-17 hub incident).**
+  A reminder fired and ran `project_shell`. The *cause* was a one-line
+  prompt bug, now fixed and covered by the `reminder_not_executed`
+  scenario — but the blast radius is a separate question the fix doesn't
+  touch: a scheduled, unattended session currently gets the full ~34-tool
+  surface, and `approval_mode: "auto"` collapses ASK to AUTO for *every*
+  tool including the shell. So a mis-authored cron can run arbitrary
+  commands with nobody watching. Least privilege, not taxonomy: give a
+  firing a conservative default set (`send_message`, reads, cron/todo/
+  lessons state) and make anything that touches the world an explicit
+  grant at `cron_add` time. Then a wrong stored text produces "I can't do
+  that from a scheduled job" instead of a shell command. Note the earlier
+  attempts to classify intent (remind-vs-task, say-vs-do) were rejected as
+  false dichotomies — a reminder *is* a task, and saying *is* a doing; the
+  answerable question is what the job is permitted to do while you're
+  away.
+- **Guidance must live where the capability block renders it.** The cron
+  bug above happened because the `text` arg's schema description said the
+  right thing while the tool's one-line description contradicted it — and
+  only the one-liner is rendered into the prompt prose. Worth a sweep of
+  the other tools for the same split, and worth remembering when writing
+  any new tool description.
 - **Orchestration now has judged e2e coverage — measured on the wrong
   model first (2026-08-14).** `fitt eval e2e --mode flat|planned` plus
   `deadline_sweep` and `planner_elects_a_plan` shipped. First result:

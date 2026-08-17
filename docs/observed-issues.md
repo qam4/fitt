@@ -33,6 +33,93 @@ doc.
 
 ---
 
+## A reminder ran a shell command: one real bug, three assert bugs
+
+**First observed:** 2026-08-17, operator's hub, live use. "Can you remind
+me to check my emails in 15 minutes" scheduled correctly and then the
+*firing* ran `project_shell`.
+**Tag:** cron / prompt surface / eval correctness.
+
+### The real bug, and it was one line
+
+Reproduced on gemma4 (which reached for `web_search` rather than
+`project_shell` — same defect, different improvisation). The stored cron
+was:
+
+```
+cron_add args={"schedule_spec": "in 15 minutes", "text": "Check my emails"}
+```
+
+It stored the **errand as an imperative**. The firing framing's contract
+is "respond to the stored prompt the way you would respond to a fresh
+chat turn carrying the same text" — and read as a fresh turn, "Check my
+emails" *means go and check them*. The firing behaved correctly on text
+that was authored wrong.
+
+Why was it authored wrong? The two descriptions of that field
+contradicted each other. The `text` schema property already said the
+right thing ("should read like a self-contained user turn, e.g. 'Remind
+me to take out the trash.'") — but the **capability block renders only
+the tool's one-line description**, and that said `text` was "what the
+cron should **do** or say when it fires". The salient prose said *do*, so
+the model wrote the errand.
+
+Fixed by rewriting that one line: `text` is the user's own request kept as
+they said it, with an explicit instruction not to shorten "Remind me to
+check my emails" to "Check my emails", and the reason why. Verified live —
+the stored text is now the full request and the firing delivers a reminder
+and calls nothing.
+
+**The lesson is about where guidance lives.** A correct instruction in a
+JSON-schema arg description loses to a contradictory one in the tool's
+summary line, because only the summary is rendered into the prompt prose.
+Any future tool guidance belongs in the description the capability block
+actually shows.
+
+### Three of my own asserts were wrong before the model's behaviour was
+
+Worth recording in full, because the pattern is now undeniable. The
+scenario failed three runs in a row and the model was innocent in two of
+them:
+
+1. **Blamed another scenario's tool call.** The audit log spans the whole
+   eval run; I filtered it by tool name and forgot to scope to the
+   firing's session, so `news_summary`'s legitimate `web_search` failed
+   this scenario. Twice. The judge caught it both times — "the web_search
+   reference appears to pertain to a later cron firing, not this turn" —
+   and was right.
+2. **Read the wrong delivery channel.** A non-silent cron's notification
+   *is* its `cron_completed` event; the firing's reply is pushed directly
+   and no `send_message` happens. I checked `agent_messages`, which is
+   empty for a perfectly working reminder. `_cron_fired_assert`, a few
+   hundred lines above in the same file, carries this exact warning:
+   "checking only for agent_message made a working cron read as broken."
+   I reproduced the mistake anyway.
+3. Both are the same failure as `asks_before_acting` earlier this month:
+   **an assertion over run-wide shared state that doesn't name whose
+   actions it is judging.**
+
+Running tally: six asserts this month that punished correct behaviour.
+The judge caught three of them. The disagreement report line is what
+surfaced two.
+
+### Still open from the same runs
+
+`<|tool_response>` leaked into the user-visible reply again on both
+`cron_fires` and `reminder_not_executed` — the fourth and fifth sightings.
+The side effect is right and the objective check passes on it, so only the
+judge notices the user would be shown a raw template token. It's the
+oldest open item in this file and it is now the most-reproduced.
+
+Also unresolved from the original report: whether the hub's cron had
+`approval_mode: "auto"`. If it did, `project_shell` ran with no approval
+prompt at all, because auto-mode collapses ASK to AUTO for *every* tool
+including the shell. A scheduled, unattended session having the full
+34-tool surface is a blast-radius question independent of this text bug —
+worth bounding on least-privilege grounds, not taxonomy.
+
+---
+
 ## Both Windows defects fixed
 
 **First observed:** 2026-08-12 (found by the tool-contract layer's first

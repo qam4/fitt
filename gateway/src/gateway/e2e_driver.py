@@ -108,6 +108,34 @@ def snapshot_app(app: Any, *, session_id: str = "main", event_tail: int = 20) ->
         except Exception:  # pragma: no cover - defensive
             snap["lessons_text"] = ""
 
+    # Every tool call the run made, from the audit log — including ones
+    # made by sessions FITT started itself.
+    #
+    # The tool_calls on a RunResult come from the TurnLog for the session
+    # the *harness* dispatched, so they cannot see a cron firing: that runs
+    # in its own session, started by the scheduler. When a reminder fired
+    # and the model went off and ran `project_shell` (reported from live
+    # use 2026-08-17), no assertion in the harness could have noticed. The
+    # audit log is the one record of every tool call regardless of who
+    # started the session, which is exactly what's needed here.
+    audit = getattr(app.state, "audit", None)
+    if audit is not None:
+        try:
+            entries = audit.iter_entries()
+            snap["audit_tools"] = [str(e.get("tool", "")) for e in entries]
+            snap["audit_calls"] = [
+                {
+                    "tool": str(e.get("tool", "")),
+                    "session": str(e.get("session_key", "")),
+                    "decision": str(e.get("decision", "")),
+                    "ok": e.get("ok"),
+                }
+                for e in entries
+            ]
+        except Exception:  # pragma: no cover - defensive
+            snap["audit_tools"] = []
+            snap["audit_calls"] = []
+
     # The plan the orchestrator's planner pass elected, if any. Flat-loop
     # turns leave this empty, which is the honest reading: no plan was
     # elected because no planner ran. `[]` and "elected not to plan" are
