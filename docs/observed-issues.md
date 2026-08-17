@@ -42,9 +42,17 @@ me to check my emails in 15 minutes" scheduled correctly and then the
 
 ### The real bug, and it was one line
 
-Reproduced on gemma4 (which reached for `web_search` rather than
-`project_shell` — same defect, different improvisation). The stored cron
-was:
+**Scope of the reproduction, stated precisely** — I first wrote that this
+was "reproduced on gemma4, which reached for `web_search`", and that was
+wrong. What was reproduced is the **cause**: gemma4 stored the same
+malformed cron text. The **symptom** — a firing actually running a tool —
+was never reproduced. The `web_search` I attributed to the firing was
+almost certainly `news_summary`'s, leaking through an unscoped filter (see
+the assert bugs below). So: the operator observed the symptom on their hub;
+I reproduced the cause and fixed it. Those are different claims and only
+the second is mine.
+
+The stored cron was:
 
 ```
 cron_add args={"schedule_spec": "in 15 minutes", "text": "Check my emails"}
@@ -102,6 +110,26 @@ them:
 Running tally: six asserts this month that punished correct behaviour.
 The judge caught three of them. The disagreement report line is what
 surfaced two.
+
+### The scenario had never gone red for the right reason
+
+Worth separating from the above, because it's a different kind of gap.
+`reminder_not_executed` passes now, but every one of its earlier failures
+was one of my assert bugs — so a green result could equally have meant
+"the firing behaved" or "the harness cannot see the firing at all". The
+project's own rule is fix + a test that **fails before and passes
+after**; I had the pass-after and not the fail-before.
+
+Closed by pinning the chain the scenario depends on, with a stubbed model:
+a tool called inside a firing does reach `snapshot_app()["audit_calls"]`
+with a `cron:<id>:<ts>` session, and that prefix — which the scenario
+hardcodes — is really what the runner emits. If the runner ever changes
+its session-key format, the second test fails rather than the scenario
+silently passing forever.
+
+General form of the trap: a scenario that has only ever passed tells you
+nothing about what it detects. Either watch it fail against the real
+defect, or unit-test the observation chain it relies on.
 
 ### Still open from the same runs
 

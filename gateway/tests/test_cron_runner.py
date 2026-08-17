@@ -642,3 +642,96 @@ async def test_an_ask_bucket_tool_in_a_cron_firing_does_not_block_after_the_fix(
     )
 
     assert ran == ["yes"], "the ASK-bucket tool never ran; approval blocked the firing"
+
+
+# ------------------------------------------- the firing is visible to the harness
+#
+# The `reminder_not_executed` scenario decides "did the firing overreach?"
+# by reading snapshot_app()["audit_calls"] and filtering to sessions that
+# start with "cron:". That whole chain was unverified: the scenario passed,
+# but it had never once gone red for the right reason, so a green result
+# might have meant "the firing behaved" or "the harness can't see it".
+#
+# These pin the link end to end with a stubbed model.
+
+
+async def test_a_firings_tool_calls_reach_the_audit_snapshot(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tool called inside a cron firing must appear in the snapshot with
+    a `cron:`-prefixed session, or the scenario is green and blind."""
+    from gateway.e2e_driver import auto_approve_for_eval, snapshot_app
+
+    async def _impl(args: dict, ctx: ToolContext) -> ToolResult:
+        return ToolResult.ok("did the errand")
+
+    app.state.tool_registry.register(
+        Tool(
+            name="pretend_shell",
+            description="stands in for project_shell",
+            schema={"type": "object", "properties": {}},
+            callable=_impl,
+            default_bucket=ApprovalBucket.AUTO,
+        )
+    )
+    auto_approve_for_eval(app)
+
+    calls = iter(
+        [
+            _fake_completion(tool_calls=[make_tool_call("c1", "pretend_shell", {})]),
+            _fake_completion(content="done"),
+        ]
+    )
+
+    async def fake(**kwargs: Any) -> Any:
+        return next(calls)
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    await app.state.cron_runner.fire(
+        CronJob(
+            id="firing1",
+            name="reminder",
+            message="Remind me to check my emails",
+            schedule=CronSchedule(kind="every", every_secs=60),
+        )
+    )
+
+    snap = snapshot_app(app)
+    overreach = [
+        c
+        for c in snap.get("audit_calls", [])
+        if c["tool"] == "pretend_shell" and str(c["session"]).startswith("cron:")
+    ]
+
+    assert overreach, (
+        "a tool called inside the firing did not reach audit_calls with a "
+        f"cron: session — the scenario cannot see overreach. saw: {snap.get('audit_calls')}"
+    )
+
+
+async def test_the_session_prefix_the_scenario_filters_on_is_real(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reminder_not_executed` hardcodes the "cron:" prefix. If the runner
+    ever changes its session-key format, the scenario would silently stop
+    attributing anything to the firing — passing forever."""
+
+    async def fake(**kwargs: Any) -> Any:
+        return _fake_completion(content="ok")
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    await app.state.cron_runner.fire(
+        CronJob(
+            id="abc123",
+            name="r",
+            message="Remind me to check my emails",
+            schedule=CronSchedule(kind="every", every_secs=60),
+        )
+    )
+
+    keys = [str(getattr(e, "session_key", "")) for e in app.state.events.read(limit=20)]
+    fired = [k for k in keys if k.startswith("cron:abc123:")]
+
+    assert fired, f"firing sessions no longer look like 'cron:<id>:<ts>': {keys}"
