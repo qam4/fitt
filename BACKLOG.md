@@ -202,6 +202,15 @@ The curated ordering - the judgment call a tool can't make for you.
   attribute side effects to the turn's own `tool_calls` whenever there's
   no keyword to filter the snapshot by, which is the only option for a
   scenario whose premise is that no subject was given.
+- **Both Windows defects fixed (2026-08-14).** `glob_search` no longer
+  shells out to `find` on a local project — it walks the tree in Python,
+  so the Windows `FIND.EXE` collision is gone and the contract suite
+  reports it passing. And `LocalShellProbe` now expires a *failed* probe
+  after 60s instead of caching "no POSIX shell" for the process lifetime,
+  so one flaky Git Bash fork no longer disables `project_shell` until the
+  gateway restarts. Both were found by the tool-contract layer, which is
+  the only check that calls every tool directly — a decent argument for
+  the Windows CI leg below.
 - **A Windows CI leg — the missing observer (2026-08-10).** FITT deploys
   on Windows; both CI jobs are `ubuntu-latest`. That gap is why the
   cp1252 `UnicodeEncodeError` class recurred ~10 times: it can't fail on

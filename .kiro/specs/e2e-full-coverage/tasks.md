@@ -40,23 +40,40 @@ Status legend: `[x]` done, `[ ]` not yet.
   `git_commit`, `spec_*`. (`git_status`/`git_diff` done in task 4's pass.)
 - [~] 7. `fitt eval contracts` command DONE (exits 1 on a real failure;
   skips honestly when no project is registered). CI wiring still to do.
-- [ ] 24. **Fix `glob_search` on Windows** (found by task 4). It shells
-  argv `["find", ".", "-type", "f", "-name", p]`, and on a Windows hub
-  `find` resolves to Windows `FIND.EXE`, so the model gets "FIND:
-  Parameter format not correct" instead of matches or a readable error.
-  Options: implement the local path in Python (`Path.rglob`) and keep
-  `find` for SSH-backed projects, or fail with a clear
-  "needs POSIX find" message. The first is better — it removes a
-  platform dependency from a read-side core tool.
-- [ ] 25. **Don't cache a transient shell-probe failure.**
-  (Supersedes an earlier, wrong version of this task that blamed the
-  hardcoded Git Bash path — `bash` is on PATH here and matches candidate
-  #1; verified by running it.) `LocalShellProbe.detect` caches
-  `ShellInterpreter.none()` for the process lifetime, so one flaky probe
-  — Git Bash on this host intermittently fails to fork with cygwin
-  `Win32 error 299` / `error 5` — disables `project_shell` on local
-  projects until the gateway restarts, with no retry. Caching a success
-  forever is right; caching a transient failure forever is not.
+- [x] 24. **Fix `glob_search` on Windows** (found by task 4). DONE
+  2026-08-14 the better way: a **local** project is now walked in Python
+  (`os.walk` + `fnmatch` in a worker thread), and only an SSH-backed
+  project shells out to `find`. That removes a POSIX-binary dependency
+  from a read-side core tool rather than just reporting it better.
+  Output is byte-compatible with the `find` path — `./`-prefixed,
+  forward slashes, sorted — so the model can't tell which backend
+  answered. Verified by `fitt eval contracts` against a real project:
+  **`glob_search: pass`**, and its `known_broken` marker is gone.
+- [x] 25. **Don't cache a transient shell-probe failure.** DONE
+  2026-08-14. (Superseded an earlier, wrong version of this task that
+  blamed the hardcoded Git Bash path — `bash` is on PATH here and matches
+  candidate #1; verified by running it.) A *success* is still cached for
+  the process lifetime, because an interpreter that worked doesn't stop
+  existing. A *failure* now expires after `_NEGATIVE_TTL_S` (60s) and
+  re-probes, so one flaky fork — Git Bash on this host intermittently
+  fails with cygwin `Win32 error 299` / `error 5` — no longer disables
+  `project_shell` until the gateway restarts. The TTL is a deliberate
+  middle: long enough that a genuinely shell-less hub isn't paying
+  `_PROBE_TIMEOUT_S` per candidate on every tool call, short enough that a
+  transient failure clears within a minute. The warning now says it will
+  re-probe, so the operator isn't left thinking it's permanent.
+
+  `project_shell` stays `known_broken` in the contract suite, with the
+  reason rewritten: it genuinely needs a POSIX shell on the hub, and this
+  host's Git Bash fork failures are an environment problem, not a code
+  defect. Only the caching half was FITT's bug.
+- [ ] 85. **`--project` on `fitt eval contracts` can't take a real repo.**
+  Noticed while verifying task 24. The read-side checks hardcode the
+  fixture tree's layout (`src/app.py`, a `contract-probe` string), so
+  pointing `--project` at an actual repo makes `read_file` and
+  `list_directory` fail on missing fixture paths — 2 failures that look
+  like defects and aren't. Either build the fixture inside the named
+  project, or make those checks discover a file instead of assuming one.
 
 ## Phase B — Coverage report
 

@@ -33,6 +33,50 @@ doc.
 
 ---
 
+## Both Windows defects fixed
+
+**First observed:** 2026-08-12 (found by the tool-contract layer's first
+run). **Fixed:** 2026-08-14.
+**Tag:** Windows / read-side tools / project_shell.
+
+The two findings with actual daily-use bite on a Windows hub, both found by
+the one check that calls every tool directly.
+
+**`glob_search` shelled out to `find`, which on Windows is `FIND.EXE`** — a
+text-search utility with unrelated syntax, so the model got "FIND:
+Parameter format not correct" instead of matches. Fixed the better of the
+two ways the spec offered: a **local** project is now walked in Python
+(`os.walk` + `fnmatch`, in a worker thread since a deep tree would stall
+the event loop), and only an SSH-backed project shells out. That removes a
+POSIX-binary dependency from a core read-side tool rather than just
+reporting the failure more clearly. Output is byte-compatible with the
+`find` path — `./`-prefixed, forward slashes, sorted — so a model can't
+tell which backend answered. `fitt eval contracts` against a real project
+now reports **`glob_search: pass`**.
+
+**A transient shell probe was cached for the process lifetime.** One flaky
+Git Bash fork (cygwin `Win32 error 299` / `error 5`) made
+`LocalShellProbe` conclude "no POSIX shell" and keep that verdict until the
+gateway restarted — `project_shell` dead on local projects for hours, no
+retry, nothing telling the operator why. Now a *success* is still cached
+forever (an interpreter that worked doesn't stop existing) while a
+*failure* expires after 60s and re-probes. The TTL is a deliberate middle:
+long enough that a genuinely shell-less hub isn't paying the probe timeout
+per candidate on every tool call, short enough that a transient failure
+clears within a minute. The warning now says it will re-probe.
+
+`project_shell` remains `known_broken` in the contract suite, with the
+reason rewritten — it genuinely needs a POSIX shell on the hub, and this
+host's fork failures are an environment problem. Only the caching was
+FITT's bug.
+
+**Small finding while verifying:** `fitt eval contracts --project <a real
+repo>` produces two failures that aren't defects — the read-side checks
+hardcode the fixture tree's layout (`src/app.py`), so pointing them at an
+actual repository fails on missing fixture paths. Spec task 85.
+
+---
+
 ## Planner coverage: a first result, and a conclusion withdrawn
 
 **First observed:** 2026-08-14, first judged flat-vs-planned run
