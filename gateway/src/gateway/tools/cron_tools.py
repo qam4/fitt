@@ -57,6 +57,22 @@ _CRON_ID_ARG = {
     "description": "Short hex id of an existing cron (from cron_list).",
 }
 
+_EXTRA_TOOLS_ARG = {
+    "type": "array",
+    "items": {"type": "string"},
+    "description": (
+        "Tool names this cron's firings are allowed to use beyond the "
+        "safe default set. Firings run unattended, so by default they "
+        "can only notify and read: send_message, the read/list/search "
+        "tools, and the user's todo list. Anything that runs commands "
+        "(project_shell, run_tests), writes (write_file, edit_file, "
+        "git_commit), reaches the network (http_get, web_search), or "
+        "edits crons/lessons must be named here. Leave empty for a "
+        "plain reminder — only add a tool the job genuinely needs."
+    ),
+    "default": [],
+}
+
 _SCHEMA_CRON_ADD: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -124,6 +140,7 @@ _SCHEMA_CRON_ADD: dict[str, Any] = {
             ),
             "default": "UTC",
         },
+        "extra_tools": _EXTRA_TOOLS_ARG,
     },
     "required": ["text", "schedule_spec"],
     "additionalProperties": False,
@@ -159,6 +176,7 @@ _SCHEMA_CRON_UPDATE: dict[str, Any] = {
         "approval_mode": {"type": "string", "enum": ["", "auto"]},
         "agent_alias": {"type": "string"},
         "timezone": {"type": "string"},
+        "extra_tools": _EXTRA_TOOLS_ARG,
     },
     "required": ["id"],
     "additionalProperties": False,
@@ -176,6 +194,33 @@ def _derive_cron_name(message: str) -> str:
     first_line = message.strip().splitlines()[0] if message.strip() else "cron"
     label = " ".join(first_line.split())[:50].strip()
     return label or "cron"
+
+
+def _parse_extra_tools(raw: Any) -> list[str]:
+    """Normalise the ``extra_tools`` argument to a list of tool names.
+
+    Accepts a list, or a single string (models routinely send a bare
+    ``"project_shell"`` for an array-typed field, and refusing that
+    teaches nothing). Comma-separated strings are split for the same
+    reason. Anything else is an error rather than a silent empty list —
+    a grant that quietly didn't apply is worse than a failed call,
+    because the firing would then fail later for a reason the model
+    can't connect to what it asked for."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    if not isinstance(raw, list):
+        raise ValueError("'extra_tools' must be a list of tool names, e.g. ['project_shell']")
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise ValueError(
+                f"'extra_tools' entries must be tool-name strings; got {type(item).__name__}"
+            )
+        if item.strip():
+            out.append(item.strip())
+    return out
 
 
 def _get_cron_service(ctx: ToolContext) -> Any:
@@ -218,6 +263,11 @@ def _format_job(job: CronJob) -> str:
         bits.append("silent")
     if job.approval_mode == "auto":
         bits.append("auto-approve")
+    if job.extra_tools:
+        # Shown because "what can this unattended job reach" is the
+        # question you have when auditing a cron list, and it is
+        # otherwise invisible without opening cron.json.
+        bits.append("grants=" + ",".join(sorted(job.extra_tools)))
     label = " ".join(bits)
     return f"- {label}  {job.name!r}"
 
@@ -264,6 +314,11 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     approval_mode: ApprovalModeOverride = approval_mode_raw  # type: ignore[assignment]
     agent_alias = str(args.get("agent_alias") or "")
 
+    try:
+        extra_tools = _parse_extra_tools(args.get("extra_tools"))
+    except ValueError as e:
+        return ToolResult.error(str(e))
+
     job = CronJob(
         id="",
         name=name.strip(),
@@ -271,6 +326,7 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         schedule=schedule,
         silent=silent,
         approval_mode=approval_mode,
+        extra_tools=extra_tools,
         agent_alias=agent_alias,
         session_key=ctx.session_key,
         created_by_client=ctx.client,
@@ -370,6 +426,11 @@ async def _tool_cron_update(args: dict[str, Any], ctx: ToolContext) -> ToolResul
         if mode not in ("", "auto"):
             return ToolResult.error("approval_mode must be '' or 'auto'")
         kwargs["approval_mode"] = mode
+    if "extra_tools" in args and args["extra_tools"] is not None:
+        try:
+            kwargs["extra_tools"] = _parse_extra_tools(args["extra_tools"])
+        except ValueError as e:
+            return ToolResult.error(str(e))
     if "agent_alias" in args and args["agent_alias"] is not None:
         kwargs["agent_alias"] = str(args["agent_alias"])
     if "schedule_spec" in args and args["schedule_spec"] is not None:
@@ -459,7 +520,12 @@ def build_cron_tools() -> list[Tool]:
                 "from the text if omitted). Defaults to ask for "
                 "approval; `silent` and `approval_mode` control "
                 "whether firings announce and whether their "
-                "internal tools auto-approve."
+                "internal tools auto-approve. "
+                "Firings run unattended on a reduced tool surface: "
+                "they can notify, read, and use the todo list. If the "
+                "job needs to run a command, write a file, or reach "
+                "the network, name those tools in `extra_tools` — a "
+                "plain reminder needs none."
             ),
             schema=_SCHEMA_CRON_ADD,
             callable=_tool_cron_add,

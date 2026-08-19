@@ -1176,6 +1176,9 @@ def cron_list(all_: bool) -> None:
     table.add_column("Schedule")
     table.add_column("Name")
     table.add_column("Alias")
+    # "What can this unattended job reach" is the audit question, and it is
+    # otherwise invisible without opening cron.json.
+    table.add_column("Grants")
     table.add_column("Last run", justify="right")
     for j in jobs:
         state = "active" if j.enabled else "[yellow]paused[/yellow]"
@@ -1194,6 +1197,7 @@ def cron_list(all_: bool) -> None:
             _format_schedule_cli(j.schedule),
             j.name,
             j.agent_alias or "(default)",
+            ", ".join(sorted(j.extra_tools)) if j.extra_tools else "[dim]none[/dim]",
             last,
         )
     _console.print(table)
@@ -1247,6 +1251,18 @@ def _format_last_run(ts: float, status: str) -> str:
     help="Model alias (e.g. fitt-smart). Empty = fitt-default.",
 )
 @click.option("--timezone", "tz", default="UTC", help="IANA tz for cron exprs (default UTC).")
+@click.option(
+    "--grant-tool",
+    "grant_tools",
+    multiple=True,
+    metavar="TOOL",
+    help=(
+        "Let this cron's firings use TOOL (repeatable). Firings run "
+        "unattended on a reduced surface — notify, read, todos — so "
+        "anything that runs commands, writes, or reaches the network "
+        "must be granted here."
+    ),
+)
 def cron_add(
     name: str,
     schedule_spec: str,
@@ -1255,6 +1271,7 @@ def cron_add(
     auto_approve: bool,
     agent_alias: str,
     tz: str,
+    grant_tools: tuple[str, ...],
 ) -> None:
     """Register a new cron.
 
@@ -1280,6 +1297,7 @@ def cron_add(
             schedule=schedule,
             silent=silent,
             approval_mode=approval_mode,  # type: ignore[arg-type]
+            extra_tools=list(grant_tools),
             agent_alias=agent_alias,
             created_by_client="cli",
         )
@@ -1287,6 +1305,8 @@ def cron_add(
     _console.print(
         f"[green]Created[/green] {job.id} [{_format_schedule_cli(job.schedule)}] {job.name!r}"
     )
+    if job.extra_tools:
+        _console.print(f"  granted: {', '.join(sorted(job.extra_tools))}")
 
 
 @cron_group.command("remove")

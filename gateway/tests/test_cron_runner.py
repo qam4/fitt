@@ -302,6 +302,10 @@ async def test_fire_with_approval_mode_auto_runs_an_ask_tool(
         message="run the write tool",
         schedule=CronSchedule(kind="every", every_secs=60),
         approval_mode="auto",
+        # The grant is separate from approval_mode on purpose: "don't
+        # prompt me" is not "widen what's reachable". This test is about
+        # the approval axis, so it grants the surface explicitly.
+        extra_tools=["custom_write"],
     )
     await runner.fire(job)
 
@@ -638,6 +642,9 @@ async def test_an_ask_bucket_tool_in_a_cron_firing_does_not_block_after_the_fix(
             message="use the tool",
             schedule=CronSchedule(kind="every", every_secs=60),
             # approval_mode deliberately unset — the default a model creates.
+            # Granted, because this test is about the approval path, not the
+            # surface. The two are independent by design.
+            extra_tools=["needs_a_tap"],
         )
     )
 
@@ -694,6 +701,11 @@ async def test_a_firings_tool_calls_reach_the_audit_snapshot(
             name="reminder",
             message="Remind me to check my emails",
             schedule=CronSchedule(kind="every", every_secs=60),
+            # Granted explicitly because firings now run on a reduced
+            # surface. This test is about whether the harness can SEE a
+            # firing's tool call, so the tool has to be reachable —
+            # the restriction itself is pinned separately below.
+            extra_tools=["pretend_shell"],
         )
     )
 
@@ -735,3 +747,204 @@ async def test_the_session_prefix_the_scenario_filters_on_is_real(
     fired = [k for k in keys if k.startswith("cron:abc123:")]
 
     assert fired, f"firing sessions no longer look like 'cron:<id>:<ts>': {keys}"
+
+
+# ------------------------------------------- least privilege for firings
+#
+# 2026-08-17: "remind me to check my emails in 15 minutes" fired and ran
+# project_shell on the operator's hub. The prompt-level fix (make the
+# stored text read as a reminder, not an errand) was shipped first and the
+# symptom recurred on 2026-08-19 with correctly-authored text. So the
+# surface is bounded: a firing gets FIRING_DEFAULT_TOOLS plus whatever the
+# cron explicitly grants.
+#
+# The order these assert in matters. Each one names the best behaviour
+# first, then checks the assert scores THAT as a pass.
+
+
+def _register_pretend_shell(app: Any, ran: list[str]) -> None:
+    """A stand-in for project_shell that records being called.
+
+    Named differently from the real tool so these tests don't depend on
+    whether project_shell happens to be registered in the test config."""
+
+    async def _impl(args: dict, ctx: ToolContext) -> ToolResult:
+        ran.append("called")
+        return ToolResult.ok("ran a command")
+
+    app.state.tool_registry.register(
+        Tool(
+            name="pretend_shell",
+            description="stands in for project_shell",
+            schema={"type": "object", "properties": {}},
+            callable=_impl,
+            default_bucket=ApprovalBucket.AUTO,
+        )
+    )
+
+
+async def test_a_firing_cannot_run_an_ungranted_tool(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reported bug. Best behaviour: the model asks for the shell, the
+    gateway refuses, nothing runs. So: the callable must not fire."""
+    ran: list[str] = []
+    _register_pretend_shell(app, ran)
+
+    calls = iter(
+        [
+            _fake_completion(tool_calls=[make_tool_call("c1", "pretend_shell", {})]),
+            _fake_completion(content="Reminder: check your emails."),
+        ]
+    )
+
+    async def fake(**kwargs: Any) -> Any:
+        return next(calls)
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    await app.state.cron_runner.fire(
+        CronJob(
+            id="nogrant",
+            name="reminder",
+            message="Remind me to check my emails",
+            schedule=CronSchedule(kind="every", every_secs=60),
+        )
+    )
+
+    assert ran == [], "an ungranted tool ran inside a cron firing"
+
+
+async def test_a_grant_makes_the_tool_reachable_again(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half. Least privilege that can't be widened would just
+    break monitoring crons, so the grant has to actually work."""
+    ran: list[str] = []
+    _register_pretend_shell(app, ran)
+
+    calls = iter(
+        [
+            _fake_completion(tool_calls=[make_tool_call("c1", "pretend_shell", {})]),
+            _fake_completion(content="build is green"),
+        ]
+    )
+
+    async def fake(**kwargs: Any) -> Any:
+        return next(calls)
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    await app.state.cron_runner.fire(
+        CronJob(
+            id="granted",
+            name="build watch",
+            message="Check whether the build is green and tell me.",
+            schedule=CronSchedule(kind="every", every_secs=60),
+            extra_tools=["pretend_shell"],
+        )
+    )
+
+    assert ran == ["called"], "an explicitly granted tool was still withheld"
+
+
+async def test_a_withheld_tool_is_not_reported_as_hallucinated(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the model is TOLD matters as much as what it can do. Calling a
+    withheld tool "likely a hallucinated call" is a lie, and it hides the
+    operator-actionable fact that a grant is missing (Principles 8 + 11).
+
+    Best behaviour: the error names the restriction and the grant. So the
+    assert looks for that, and for the absence of the hallucination line."""
+    ran: list[str] = []
+    _register_pretend_shell(app, ran)
+
+    seen: list[dict[str, Any]] = []
+    calls = iter(
+        [
+            _fake_completion(tool_calls=[make_tool_call("c1", "pretend_shell", {})]),
+            _fake_completion(content="I couldn't do that part."),
+        ]
+    )
+
+    async def fake(**kwargs: Any) -> Any:
+        seen.append(kwargs)
+        return next(calls)
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    await app.state.cron_runner.fire(
+        CronJob(
+            id="explain",
+            name="reminder",
+            message="Remind me to check my emails",
+            schedule=CronSchedule(kind="every", every_secs=60),
+        )
+    )
+
+    # The tool result is fed back as a message on the second call.
+    tool_msgs = [
+        m for kwargs in seen for m in kwargs.get("messages", []) if m.get("role") == "tool"
+    ]
+    blob = " ".join(str(m.get("content", "")) for m in tool_msgs)
+
+    assert tool_msgs, f"no tool result was fed back to the model: {seen}"
+    assert "hallucinat" not in blob.lower(), f"a withheld tool was blamed on the model: {blob}"
+    assert "extra_tools" in blob, f"the error does not name the grant needed: {blob}"
+
+
+async def test_the_capability_block_a_firing_reads_omits_withheld_tools(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restricting the wire surface but still advertising the tool would be
+    an invitation to fail. The system prompt and the tools array both come
+    off the same restricted view, so check the prompt the model saw."""
+    ran: list[str] = []
+    _register_pretend_shell(app, ran)
+
+    seen: list[dict[str, Any]] = []
+
+    async def fake(**kwargs: Any) -> Any:
+        seen.append(kwargs)
+        return _fake_completion(content="Reminder: check your emails.")
+
+    monkeypatch.setattr("gateway.router.litellm.acompletion", fake)
+
+    await app.state.cron_runner.fire(
+        CronJob(
+            id="prompt",
+            name="reminder",
+            message="Remind me to check my emails",
+            schedule=CronSchedule(kind="every", every_secs=60),
+        )
+    )
+
+    system = next(m["content"] for m in seen[0]["messages"] if m.get("role") == "system")
+    wire_tools = {t["function"]["name"] for t in (seen[0].get("tools") or []) if "function" in t}
+
+    assert "pretend_shell" not in system, (
+        "the capability block advertises a tool the firing cannot call"
+    )
+    assert "pretend_shell" not in wire_tools
+    # send_message is the whole point of a scheduled job; it must survive.
+    assert "send_message" in system or "send_message" in wire_tools
+
+
+def test_firing_defaults_name_only_tools_that_actually_exist(app: Any) -> None:
+    """A typo in FIRING_DEFAULT_TOOLS would silently narrow the surface —
+    the allow-list ignores unknown names by design, so nothing would
+    complain. Anchor it against the live registry.
+
+    Tools registered conditionally (memory_search needs retrieval; the
+    project tools need a project registry) are exempted, since their
+    absence is a deployment fact, not a typo."""
+    from gateway.cron_runner import FIRING_DEFAULT_TOOLS
+
+    registered = set(app.state.tool_registry.list_names())
+    conditional = {"memory_search"}
+    missing = (FIRING_DEFAULT_TOOLS - registered) - conditional
+
+    assert not missing, (
+        f"FIRING_DEFAULT_TOOLS names tools that are not registered: {sorted(missing)}"
+    )

@@ -473,3 +473,137 @@ async def test_an_interval_cron_result_has_no_confirmation_noise(svc: CronServic
 
     assert not res.is_error
     assert "Tell the user this fires" not in res.payload
+
+
+# --------------------------------------------------------------- extra_tools grants
+#
+# Firings run on a reduced tool surface (see cron_runner.FIRING_DEFAULT_TOOLS).
+# `extra_tools` is how a cron that genuinely needs a shell or the network says
+# so. These pin the tool-layer half: parsing, persistence, and visibility.
+
+
+async def test_cron_add_stores_extra_tools(svc: CronService) -> None:
+    tool = _tools()["cron_add"]
+    result = await tool.callable(
+        {
+            "text": "Check whether the build is green and tell me.",
+            "schedule_spec": "every 30m",
+            "extra_tools": ["project_shell"],
+        },
+        _ctx(svc),
+    )
+    assert not result.is_error, result.payload
+    assert svc.list()[0].extra_tools == ["project_shell"]
+
+
+async def test_cron_add_defaults_to_no_grant(svc: CronService) -> None:
+    """A plain reminder must not acquire a surface by accident."""
+    tool = _tools()["cron_add"]
+    await tool.callable(
+        {"text": "Remind me to check my emails", "schedule_spec": "in 15 minutes"},
+        _ctx(svc),
+    )
+    assert svc.list()[0].extra_tools == []
+
+
+async def test_cron_add_accepts_a_bare_string_grant(svc: CronService) -> None:
+    """Models routinely send a scalar for an array-typed field. Refusing it
+    costs a turn and teaches nothing; coercing is the same call the todowrite
+    fumble-trap fix made."""
+    tool = _tools()["cron_add"]
+    result = await tool.callable(
+        {
+            "text": "Poll the deploy and tell me",
+            "schedule_spec": "every 10m",
+            "extra_tools": "http_get",
+        },
+        _ctx(svc),
+    )
+    assert not result.is_error, result.payload
+    assert svc.list()[0].extra_tools == ["http_get"]
+
+
+async def test_cron_add_rejects_a_malformed_grant_rather_than_dropping_it(
+    svc: CronService,
+) -> None:
+    """A grant that silently didn't apply is worse than a failed call: the
+    firing would fail later for a reason the model can't connect back."""
+    tool = _tools()["cron_add"]
+    result = await tool.callable(
+        {
+            "text": "Poll the deploy",
+            "schedule_spec": "every 10m",
+            "extra_tools": [{"name": "http_get"}],
+        },
+        _ctx(svc),
+    )
+    assert result.is_error
+    assert "extra_tools" in result.payload
+
+
+async def test_cron_update_replaces_the_grant_list(svc: CronService) -> None:
+    """Replacement, not merge — otherwise revoking is impossible."""
+    add = _tools()["cron_add"]
+    update = _tools()["cron_update"]
+    await add.callable(
+        {
+            "text": "Poll the deploy",
+            "schedule_spec": "every 10m",
+            "extra_tools": ["http_get", "project_shell"],
+        },
+        _ctx(svc),
+    )
+    job_id = svc.list()[0].id
+
+    result = await update.callable({"id": job_id, "extra_tools": ["http_get"]}, _ctx(svc))
+    assert not result.is_error, result.payload
+    job = svc.get(job_id)
+    assert job is not None and job.extra_tools == ["http_get"]
+
+
+async def test_cron_list_shows_grants(svc: CronService) -> None:
+    """ "What can this unattended job reach" is the audit question, and it is
+    otherwise invisible without opening cron.json."""
+    add = _tools()["cron_add"]
+    await add.callable(
+        {
+            "text": "Poll the deploy",
+            "schedule_spec": "every 10m",
+            "extra_tools": ["project_shell"],
+        },
+        _ctx(svc),
+    )
+    out = await _tools()["cron_list"].callable({}, _ctx(svc))
+    assert "project_shell" in out.payload
+
+
+async def test_extra_tools_survives_a_reload_from_disk(svc: CronService, tmp_path: Path) -> None:
+    """The grant lives in cron.json; a gateway restart must not widen or
+    narrow it."""
+    await _tools()["cron_add"].callable(
+        {
+            "text": "Poll the deploy",
+            "schedule_spec": "every 10m",
+            "extra_tools": ["http_get"],
+        },
+        _ctx(svc),
+    )
+    reopened = CronService(tmp_path / "cron.json")
+    assert reopened.list()[0].extra_tools == ["http_get"]
+
+
+def test_a_cron_written_before_grants_existed_loads_with_no_grant(
+    tmp_path: Path,
+) -> None:
+    """Every cron on disk before 2026-08-19 lacks the field. Absent must
+    read as "no grant" — the safe direction — and must not fail the load."""
+    path = tmp_path / "cron.json"
+    path.write_text(
+        '{"jobs": [{"id": "old1", "name": "n", "message": "m", '
+        '"schedule": {"kind": "every", "every_secs": 60}}]}',
+        encoding="utf-8",
+    )
+    svc = CronService(path)
+    jobs = svc.list()
+    assert len(jobs) == 1, f"an old cron failed to load: {jobs}"
+    assert jobs[0].extra_tools == []

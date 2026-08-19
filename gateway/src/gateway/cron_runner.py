@@ -45,6 +45,59 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
+FIRING_DEFAULT_TOOLS: frozenset[str] = frozenset(
+    {
+        # The point of a scheduled job: tell the user something.
+        "send_message",
+        # Reads. Can't damage anything, and a monitoring cron needs them
+        # (U2 watches a status file via read_file).
+        "read_file",
+        "list_directory",
+        "glob_search",
+        "grep_repo",
+        "git_status",
+        "git_diff",
+        "list_capabilities",
+        "memory_search",
+        "spec_list",
+        "spec_read",
+        "cron_list",
+        "todo_list",
+        "learn_list",
+        # The user's own lists. Reversible, visible, and theirs.
+        "todo_add",
+        "todo_done",
+        "todo_remove",
+        # Plan bookkeeping, internal to the turn.
+        "todowrite",
+    }
+)
+"""Tools a cron firing may use without an explicit grant.
+
+A firing runs with nobody watching. On 2026-08-17 a reminder's firing ran
+``project_shell`` on the operator's hub; the prompt-level fix was tried
+first and the symptom recurred on 2026-08-19 with correctly-authored text,
+so the surface itself is what has to be bounded (least privilege, not
+intent classification — earlier attempts to categorise "remind vs task"
+and "say vs do" were rejected as false dichotomies).
+
+What's deliberately NOT here, and why each needs ``extra_tools``:
+
+* ``project_shell`` / ``run_tests`` — arbitrary command execution.
+* ``write_file`` / ``edit_file`` / ``git_commit`` — mutate a repo.
+* ``http_get`` / ``web_search`` — reach the network.
+* ``learn_add`` / ``learn_remove`` — write a global lesson injected into
+  every future prompt, so a bad firing poisons later turns.
+* the cron mutators (``cron_add``, ``cron_update``, ``cron_remove``,
+  ``cron_pause``, ``cron_resume``) — the framing already tells a firing
+  not to reschedule itself; this makes the prose enforceable. A cron that
+  genuinely manages other crons must say so.
+
+``U1``'s own example ("a briefing of open PRs") needs a grant under this
+rule. That's a deliberate behaviour change, not an oversight: the briefing
+is a world-touching job and should be declared as one."""
+
+
 class CronRunner:
     """Executes a cron firing against the agent loop.
 
@@ -272,9 +325,18 @@ class CronRunner:
         almost exactly, minus the request-body extras and stream
         wrapping. The agent loop module owns the real behaviour.
         """
+        # Bound the surface FIRST, so every downstream use of the
+        # NOTE: see _firing_registry for the least-privilege rationale.
+        # registry — the capability block the model reads, the tools
+        # array on the wire, and the loop's own lookup/approval path —
+        # sees the same restricted view. Deriving it once here is the
+        # point: three call sites that each had to remember to filter
+        # would be three chances to forget.
+        firing_registry = self._firing_registry(job)
+
         # System prompt: capability block + identity/memory + the
         # cron-runner framing.
-        capability_block = build_capability_block(self._tool_registry)
+        capability_block = build_capability_block(firing_registry)
         framing = _build_cron_framing(job)
         system_prefix = f"{capability_block}\n\n{framing}"
         if self._memory is not None:
@@ -343,7 +405,7 @@ class CronRunner:
         # body so the model can call them. Same shape the HTTP
         # endpoint uses via ``_inject_fitt_tools``.
         request_body_extras: dict[str, Any] = {
-            "tools": [t.to_openai_schema() for t in self._tool_registry.list_all()],
+            "tools": [t.to_openai_schema() for t in firing_registry.list_all()],
             "tool_choice": "auto",
         }
 
@@ -362,7 +424,7 @@ class CronRunner:
                 messages=messages,
                 request_body_extras=request_body_extras,
                 alias_router=alias_router,
-                tool_registry=self._tool_registry,
+                tool_registry=firing_registry,
                 approval=approval_for_firing,
                 tool_ctx=tool_ctx,
                 prompt_resolver=self._prompt_resolver,
@@ -378,12 +440,47 @@ class CronRunner:
             messages=messages,
             request_body_extras=request_body_extras,
             alias_router=alias_router,
-            tool_registry=self._tool_registry,
+            tool_registry=firing_registry,
             approval=approval_for_firing,
             tool_ctx=tool_ctx,
             session_key=session_key,
             artifact_store=self._artifact_store,
         )
+
+    def _firing_registry(self, job: CronJob) -> ToolRegistry:
+        """The tool surface this firing gets: safe defaults + its grants.
+
+        Least privilege for unattended work. A grant naming a tool that
+        isn't registered on this deployment is ignored rather than an
+        error — the same posture the rest of the harness takes toward
+        conditionally-registered tools like ``memory_search``.
+
+        Logged at info: the surface a firing ran with is the first thing
+        you want when a scheduled job did something surprising, and it is
+        otherwise invisible after the fact."""
+        granted = set(job.extra_tools)
+        allowed = FIRING_DEFAULT_TOOLS | granted
+        view = self._tool_registry.restricted_to(
+            allowed,
+            reason=(
+                "scheduled jobs run unattended, so they get a reduced "
+                "tool surface. The operator can grant it to this cron "
+                f"by adding it to extra_tools on cron {job.id!r}"
+            ),
+        )
+
+        withheld = sorted(set(self._tool_registry.list_names()) - set(view.list_names()))
+        if withheld:
+            _log.info(
+                "cron.firing_tools_restricted",
+                extra={
+                    "cron_id": job.id,
+                    "granted": sorted(granted),
+                    "withheld_count": len(withheld),
+                    "withheld_head": withheld[:8],
+                },
+            )
+        return view
 
     def _default_alias(self) -> str:
         """Resolve job.agent_alias='' to the gateway's default.

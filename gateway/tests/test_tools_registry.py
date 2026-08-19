@@ -425,3 +425,90 @@ def test_per_client_defaults_missing_client_falls_through() -> None:
     )
     # Client 'telegram' isn't in the baked map → tool default wins.
     assert reg.resolve_bucket(reg.lookup("project_shell"), "telegram", "main") == ApprovalBucket.ASK
+
+
+# --------------------------------------------------------------- restricted views
+#
+# `restricted_to` exists so a cron firing runs on a reduced tool surface
+# (2026-08-17: a reminder's firing ran project_shell unattended). Two
+# things have to hold or the fix is worse than the bug: the view must not
+# fork the approval state it shares with the parent, and a withheld tool
+# must be reported as withheld rather than as nonexistent.
+
+
+def test_restricted_view_exposes_only_the_allowed_tools() -> None:
+    reg = ToolRegistry()
+    reg.register(_mk("read_file"))
+    reg.register(_mk("project_shell"))
+
+    view = reg.restricted_to({"read_file"})
+
+    assert view.list_names() == ["read_file"]
+    assert not view.has("project_shell")
+    # The parent is untouched — a view is a lens, not a mutation.
+    assert reg.has("project_shell")
+
+
+def test_restricted_view_ignores_names_that_are_not_registered() -> None:
+    """The allow-list is written against tools that may or may not exist on
+    a given deployment (memory_search needs retrieval configured)."""
+    reg = ToolRegistry()
+    reg.register(_mk("read_file"))
+
+    view = reg.restricted_to({"read_file", "memory_search"})
+
+    assert view.list_names() == ["read_file"]
+
+
+def test_restricted_view_shares_session_trust_with_its_parent() -> None:
+    """Both directions. A copy would silently diverge, which is the bug
+    class that let a cron runner keep an un-wrapped approval middleware."""
+    reg = ToolRegistry()
+    reg.register(_mk("read_file"))
+    view = reg.restricted_to({"read_file"})
+
+    reg.trust_for_session("s1", "read_file")
+    assert view.is_trusted_for_session("s1", "read_file")
+
+    view.trust_for_session("s2", "read_file")
+    assert reg.is_trusted_for_session("s2", "read_file")
+
+
+def test_restricted_view_keeps_the_parents_policy_and_baked_in_buckets() -> None:
+    reg = ToolRegistry(ToolPolicy(per_client={"telegram": {"read_file": ApprovalBucket.BLOCK}}))
+    reg.register(
+        _mk("read_file", ApprovalBucket.AUTO),
+        per_client_defaults={"webui": ApprovalBucket.BLOCK},
+    )
+    view = reg.restricted_to({"read_file"})
+    tool = view.lookup("read_file")
+
+    assert view.policy is reg.policy
+    # Operator config still wins here...
+    assert view.resolve_bucket(tool, client="telegram", session_key="s") is ApprovalBucket.BLOCK
+    # ...and so does the tool author's baked-in per-client default.
+    assert view.resolve_bucket(tool, client="webui", session_key="s") is ApprovalBucket.BLOCK
+
+
+def test_a_withheld_tool_reports_why_it_is_absent() -> None:
+    reg = ToolRegistry()
+    reg.register(_mk("project_shell"))
+    view = reg.restricted_to(set(), reason="scheduled jobs run unattended")
+
+    assert view.absence_reason("project_shell") == "scheduled jobs run unattended"
+    with pytest.raises(UnknownTool):
+        view.lookup("project_shell")
+
+
+def test_a_tool_that_never_existed_has_no_absence_reason() -> None:
+    """The distinction the agent loop's error message turns on: invented
+    name vs withheld name. Conflating them would tell the model to give up
+    when an operator could grant it."""
+    reg = ToolRegistry()
+    reg.register(_mk("read_file"))
+    view = reg.restricted_to({"read_file"})
+
+    assert view.absence_reason("frobnicate") is None
+    # And an unrestricted registry never claims anything is withheld.
+    assert reg.absence_reason("read_file") is None
+    assert reg.absence_reason("frobnicate") is None

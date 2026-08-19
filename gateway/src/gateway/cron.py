@@ -35,7 +35,8 @@ import re
 import secrets
 import threading
 import time
-from dataclasses import asdict, dataclass
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Literal
@@ -339,6 +340,21 @@ class CronJob:
     Applied on top of the Phase 4 approval middleware, not
     instead of it — the deny list still short-circuits."""
 
+    extra_tools: list[str] = field(default_factory=list)
+    """World-touching tools this cron is granted, on top of the safe
+    default set (:data:`gateway.cron_runner.FIRING_DEFAULT_TOOLS`).
+
+    Empty means the firing can notify, read, and manage the user's own
+    lists — nothing that mutates a repo, runs a command, or reaches the
+    network. A firing runs with nobody watching, and on 2026-08-17 a
+    reminder's firing ran ``project_shell`` on the operator's hub; the
+    prompt-level fix was tried first and the symptom recurred with
+    correctly-authored text, so the surface is what has to be bounded.
+
+    Independent of ``approval_mode``. Auto-approve means "don't prompt
+    me", not "widen what's reachable" — conflating them is how a shell
+    command ran unattended in the first place."""
+
     agent_alias: str = ""
     """Empty → use the gateway's default alias at fire time.
     Resolving late means flipping ``aliases.fitt-default`` in
@@ -429,6 +445,9 @@ class CronService:
         enabled: bool | None = None,
         silent: bool | None = None,
         approval_mode: ApprovalModeOverride | None = None,
+        # ``Sequence`` rather than ``list`` because ``list`` resolves to
+        # this class's own ``list`` method inside the class body.
+        extra_tools: Sequence[str] | None = None,
         agent_alias: str | None = None,
         last_run_ts: float | None = None,
         last_status: LastStatus | None = None,
@@ -456,6 +475,11 @@ class CronService:
                 job.silent = silent
             if approval_mode is not None:
                 job.approval_mode = approval_mode
+            if extra_tools is not None:
+                # Whole-list replacement, not a merge: a grant list is
+                # a security boundary and "add-only" semantics would
+                # make revoking one impossible through this path.
+                job.extra_tools = list(extra_tools)
             if agent_alias is not None:
                 job.agent_alias = agent_alias
             if last_run_ts is not None:
@@ -587,6 +611,9 @@ def _deserialise(data: dict[str, object]) -> CronJob:
         enabled=bool(data.get("enabled", True)),
         silent=bool(data.get("silent", False)),
         approval_mode=_as_approval_mode(data.get("approval_mode", "")),
+        # Missing on every cron written before 2026-08-19; absent means
+        # "no grant", which is the safe reading for an old job.
+        extra_tools=_as_str_list(data.get("extra_tools", [])),
         agent_alias=_as_str(data.get("agent_alias", "")),
         session_key=_as_str(data.get("session_key", "")),
         created_by_client=_as_str(data.get("created_by_client", "")),
@@ -651,6 +678,24 @@ def _as_approval_mode(v: object) -> ApprovalModeOverride:
     if isinstance(v, str) and v in {"", "auto"}:
         return v  # type: ignore[return-value]
     raise ValueError(f"invalid approval_mode: {v!r}")
+
+
+def _as_str_list(v: object) -> list[str]:
+    """Parse a list-of-strings field, tolerating null as empty.
+
+    Strict about element type: a grant list is a security-relevant field,
+    so a malformed entry should fail the load loudly rather than be
+    coerced into something that might match a tool name."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError(f"expected a list of strings, got {type(v).__name__}")
+    out: list[str] = []
+    for i, item in enumerate(v):
+        if not isinstance(item, str):
+            raise ValueError(f"element {i} is {type(item).__name__}, expected str")
+        out.append(item)
+    return out
 
 
 def _as_last_status(v: object) -> LastStatus:

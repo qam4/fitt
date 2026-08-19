@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -279,6 +280,9 @@ class ToolRegistry:
         # ``project_shell``: ask on CLI/Telegram/IDE,
         # block on Open WebUI.
         self._per_tool_baked_in: dict[str, dict[str, ApprovalBucket]] = {}
+        # tool_name -> why this view doesn't expose it. Only populated on
+        # a restricted view; see restricted_to / absence_reason.
+        self._withheld: dict[str, str] = {}
 
     @property
     def policy(self) -> ToolPolicy:
@@ -336,6 +340,61 @@ class ToolRegistry:
             # a replacement can't inherit stale approval.
             for trusted in self._session_trust.values():
                 trusted.discard(name)
+
+    def restricted_to(
+        self,
+        allowed: Collection[str],
+        *,
+        reason: str = "withheld from this restricted tool surface",
+    ) -> ToolRegistry:
+        """A view exposing only ``allowed``, sharing this registry's
+        policy, baked-in per-client defaults, and session trust.
+
+        For contexts that should not get the whole tool surface. The
+        motivating one is a cron firing: a scheduled session runs with
+        nobody watching, and on 2026-08-17 a reminder's firing ran
+        ``project_shell`` on the operator's hub. Restricting the surface is
+        the only robust fix — prompt wording was tried first and the
+        symptom recurred with correctly-authored text.
+
+        Deliberately a *view*, not a fresh registry: session trust and the
+        baked-in per-client buckets are shared by reference, so an approval
+        granted through one is honoured by the other and a policy that
+        blocks a tool for a client still blocks it here. A copy would
+        silently diverge — which is exactly the bug class that let a cron
+        runner keep an un-wrapped approval middleware (see
+        ``e2e_driver.auto_approve_for_eval``).
+
+        Unknown names in ``allowed`` are ignored rather than raising: the
+        allow-list is a policy statement written against tools that may or
+        may not be registered on a given deployment (``memory_search``
+        only exists when retrieval is configured), and a missing tool is a
+        deployment fact, not a caller error.
+
+        ``reason`` is recorded for every withheld tool and surfaced by
+        :meth:`absence_reason`, so a caller that tries one gets told why
+        rather than being told it doesn't exist."""
+        view = ToolRegistry(self._policy)
+        # Share, don't copy — see the docstring.
+        view._session_trust = self._session_trust
+        view._per_tool_baked_in = self._per_tool_baked_in
+        keep = set(allowed)
+        view._tools = {name: t for name, t in self._tools.items() if name in keep}
+        view._withheld = {name: reason for name in self._tools if name not in keep}
+        return view
+
+    def absence_reason(self, name: str) -> str | None:
+        """Why ``name`` isn't callable here, when the answer is "it exists
+        but this view withholds it". ``None`` otherwise.
+
+        The distinction matters to the caller. A model that calls a tool
+        which was never registered has invented it; a model that calls one
+        this *view* withholds read a real name somewhere and is being
+        refused by policy. Reporting the second as the first tells the
+        model to stop trying — which is wrong, and hides an operator-
+        actionable fact (a grant is missing). Principles 8 and 11: be
+        honest about capabilities, and fail loud rather than misattribute."""
+        return self._withheld.get(name)
 
     def lookup(self, name: str) -> Tool:
         """Return the tool entry or raise ``UnknownTool``."""

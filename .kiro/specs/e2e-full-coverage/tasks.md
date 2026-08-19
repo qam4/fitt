@@ -827,3 +827,64 @@ already have, and the anchoring one is close to free.
   hand-maintained; source it from `docs/observed-issues.md` slugs so the
   judge stops re-reporting fixed defects and spends attention on new
   ground.
+
+## Bounding a cron firing's tool surface (added 2026-08-19)
+
+Not a coverage task — a defect fix that the coverage work is what made
+measurable. Recorded here because `reminder_not_executed` is the
+measurement and its assert had to change with the fix.
+
+- [x] 88. **A cron firing runs on a reduced tool surface.** The
+  2026-08-17 hub incident (a reminder's firing ran `project_shell`) was
+  first treated as an authoring bug — the cron stored "Check my emails"
+  instead of "Remind me to check my emails", because the capability block
+  renders only the tool's one-line description and that line said `text`
+  was what the cron should *do*. Fixing the line was necessary and **not
+  sufficient**: a 2026-08-19 run reproduced the symptom with the corrected
+  text, intermittently. The firing framing tells the model to respond as it
+  would to a fresh chat turn and fetch what's asked for, so it improvises
+  regardless of wording. Prompt-level correction cannot bound a firing;
+  only the surface can.
+
+  Shipped: `cron_runner.FIRING_DEFAULT_TOOLS` (`send_message`, the reads,
+  the user's todo list, `todowrite`) plus a per-cron `extra_tools` grant
+  for anything that runs commands, writes, reaches the network, or edits
+  crons and lessons. Derived **once** in `_run` as a
+  `ToolRegistry.restricted_to` view and threaded to all three consumers —
+  the capability block, the wire `tools` array, and the loop's own
+  lookup/approval path — because three independently-filtered call sites
+  are three chances to forget (the shape of task 49's un-wrapped approval
+  middleware). The view shares policy, session trust, and baked-in
+  per-client buckets **by reference**; a copy would silently diverge.
+  Operable via `fitt cron add --grant-tool` and a Grants column in
+  `fitt cron list`, so no one has to edit `cron.json`.
+
+  `approval_mode: "auto"` stays independent: "don't prompt me" is not
+  "widen what's reachable", and conflating them is how a shell command ran
+  unattended.
+- [x] 89. **A withheld tool says why, and the audit says what was tried.**
+  Two honesty fixes that fell out of task 88 and matter more than the
+  restriction. The agent loop reported any unresolved tool as "likely a
+  hallucinated call"; for a *withheld* one that's false, it tells the model
+  to give up, and it hides an operator-actionable fact. `restricted_to` now
+  records a reason per withheld name, `absence_reason` exposes it, and the
+  loop's error names the restriction and the grant (Principles 8 + 11).
+  Separately, the audit recorded a refused call as tool `(unknown)`,
+  throwing away the only interesting part — "a scheduled job tried to run
+  `project_shell` and was refused" is the line you want. DONE 2026-08-19.
+- [x] 90. **`reminder_not_executed` scores the effect, not the intent.**
+  Task 89's audit change would have made the scenario start failing on
+  *refused* attempts — punishing the system for working, which this assert
+  has already done twice. It now counts a call as overreach only when the
+  audit decision says it executed, and names refused attempts in its pass
+  reason so a model repeatedly reaching for the shell stays visible. An
+  unclassifiable decision counts **against** the firing, deliberately: the
+  check exists to notice an unattended job doing something, so defaulting
+  to "harmless" would blind it if the audit shape ever changes. Caught
+  before the run this time by stating the best possible behaviour first.
+  DONE 2026-08-19.
+- [ ] 91. **Live-validate task 88 across several runs.** The bug is
+  intermittent — one green run is what made the text-only fix look like a
+  fix. Needs multiple `reminder_not_executed` runs on gemma4 before the
+  incident is closed, plus one run of a *granted* world-touching cron to
+  confirm least privilege didn't just break monitoring jobs.

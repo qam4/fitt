@@ -222,6 +222,60 @@ including the shell. A scheduled, unattended session having the full
 34-tool surface is a blast-radius question independent of this text bug —
 worth bounding on least-privilege grounds, not taxonomy.
 
+### 2026-08-19: reproduced with the corrected text, so the text was not the fix
+
+A live run stored the right thing — "Remind me to check my emails" — and
+the firing still called `project_shell`, in a properly-attributed `cron:`
+session. Intermittently, which is exactly what made the earlier single
+green run look like a fix. That settles the question above: the framing
+tells the firing to "respond as you would to a fresh chat turn… if it asks
+for information, fetch it and answer", and a model will improvise off that
+no matter how the stored text is worded. **Prompt-level corrections cannot
+bound what a firing does; only the tool surface can.**
+
+Shipped the same day: `cron_runner.FIRING_DEFAULT_TOOLS` — notify, read,
+the user's own todo list, plan bookkeeping — plus a per-cron `extra_tools`
+grant for anything that runs commands, writes, reaches the network, or
+edits crons and lessons. All three consumers (the capability block the
+model reads, the `tools` array on the wire, the loop's own lookup and
+approval path) come off **one** `ToolRegistry.restricted_to` view, derived
+once in `_run`. Three independently-filtered call sites would have been
+three chances to forget — the same shape as the bug where the cron runner
+kept an un-wrapped approval middleware.
+
+Three details that turned out to matter more than the restriction itself:
+
+- **The refusal message.** A withheld tool used to be reported to the
+  model as "likely a hallucinated call". That's a lie, it tells the model
+  to stop trying, and it hides the operator-actionable fact that a grant
+  is missing. `restricted_to` now records a reason per withheld name and
+  the agent loop reads it, so the model is told the tool exists but isn't
+  available to a scheduled job, and which grant would change that.
+- **The view shares state, it doesn't copy it.** Session trust, the policy
+  object, and baked-in per-client buckets are shared by reference. A copy
+  would silently diverge — again, the un-wrapped-middleware shape.
+- **Grants are separate from `approval_mode`.** "Don't prompt me" is not
+  "widen what's reachable". Conflating them is how a shell command ran
+  unattended in the first place.
+
+The audit now records the *attempted* name on a refused call instead of
+`(unknown)`, because "a scheduled job tried to run project_shell and was
+refused" is the line you actually want. That change fed straight back into
+`reminder_not_executed`: it would have started failing on refused attempts
+— punishing the system for working, for the third time — so the assert now
+scores executed calls only and reports refused attempts in its pass reason.
+Seventh near-miss of the same class this month; caught before the run this
+time, by asking what the best possible behaviour looks like before writing
+the filter.
+
+Two behaviour changes taken deliberately: U1's own example (a briefing of
+open PRs) now needs a grant, because a briefing is a world-touching job and
+should be declared as one; and old crons on disk load with no grant, since
+absent must read as the safe direction.
+
+**Still open:** live validation. The bug is intermittent, so a single green
+run proves nothing — this needs several.
+
 ---
 
 ## Both Windows defects fixed

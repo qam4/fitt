@@ -283,6 +283,13 @@ def extract_usage(response: Any) -> tuple[int, int]:
     return 0, 0
 
 
+def _attempted_name(call: dict[str, Any]) -> str:
+    """The tool name in a call payload, whether or not it resolves."""
+    fn = call.get("function") or {}
+    name = fn.get("name") if isinstance(fn, dict) else None
+    return name if isinstance(name, str) else ""
+
+
 def tool_call_args(call: dict[str, Any]) -> dict[str, Any]:
     """Parse the args dict out of an OpenAI tool_call payload.
     Best-effort — the loop itself tolerates malformed args."""
@@ -375,11 +382,28 @@ async def execute_tool_call(
     try:
         tool = registry.lookup(name)
     except UnknownTool:
-        result = ToolResult.error(
-            f"tool {name!r} is not registered; this is likely a "
-            f"hallucinated call. Try again using only the tools "
-            f"listed in the capabilities block."
-        )
+        # A withheld tool is a different failure from an invented one.
+        # ``absence_reason`` is non-None only when the registry is a
+        # restricted view that deliberately excludes this name (today:
+        # a cron firing's least-privilege surface). Saying
+        # "hallucinated" there would be a lie, and would hide the fact
+        # that an operator can fix it with a grant.
+        reason = None
+        absence_reason = getattr(registry, "absence_reason", None)
+        if callable(absence_reason):
+            reason = absence_reason(name)
+        if reason:
+            result = ToolResult.error(
+                f"tool {name!r} exists but is not available in this "
+                f"session: {reason}. Do not retry it — say what you "
+                f"could not do and why."
+            )
+        else:
+            result = ToolResult.error(
+                f"tool {name!r} is not registered; this is likely a "
+                f"hallucinated call. Try again using only the tools "
+                f"listed in the capabilities block."
+            )
         record_tool_call_executed(
             turns,
             turn_id,
@@ -738,7 +762,12 @@ async def run_agent_loop(
                         new_audit_entry(
                             session_key=session_key,
                             client=tool_ctx.client,
-                            tool=tool.name if tool else "(unknown)",
+                            # Record the NAME that was attempted even when
+                            # no tool was resolved. "a scheduled job tried
+                            # to run project_shell and was refused" is the
+                            # audit line you want; "(unknown)" throws away
+                            # the only interesting part.
+                            tool=tool.name if tool else (_attempted_name(call) or "(unknown)"),
                             args=tool_call_args(call),
                             decision=decision.reason,
                             ok=not result.is_error,
