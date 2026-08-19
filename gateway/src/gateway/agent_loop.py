@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -198,8 +199,47 @@ def assistant_message_from_response(response: Any) -> dict[str, Any] | None:
     return msg if isinstance(msg, dict) else None
 
 
+_TEMPLATE_TOKEN_RE = re.compile(
+    r"""<\|[a-z0-9_\-]{1,40}\|?>|\[/?(?:INST|SYS|s)\]|<<(?:SYS|/SYS)>>""",
+    re.IGNORECASE,
+)
+"""Chat-template control tokens that sometimes escape into content.
+
+Not an attempt to enumerate every template dialect — just the shapes
+observed leaking, plus the two common Llama-family ones. Deliberately
+narrow: a token must look like a delimiter, so ordinary prose containing
+``<`` is untouched."""
+
+
+def strip_template_tokens(text: str) -> str:
+    """Remove chat-template control tokens from a user-visible reply.
+
+    ``<|tool_response>`` reached a real user five times this month as the
+    ENTIRE reply after a successful `cron_add` — the reminder was created,
+    so every objective check passed on the side effect, and only the
+    frontier judge ever noticed the user was shown a raw delimiter. It's
+    been the most-reproduced open item in observed-issues.
+
+    Whether the model emits it or FITT fails to strip it was never
+    separated, and this is deliberately agnostic: a reply that is only
+    template tokens is garbage either way, and suppressing it here — at
+    the single point every non-streaming reply passes through — costs one
+    regex and cannot make a good reply worse.
+
+    Returns ``""`` when nothing survives, which callers already handle:
+    an empty reply reads as "no reply" rather than as noise, and the
+    delivered side effect still stands on its own."""
+    if not text or ("<" not in text and "[" not in text):
+        return text
+    return _TEMPLATE_TOKEN_RE.sub("", text).strip()
+
+
 def extract_assistant_text(response: Any) -> str:
-    """Pull the assistant's text from a non-streaming response."""
+    """Pull the assistant's text from a non-streaming response.
+
+    Template control tokens are stripped here rather than at each call
+    site: this is the one funnel every non-streaming reply passes
+    through, so a leak can't reappear via a path someone forgot."""
     dumped = response_to_dict(response)
     if not dumped:
         return ""
@@ -210,7 +250,19 @@ def extract_assistant_text(response: Any) -> str:
     if not isinstance(msg, dict):
         return ""
     content = msg.get("content")
-    return content if isinstance(content, str) else ""
+    if not isinstance(content, str):
+        return ""
+    cleaned = strip_template_tokens(content)
+    if cleaned != content:
+        _log.warning(
+            "agent_loop.template_token_stripped",
+            extra={
+                "original_len": len(content),
+                "cleaned_len": len(cleaned),
+                "head": content[:80],
+            },
+        )
+    return cleaned
 
 
 def extract_usage(response: Any) -> tuple[int, int]:

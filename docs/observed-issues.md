@@ -394,6 +394,51 @@ narration under large prompts — not a capability ceiling."
 Planning also made `skills` *worse*: flat failed it by never calling
 `read_file`; planned failed it with no reply at all.
 
+### Update 2026-08-19: the text fix was necessary, not sufficient
+
+First honest reproduction. With the session-scoped audit filter in place
+and the observation chain unit-tested, a run showed `project_shell` called
+inside a `cron:` session — the operator's original symptom, properly
+attributed for the first time.
+
+And the stored text was the **corrected** form,
+`"Remind me to check my emails"`. So fixing the authoring did not stop the
+firing from improvising: the framing still says "respond to the stored
+prompt the way you would respond to a fresh chat turn… if it asks for
+information, fetch it and answer", and gemma4 sometimes still reaches for a
+tool. It passed one run and failed the next, so the behaviour is
+**intermittent** — which is why calling it fixed after a single green run
+was premature.
+
+Consequence: bounding what a firing may do is no longer defence in depth,
+it is the actual fix. See the BACKLOG item. Prompt-level corrections to the
+stored text cannot stop a firing from reaching for tools; only the tool
+surface can.
+
+### Fixed 2026-08-19: the token leak and the unverifiable schedule
+
+Two of the smaller items from the requirements review, both verified live.
+
+**`<|tool_response>` no longer reaches the user.** Stripped in
+`extract_assistant_text` — the single funnel every non-streaming reply
+passes through, so a leak can't reappear by a path someone forgot. The
+regex targets delimiter shapes only (`<|…|>`, `[INST]`, `<<SYS>>`), so
+ordinary prose containing `<` or `[`, and code blocks, are untouched.
+Whether the model emitted it or FITT failed to strip it was never
+separated, and the fix is deliberately agnostic: a reply that is only
+template tokens is garbage either way. **Live result: sightings went 2 → 0
+and the judge scored 16/16, its first clean run** — the scenarios it used
+to fail were failing on exactly this token.
+
+**A one-shot cron now states the time it parsed.** The resolved timestamp
+was already in the tool result, in UTC ISO, and the model ignored it — a
+live reply said "for 15 minutes from now". The result now renders the fire
+time in the operator's own timezone and asks explicitly for it to be
+relayed. Live reply afterwards: "it will fire on Wednesday, Aug 19 at
+1:31 PM (Eastern Daylight Time)." Intervals and cron expressions get no
+hint, since "every 2h" is self-describing and there's no single instant to
+misread.
+
 ### Both causes, captured and fixed
 
 Re-ran with per-call args in the report. **Two** fumble-traps, not one.

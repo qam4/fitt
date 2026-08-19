@@ -14,6 +14,7 @@ field, which is why ``job.message`` assertions stay.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -400,3 +401,75 @@ def test_cron_add_uses_text_arg_not_message() -> None:
     assert "text" in schema["properties"]
     assert "message" not in schema["properties"]
     assert "text" in schema["required"]
+
+
+# ------------------------------------------- schedule confirmation
+#
+# A schedule the user can't verify is one they find out about by missing
+# it. FITT already had the parsing half of this bug ("remind me at 1 PM"
+# became 13:00 UTC and fired immediately); the [Current time] preamble
+# fixed that. Confirmation stayed broken: a live run replied "I've
+# scheduled a reminder ... for 15 minutes from now" with no absolute time.
+# Found again by a requirements review, 2026-08-17.
+
+
+async def test_a_one_shot_result_asks_the_model_to_state_the_local_time() -> None:
+    from gateway.cron import CronSchedule
+    from gateway.tools.cron_tools import _confirmation_hint
+
+    # 2026-08-17 21:57 UTC, the timestamp from the live run.
+    hint = _confirmation_hint(CronSchedule(kind="at", at_ts=1_787_003_858.0))
+
+    assert "Tell the user this fires" in hint
+    assert "check it's what they meant" in hint
+    # It must name a concrete instant. (Not "'in 15 minutes' not in hint" —
+    # the hint quotes that phrase as an example of what NOT to say, which
+    # made the first version of this assertion a false negative.)
+    assert re.search(r"\d{2}:\d{2}", hint), hint
+
+
+async def test_the_hint_renders_in_local_time_not_utc() -> None:
+    """UTC ISO was already in the result and got ignored; a human-readable
+    local rendering is the point."""
+    from datetime import datetime
+
+    from gateway.cron import CronSchedule
+    from gateway.tools.cron_tools import _confirmation_hint
+
+    ts = 1_787_003_858.0
+    expected = datetime.fromtimestamp(ts).astimezone().strftime("%H:%M")
+
+    assert expected in _confirmation_hint(CronSchedule(kind="at", at_ts=ts))
+
+
+async def test_intervals_and_cron_expressions_get_no_hint() -> None:
+    """ "every 2h" is self-describing — there's no single instant to
+    misread, so don't pad every result with boilerplate."""
+    from gateway.cron import CronSchedule
+    from gateway.tools.cron_tools import _confirmation_hint
+
+    assert _confirmation_hint(CronSchedule(kind="every", every_secs=7200)) == ""
+    assert _confirmation_hint(CronSchedule(kind="cron", cron_expr="0 9 * * *")) == ""
+    # Defensive: an 'at' with no timestamp must not raise.
+    assert _confirmation_hint(CronSchedule(kind="at", at_ts=None)) == ""
+
+
+async def test_cron_add_result_carries_the_confirmation(svc: CronService) -> None:
+    """End to end through the tool, since the hint is only useful if it
+    actually reaches the model's tool result."""
+    res = await _tools()["cron_add"].callable(
+        {"text": "Remind me to check my emails", "schedule_spec": "in 15 minutes"},
+        _ctx(svc),
+    )
+
+    assert not res.is_error
+    assert "Tell the user this fires" in res.payload
+
+
+async def test_an_interval_cron_result_has_no_confirmation_noise(svc: CronService) -> None:
+    res = await _tools()["cron_add"].callable(
+        {"text": "check the build", "schedule_spec": "every 2h"}, _ctx(svc)
+    )
+
+    assert not res.is_error
+    assert "Tell the user this fires" not in res.payload

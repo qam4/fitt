@@ -29,6 +29,16 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
+- **DONE 2026-08-19 — `<|tool_response>` no longer reaches the user.**
+  Stripped in `extract_assistant_text`, the one funnel every non-streaming
+  reply passes through. Delimiter shapes only, so prose and code blocks are
+  untouched. Live: sightings 2 → 0, and the judge scored 16/16 for the
+  first time — the scenarios it used to fail were failing on this token.
+- **DONE 2026-08-19 — a one-shot cron states the time it parsed.** The
+  resolved timestamp was already in the tool result as UTC ISO and the
+  model ignored it; it's now rendered in the operator's timezone with an
+  explicit ask to relay it. Live reply: "it will fire on Wednesday, Aug 19
+  at 1:31 PM (Eastern Daylight Time)."
 - **U2's silent monitor re-alerts forever (found by requirements review,
   2026-08-17).** "Ping me only when the state changes to done or failed"
   is unsatisfiable as specified: each firing is a fresh session with no
@@ -45,22 +55,30 @@ The curated ordering - the judgment call a tool can't make for you.
   minutes from now" with no absolute time, so a misparse is unverifiable
   until it fires at the wrong moment. The tool result already carries the
   resolved timestamp — the reply should echo it.
-- **Bound what a cron firing may do (from the 2026-08-17 hub incident).**
-  A reminder fired and ran `project_shell`. The *cause* was a one-line
-  prompt bug, now fixed and covered by the `reminder_not_executed`
-  scenario — but the blast radius is a separate question the fix doesn't
-  touch: a scheduled, unattended session currently gets the full ~34-tool
-  surface, and `approval_mode: "auto"` collapses ASK to AUTO for *every*
-  tool including the shell. So a mis-authored cron can run arbitrary
-  commands with nobody watching. Least privilege, not taxonomy: give a
-  firing a conservative default set (`send_message`, reads, cron/todo/
-  lessons state) and make anything that touches the world an explicit
-  grant at `cron_add` time. Then a wrong stored text produces "I can't do
-  that from a scheduled job" instead of a shell command. Note the earlier
-  attempts to classify intent (remind-vs-task, say-vs-do) were rejected as
-  false dichotomies — a reminder *is* a task, and saying *is* a doing; the
-  answerable question is what the job is permitted to do while you're
-  away.
+- **Bound what a cron firing may do — now the ACTUAL fix, not defence in
+  depth (2026-08-17 hub incident; escalated 2026-08-19).** A reminder fired
+  and ran `project_shell`. The authoring half — the cron storing "Check my
+  emails" instead of "Remind me to check my emails" — is fixed. But a
+  2026-08-19 run reproduced the symptom *with the corrected text*:
+  `project_shell` called in a `cron:` session, properly attributed. The
+  firing framing still says "respond as you would to a fresh chat turn… if
+  it asks for information, fetch it and answer", so the model improvises
+  anyway — intermittently, which is what made a single green run look like
+  a fix. **Prompt-level corrections to the stored text cannot stop a firing
+  reaching for tools; only the tool surface can.**
+
+  A scheduled, unattended session currently gets the full ~34-tool surface,
+  and `approval_mode: "auto"` collapses ASK to AUTO for *every* tool
+  including the shell. Least privilege, not taxonomy: give a firing a
+  conservative default set (`send_message`, reads, cron/todo/lessons state)
+  and make anything that touches the world an explicit grant at `cron_add`
+  time. Then a wrong stored text produces "I can't do that from a scheduled
+  job" instead of a shell command. Note the earlier attempts to classify
+  intent (remind-vs-task, say-vs-do) were rejected as false dichotomies — a
+  reminder *is* a task, and saying *is* a doing; the answerable question is
+  what the job is permitted to do while you're away.
+  `reminder_not_executed` is the measurement, and it currently fails
+  intermittently, so any fix can be A/B'd against it.
 - **Requirements review as a judge use-case (validated once, 2026-08-17).**
   Pointing a frontier model at a feature's *requirements* plus its tool
   surface and asking "what would a user reasonably expect that these never

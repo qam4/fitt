@@ -296,7 +296,40 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     return ToolResult.ok(
         f"created cron {stored.id!r} ({_format_schedule(schedule)}, "
         f"{'silent' if silent else 'announce'}, "
-        f"{'auto-approve' if approval_mode == 'auto' else 'per-tool approval'})" + warning
+        f"{'auto-approve' if approval_mode == 'auto' else 'per-tool approval'})"
+        + _confirmation_hint(schedule)
+        + warning
+    )
+
+
+def _confirmation_hint(sched: CronSchedule) -> str:
+    """Tell the model to state the time it actually got, in local terms.
+
+    A schedule the user can't verify is a schedule they find out about by
+    missing it. FITT already had the parsing half of this bug — "remind me
+    at 1 PM" once became `13:00` UTC and fired immediately — and the
+    `[Current time]` preamble fixed that. What stayed broken is
+    *confirmation*: a live run replied "I've scheduled a reminder … for 15
+    minutes from now" with no absolute time, so a misparse was
+    unverifiable until it fired. Found again by a requirements review,
+    2026-08-17.
+
+    The resolved timestamp was already in this result, in UTC ISO — easy
+    for a model to ignore and unfriendly to a human even if relayed. So
+    render it in the operator's own timezone and ask for it explicitly."""
+    if sched.kind != "at" or sched.at_ts is None:
+        # Intervals and cron expressions are already self-describing
+        # ("every 2h"); there's no single instant to misread.
+        return ""
+    from datetime import datetime as _dt
+
+    local = _dt.fromtimestamp(sched.at_ts).astimezone()
+    when = local.strftime("%a %d %b at %H:%M")
+    tz_name = local.tzname() or "local time"
+    return (
+        f"\n\nTell the user this fires {when} ({tz_name}) so they can "
+        "check it's what they meant — a relative phrase like 'in 15 "
+        "minutes' hides a misread time."
     )
 
 
