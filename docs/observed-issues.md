@@ -33,6 +33,82 @@ doc.
 
 ---
 
+## Using the frontier model to review requirements, not replies
+
+**Date:** 2026-08-17. **Tag:** validation method / judge design.
+
+Two experiments, prompted by the operator finding a real reminder bug in
+one try while a 16-scenario judged suite had missed it. Both were blind —
+no mention of the bug, no hint at the answer — and each was one call to
+`claude-sonnet-5`. Artefacts under `output/probe-experiment/`.
+
+### Experiment 1: generate probes from a feature contract — partial
+
+Given the cron feature's user stories plus the tool surface, asked for ten
+probes with expected outcomes. Produced six before truncating. Several
+target ground the current suite doesn't cover: matching a paraphrase to a
+stored cron for `cron_update`, whether pause is actually honoured,
+duplicate-cron dedup, invalid time handling.
+
+**Did not find the reminder bug**, and the reason was predicted before
+running: the contract handed to it — verbatim from the spec — describes
+crons as FITT *doing* work on a schedule (a PR briefing, a job monitor).
+"A reminder should be delivered, not performed" appears nowhere in the
+requirements, so there was no promise to probe.
+
+### Experiment 2: find unstated promises — the useful one
+
+Different question: given the requirements and the tool surface, *what
+would a user reasonably expect that these requirements never commit to?*
+Eight findings. Three are demonstrably real (below); the criterion set in
+advance — that it name the reminder-vs-perform expectation unprompted —
+was **not** met.
+
+### Why neither found it, and the limit this exposes
+
+The prompt described the mechanism honestly: "submits the stored text to a
+fresh session as if it were a new user message." Read that as
+authoritative, and performing "Check my emails" is **correct behaviour of
+the described design**. There was nothing for a reviewer to flag.
+
+So the bug was not a missing requirement, and not a missing test. **The
+documented mechanism is subtly wrong for a whole class of use**, and every
+automated reviewer took the design as the spec. The operator found it
+because he held an expectation the design contradicts — and was the only
+participant not reasoning from the design.
+
+The general limit, worth remembering before trusting this method too far:
+spec-derived review inherits the spec's blind spots, including its
+mechanism choices. It can tell you the stated promises are incomplete. It
+cannot tell you that a promise you never made is one your user holds
+anyway. Only use finds those.
+
+### What experiment 2 got right
+
+Three of eight confirmed against things already known or verifiable:
+
+* **Schedule confirmation / timezone.** FITT had exactly this bug —
+  `observed-issues` records "remind me at 1 PM" emitting `13:00` UTC and
+  firing immediately. The `[Current time]` line fixed the parsing half,
+  but the *confirmation* half is still open: in a live run the reply was
+  "I've scheduled a reminder … for 15 minutes from now", with no absolute
+  time, so the user cannot check the interpretation.
+* **Stateless monitors re-alert forever.** U2 promises "ping me only when
+  the state changes", but each firing is a fresh session with no memory of
+  the previous one. Once the job reports done, every later check sees done
+  and pings again. A shipped requirement that is unsatisfiable as written.
+* **A cron-fired session meeting an approval-gated tool.** Named
+  `project_shell` specifically, from the requirements alone, before being
+  told anything about the operator's incident. Independently arrives at
+  the blast-radius item already in the backlog.
+
+The other five (silent firing failures, pause racing an in-flight fire,
+whether `fitt inbox` covers cron activity, missed fires during downtime,
+distinguishing proactive from scheduled messages) are plausible and
+unverified — recorded, not promoted.
+
+---
+
 ## A reminder ran a shell command: one real bug, three assert bugs
 
 **First observed:** 2026-08-17, operator's hub, live use. "Can you remind

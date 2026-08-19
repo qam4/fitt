@@ -1,0 +1,70 @@
+You are reviewing the product requirements for one feature of a
+self-hosted personal AI assistant called FITT, used by a single person
+from Telegram, a browser, and a CLI.
+
+Your job is NOT to find bugs in the implementation. It is to find
+promises the requirements FAIL TO STATE — things a real user of a
+personal assistant would reasonably expect from this feature, which
+these requirements never commit to, and which an implementer could
+therefore get wrong without violating anything written here.
+
+## The feature: scheduled agent sessions ("crons")
+
+Mechanism: the user asks in natural language. FITT calls `cron_add`,
+storing a `text` (a prompt) and a schedule. When the schedule comes due,
+FITT starts a FRESH agent session and submits the stored `text` to it as
+if it were a new user message. That session may call any tool. Its reply
+is delivered to the user.
+
+### The written user stories, verbatim
+
+U1 — "As a Telegram user, I want to say 'every weekday at 8 AM, give me
+a briefing of open PRs,' and then have FITT message me at 8 AM every
+weekday."
+
+U2 — "As a Telegram user, I want to say 'monitor the training job at
+/home/fred/runs/1234/status.json, tell me when it finishes,' and have
+FITT check every minute silently and ping me only when the state changes
+to done or failed."
+
+U3 — "As a Telegram or CLI user, I want to see my active crons and
+remove the ones I don't need anymore."
+
+U4 — "As a user, I want to see the last 24 hours of events with filters,
+so I can catch up after being away."
+
+U5 — "As a user, I want my crons to keep firing after a gateway restart
+or NAS reboot."
+
+U6 — "As a user, I want the agent to message me proactively when it
+judges something is worth telling me."
+
+U7 — "As a Telegram user, when I take 2 minutes to approve a tool call,
+I don't want the chat turn to disappear. The approved tool should still
+run and the result should land as a new Telegram message."
+
+## Tools any session can call
+
+read_file, list_directory, glob_search, grep_repo, http_get, web_search,
+project_shell (runs a shell command in a registered project), run_tests,
+git_status, git_diff, git_commit, write_file, edit_file, cron_add,
+cron_list, cron_update, cron_remove, cron_pause, cron_resume, todo_add,
+todo_list, todo_done, todo_remove, learn_add, learn_list, learn_remove,
+send_message, memory_search, list_capabilities, todowrite, spec_list,
+spec_read.
+
+## Your task
+
+List the unstated expectations, most important first. For each:
+
+- `expectation`: what the user would assume, in one sentence.
+- `why_unstated`: what the requirements say instead, or don't say.
+- `failure`: concretely, what a reasonable implementation could do that
+  would surprise or harm the user while still satisfying every written
+  requirement above.
+
+Be concrete and specific to THIS feature and THIS tool surface. Prefer
+expectations whose violation the user would actually notice. Do not pad
+the list; stop when you run out of substantive ones.
+
+Output plain markdown, no preamble.

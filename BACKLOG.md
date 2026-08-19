@@ -29,6 +29,22 @@ spec (building) -> done.
 The curated ordering - the judgment call a tool can't make for you.
 
 **Now**
+- **U2's silent monitor re-alerts forever (found by requirements review,
+  2026-08-17).** "Ping me only when the state changes to done or failed"
+  is unsatisfiable as specified: each firing is a fresh session with no
+  memory of the previous one, so once the watched thing reports done,
+  every subsequent check sees done and pings again. Either give a cron a
+  small persistent scratch value it can compare against (last observed
+  state), or make the promise honest and require the cron to disable
+  itself on the terminal state. A shipped requirement that cannot be met
+  is worse than an unimplemented one.
+- **A cron should confirm the schedule it actually parsed.** Same review.
+  The `[Current time]` line fixed the old "remind me at 1 PM → 13:00 UTC →
+  fires immediately" misparse, but nothing makes FITT *tell the user* what
+  it understood: a live run replied "I've scheduled a reminder … for 15
+  minutes from now" with no absolute time, so a misparse is unverifiable
+  until it fires at the wrong moment. The tool result already carries the
+  resolved timestamp — the reply should echo it.
 - **Bound what a cron firing may do (from the 2026-08-17 hub incident).**
   A reminder fired and ran `project_shell`. The *cause* was a one-line
   prompt bug, now fixed and covered by the `reminder_not_executed`
@@ -45,6 +61,22 @@ The curated ordering - the judgment call a tool can't make for you.
   false dichotomies — a reminder *is* a task, and saying *is* a doing; the
   answerable question is what the job is permitted to do while you're
   away.
+- **Requirements review as a judge use-case (validated once, 2026-08-17).**
+  Pointing a frontier model at a feature's *requirements* plus its tool
+  surface and asking "what would a user reasonably expect that these never
+  commit to?" produced eight findings in one call, three of them real —
+  including one that independently derived the cron-approval blast-radius
+  item above. Cheaper and more productive than scoring replies, because it
+  needs no live model, no tunnel, and no scenario. Next step is *not* prompt
+  tuning (the first attempt already worked) but pointing the same prompt at
+  a second and third feature — memory, skills, tools/approval — to see
+  whether the hit rate holds. Only worth turning into a command if it
+  survives that. Prompt + outputs kept in `output/probe-experiment/`
+  (gitignored) — copy them somewhere durable before relying on them.
+  Known limit: spec-derived review inherits the spec's blind spots, so it
+  finds incomplete promises, never a promise you never wrote down.
+  Five unverified findings from the first run are listed in
+  observed-issues rather than here, to keep this list scannable.
 - **Guidance must live where the capability block renders it.** The cron
   bug above happened because the `text` arg's schema description said the
   right thing while the tool's one-line description contradicted it — and
