@@ -81,6 +81,23 @@ The curated ordering - the judgment call a tool can't make for you.
   false dichotomies — a reminder *is* a task, and saying *is* a doing; the
   answerable question is what a job may do while you're away. Still to do:
   live runs. The bug is intermittent, so one green run proves nothing.
+- **A cron firing's turn events and memory are silently dropped on Windows
+  (found 2026-08-19).** A firing's session key is `cron:<id>:<ts>`, and
+  `TurnLog.file_path` / `MemoryStore.history_path` /
+  `TurnCaptureStore.turn_dir` all build `sessions_dir / session_key / ...`
+  by hand. A colon is illegal in a Windows path component, so every write
+  raises `OSError`, gets logged at warning level, and the turn is lost —
+  sixteen `turns.append_failed` per firing in a real eval log. So `fitt
+  watch`, `/lastturn`, the dashboard turn detail, and turn capture are all
+  blind to scheduled jobs on Windows: the visibility layer whose entire
+  purpose is telling you what ran while you weren't watching. It's why the
+  2026-08-17 reminder incident had to be traced through the audit log.
+  `tool_artifacts.py` already solved this with `_sanitize_for_path` — the
+  fix is to route all four through one shared helper, not to add a fifth
+  copy. Changes on-disk layout, so `fitt watch`'s tail path has to agree,
+  which is why it isn't a drive-by. Probably never worked on Windows, and
+  no test would notice: they assert on the event and audit logs, not on
+  turn files.
 - **Requirements review as a judge use-case (validated once, 2026-08-17).**
   Pointing a frontier model at a feature's *requirements* plus its tool
   surface and asking "what would a user reasonably expect that these never

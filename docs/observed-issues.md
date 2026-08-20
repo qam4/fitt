@@ -109,6 +109,49 @@ unverified — recorded, not promoted.
 
 ---
 
+## Every cron firing's turn events and memory are dropped on Windows (colon in the session key)
+
+**First observed:** 2026-08-19, reading an eval log for something else.
+**Tag:** Windows / visibility / cron.
+
+Sixteen `turns.append_failed` warnings in a row, immediately followed by
+`cron.memory_append_failed`, clustered exactly at the `cron_fires`
+scenario. Root cause is one character:
+
+- a firing's session key is `cron:<id>:<ts>` (`cron_runner.fire`)
+- `TurnLog.file_path` is `sessions_dir / session_key / "turns" / ...`
+- `:` is illegal in a Windows path component, so every write raises
+  `OSError` and is caught and logged at warning level
+
+`MemoryStore.history_path` and `TurnCaptureStore.turn_dir` build paths the
+same way, which is the `cron.memory_append_failed` line and means captures
+are lost too.
+
+**What it costs.** The whole per-turn visibility layer is blind to cron
+firings on Windows: `fitt watch`, `/lastturn`, the dashboard's turn detail,
+and turn capture. That is precisely the surface whose job is to tell you
+what an unattended job did while you weren't watching — which is how the
+2026-08-17 reminder incident had to be diagnosed from the audit log
+instead. The audit log has its own layout and is unaffected, which is why
+the incident was traceable at all.
+
+**The tell that makes this worth writing down:** `tool_artifacts.py`
+already has `_sanitize_for_path` and uses it for exactly this reason. One
+subsystem solved the problem; three others build the same path by hand and
+didn't. And nothing noticed, because a cron firing is the only session key
+in FITT that contains a colon — so on Windows the feature has probably
+never worked, while every test that exercises it passes (tests assert on
+the event log and the audit log, not on turn files).
+
+**Fix shape:** route all four through one shared path-safe helper rather
+than adding a second copy of the sanitiser. Note it changes on-disk layout,
+so `fitt watch`'s tail path and any existing directories need to agree —
+which is why this is a backlog item and not a drive-by. **Urgency:**
+medium. Silent, and it costs exactly the observability you want during an
+incident.
+
+---
+
 ## A reminder ran a shell command: one real bug, three assert bugs
 
 **First observed:** 2026-08-17, operator's hub, live use. "Can you remind
