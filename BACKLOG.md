@@ -79,8 +79,29 @@ The curated ordering - the judgment call a tool can't make for you.
   pass (the errand wasn't carried out) while naming it in the reason. Earlier
   attempts to classify intent (remind-vs-task, say-vs-do) were rejected as
   false dichotomies — a reminder *is* a task, and saying *is* a doing; the
-  answerable question is what a job may do while you're away. Still to do:
-  live runs. The bug is intermittent, so one green run proves nothing.
+  answerable question is what a job may do while you're away.
+
+  **Validated 2026-08-20 across 4 runs: 48/48 objective, no recurrence** —
+  but read that as *no regression*, not as proof. gemma4 never reached for a
+  withheld tool in those runs, so the surface was never exercised live; the
+  guarantee rests on unit tests. Also corrected same-day: the first cut let
+  the *model* set `extra_tools`, and gemma4 populated it within hours. Grants
+  are now operator-only (`--grant-tool`), enforced in the handler because
+  schemas are advertised and never validated.
+- **Audit the other tools for args protected only by their schema.** Fallout
+  from the above: FITT validates nothing against a tool's JSON schema, so any
+  argument carrying authority — a path root, a host allowlist, an approval
+  hint — is enforced only if the handler does it. `extra_tools` was the first
+  case where that mattered; a sweep would say whether it's the only one.
+- **`cron_add`'s schedule confirmation is advisory and gets ignored ~1 run in
+  3.** The `_confirmation_hint` shipped 2026-08-19 puts the resolved local
+  time in the tool result and asks the model to relay it. Judge caught a
+  sample where the reply was just "scheduled that reminder for you in 10
+  minutes" — the relative phrase the hint exists to eliminate. The objective
+  assert can't see this (the cron fired and delivered, so it passes), which
+  is precisely the disagreement-report case. If it stays this flaky, the
+  confirmation belongs in the delivery path rather than in a request to the
+  model.
 - **A cron firing's turn events and memory are silently dropped on Windows
   (found 2026-08-19).** A firing's session key is `cron:<id>:<ts>`, and
   `TurnLog.file_path` / `MemoryStore.history_path` /

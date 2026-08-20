@@ -478,11 +478,18 @@ async def test_an_interval_cron_result_has_no_confirmation_noise(svc: CronServic
 # --------------------------------------------------------------- extra_tools grants
 #
 # Firings run on a reduced tool surface (see cron_runner.FIRING_DEFAULT_TOOLS).
-# `extra_tools` is how a cron that genuinely needs a shell or the network says
-# so. These pin the tool-layer half: parsing, persistence, and visibility.
+# `extra_tools` is how a cron that genuinely needs a shell or the network gets
+# it — and it is **operator-only**. The first cut exposed it on `cron_add`;
+# gemma4 populated it unprompted within hours, which is the whole hole: a
+# grant the constrained party can write is not a grant.
 
 
-async def test_cron_add_stores_extra_tools(svc: CronService) -> None:
+async def test_a_model_cannot_grant_a_cron_the_shell(svc: CronService) -> None:
+    """The hole found 2026-08-20, hours after grants shipped: gemma4 sent
+    `extra_tools` unprompted. Least privilege where the constrained party
+    writes its own grant is not least privilege, so a model-supplied grant
+    must be dropped — schemas are advertised, not enforced, so the handler
+    is what has to refuse it."""
     tool = _tools()["cron_add"]
     result = await tool.callable(
         {
@@ -493,7 +500,63 @@ async def test_cron_add_stores_extra_tools(svc: CronService) -> None:
         _ctx(svc),
     )
     assert not result.is_error, result.payload
-    assert svc.list()[0].extra_tools == ["project_shell"]
+    assert svc.list()[0].extra_tools == []
+
+
+async def test_the_dropped_grant_is_reported_not_swallowed(svc: CronService) -> None:
+    """Dropped out loud. A silently ignored argument is how a scheduled job
+    fails later for a reason nobody can trace — and the model needs to know
+    to tell the user, since only the user can grant it."""
+    result = await _tools()["cron_add"].callable(
+        {
+            "text": "Poll the deploy",
+            "schedule_spec": "every 10m",
+            "extra_tools": ["project_shell"],
+        },
+        _ctx(svc),
+    )
+    assert "project_shell" in result.payload
+    assert "--grant-tool" in result.payload
+
+
+async def test_asking_for_a_tool_it_already_has_is_not_reported(svc: CronService) -> None:
+    """The observed case was `extra_tools: ["send_message"]` — already a
+    firing default. Nothing was withheld, so a note would make a working
+    reminder look troubled for no reason."""
+    result = await _tools()["cron_add"].callable(
+        {
+            "text": "Remind me to stretch",
+            "schedule_spec": "in 10 minutes",
+            "extra_tools": ["send_message"],
+        },
+        _ctx(svc),
+    )
+    assert not result.is_error, result.payload
+    assert "send_message" not in result.payload
+    assert "--grant-tool" not in result.payload
+
+
+async def test_a_model_cannot_widen_an_existing_crons_surface(svc: CronService) -> None:
+    """Same hole via cron_update. The operator's grant must survive a model
+    trying to change it in either direction."""
+    add = _tools()["cron_add"]
+    await add.callable(
+        {"text": "Poll the deploy", "schedule_spec": "every 10m"},
+        _ctx(svc),
+    )
+    job_id = svc.list()[0].id
+    svc.update(job_id, extra_tools=["http_get"])  # operator grant
+
+    result = await _tools()["cron_update"].callable(
+        {"id": job_id, "extra_tools": ["project_shell"], "name": "renamed"},
+        _ctx(svc),
+    )
+
+    assert not result.is_error, result.payload
+    job = svc.get(job_id)
+    assert job is not None
+    assert job.extra_tools == ["http_get"], "a model widened a cron's tool surface"
+    assert "project_shell" in result.payload
 
 
 async def test_cron_add_defaults_to_no_grant(svc: CronService) -> None:
@@ -506,57 +569,29 @@ async def test_cron_add_defaults_to_no_grant(svc: CronService) -> None:
     assert svc.list()[0].extra_tools == []
 
 
-async def test_cron_add_accepts_a_bare_string_grant(svc: CronService) -> None:
-    """Models routinely send a scalar for an array-typed field. Refusing it
-    costs a turn and teaches nothing; coercing is the same call the todowrite
-    fumble-trap fix made."""
-    tool = _tools()["cron_add"]
-    result = await tool.callable(
-        {
-            "text": "Poll the deploy and tell me",
-            "schedule_spec": "every 10m",
-            "extra_tools": "http_get",
-        },
-        _ctx(svc),
-    )
-    assert not result.is_error, result.payload
-    assert svc.list()[0].extra_tools == ["http_get"]
+async def test_the_model_facing_schemas_do_not_offer_grants() -> None:
+    """Belt as well as braces. The handler is what enforces this, since
+    schemas are advertised and never validated — but advertising a field the
+    model can't have would invite the call and waste a turn."""
+    tools = _tools()
+    for name in ("cron_add", "cron_update"):
+        assert "extra_tools" not in tools[name].schema["properties"], (
+            f"{name} still advertises extra_tools to the model"
+        )
 
 
-async def test_cron_add_rejects_a_malformed_grant_rather_than_dropping_it(
-    svc: CronService,
-) -> None:
-    """A grant that silently didn't apply is worse than a failed call: the
-    firing would fail later for a reason the model can't connect back."""
-    tool = _tools()["cron_add"]
-    result = await tool.callable(
-        {
-            "text": "Poll the deploy",
-            "schedule_spec": "every 10m",
-            "extra_tools": [{"name": "http_get"}],
-        },
-        _ctx(svc),
-    )
-    assert result.is_error
-    assert "extra_tools" in result.payload
-
-
-async def test_cron_update_replaces_the_grant_list(svc: CronService) -> None:
-    """Replacement, not merge — otherwise revoking is impossible."""
-    add = _tools()["cron_add"]
-    update = _tools()["cron_update"]
-    await add.callable(
-        {
-            "text": "Poll the deploy",
-            "schedule_spec": "every 10m",
-            "extra_tools": ["http_get", "project_shell"],
-        },
+async def test_the_operator_path_replaces_the_grant_list(svc: CronService) -> None:
+    """Whole-list replacement, not a merge — a merge would make revoking a
+    grant impossible."""
+    await _tools()["cron_add"].callable(
+        {"text": "Poll the deploy", "schedule_spec": "every 10m"},
         _ctx(svc),
     )
     job_id = svc.list()[0].id
+    svc.update(job_id, extra_tools=["http_get", "project_shell"])
 
-    result = await update.callable({"id": job_id, "extra_tools": ["http_get"]}, _ctx(svc))
-    assert not result.is_error, result.payload
+    svc.update(job_id, extra_tools=["http_get"])
+
     job = svc.get(job_id)
     assert job is not None and job.extra_tools == ["http_get"]
 
@@ -564,15 +599,12 @@ async def test_cron_update_replaces_the_grant_list(svc: CronService) -> None:
 async def test_cron_list_shows_grants(svc: CronService) -> None:
     """ "What can this unattended job reach" is the audit question, and it is
     otherwise invisible without opening cron.json."""
-    add = _tools()["cron_add"]
-    await add.callable(
-        {
-            "text": "Poll the deploy",
-            "schedule_spec": "every 10m",
-            "extra_tools": ["project_shell"],
-        },
+    await _tools()["cron_add"].callable(
+        {"text": "Poll the deploy", "schedule_spec": "every 10m"},
         _ctx(svc),
     )
+    svc.update(svc.list()[0].id, extra_tools=["project_shell"])
+
     out = await _tools()["cron_list"].callable({}, _ctx(svc))
     assert "project_shell" in out.payload
 
@@ -581,13 +613,11 @@ async def test_extra_tools_survives_a_reload_from_disk(svc: CronService, tmp_pat
     """The grant lives in cron.json; a gateway restart must not widen or
     narrow it."""
     await _tools()["cron_add"].callable(
-        {
-            "text": "Poll the deploy",
-            "schedule_spec": "every 10m",
-            "extra_tools": ["http_get"],
-        },
+        {"text": "Poll the deploy", "schedule_spec": "every 10m"},
         _ctx(svc),
     )
+    svc.update(svc.list()[0].id, extra_tools=["http_get"])
+
     reopened = CronService(tmp_path / "cron.json")
     assert reopened.list()[0].extra_tools == ["http_get"]
 

@@ -57,21 +57,23 @@ _CRON_ID_ARG = {
     "description": "Short hex id of an existing cron (from cron_list).",
 }
 
-_EXTRA_TOOLS_ARG = {
-    "type": "array",
-    "items": {"type": "string"},
-    "description": (
-        "Tool names this cron's firings are allowed to use beyond the "
-        "safe default set. Firings run unattended, so by default they "
-        "can only notify and read: send_message, the read/list/search "
-        "tools, and the user's todo list. Anything that runs commands "
-        "(project_shell, run_tests), writes (write_file, edit_file, "
-        "git_commit), reaches the network (http_get, web_search), or "
-        "edits crons/lessons must be named here. Leave empty for a "
-        "plain reminder — only add a tool the job genuinely needs."
-    ),
-    "default": [],
-}
+# NOTE: there is deliberately no model-facing ``extra_tools`` argument.
+#
+# Grants are what stop an unattended firing from running a shell (see
+# cron_runner.FIRING_DEFAULT_TOOLS). Letting the model write its own grant
+# puts the constrained party back inside the trust boundary: a model that
+# wants project_shell just asks for it, and the restriction evaporates.
+#
+# Observed 2026-08-20, within hours of shipping the field: gemma4 sent
+# ``extra_tools: ["send_message"]`` unprompted on a plain reminder. That
+# one was harmless (send_message is already a default) but it showed the
+# model will populate the field, so the hole was real rather than
+# theoretical.
+#
+# Grants are therefore operator-only, via ``fitt cron add --grant-tool``.
+# Tool schemas are *advertised, not enforced* — nothing validates model
+# args against them — so removing the property is not sufficient on its
+# own; :func:`_advisory_grant_note` handles a model that sends it anyway.
 
 _SCHEMA_CRON_ADD: dict[str, Any] = {
     "type": "object",
@@ -140,7 +142,6 @@ _SCHEMA_CRON_ADD: dict[str, Any] = {
             ),
             "default": "UTC",
         },
-        "extra_tools": _EXTRA_TOOLS_ARG,
     },
     "required": ["text", "schedule_spec"],
     "additionalProperties": False,
@@ -176,7 +177,6 @@ _SCHEMA_CRON_UPDATE: dict[str, Any] = {
         "approval_mode": {"type": "string", "enum": ["", "auto"]},
         "agent_alias": {"type": "string"},
         "timezone": {"type": "string"},
-        "extra_tools": _EXTRA_TOOLS_ARG,
     },
     "required": ["id"],
     "additionalProperties": False,
@@ -196,31 +196,50 @@ def _derive_cron_name(message: str) -> str:
     return label or "cron"
 
 
-def _parse_extra_tools(raw: Any) -> list[str]:
-    """Normalise the ``extra_tools`` argument to a list of tool names.
+def _requested_names(raw: Any) -> list[str]:
+    """Tool names a model tried to grant, in whatever shape it sent them.
 
-    Accepts a list, or a single string (models routinely send a bare
-    ``"project_shell"`` for an array-typed field, and refusing that
-    teaches nothing). Comma-separated strings are split for the same
-    reason. Anything else is an error rather than a silent empty list —
-    a grant that quietly didn't apply is worse than a failed call,
-    because the firing would then fail later for a reason the model
-    can't connect to what it asked for."""
-    if raw is None:
-        return []
+    Tolerant on purpose — this is only used to *report* an ignored request,
+    so a weird shape shouldn't turn into an error about a field the model
+    was never offered."""
     if isinstance(raw, str):
         return [part.strip() for part in raw.split(",") if part.strip()]
-    if not isinstance(raw, list):
-        raise ValueError("'extra_tools' must be a list of tool names, e.g. ['project_shell']")
-    out: list[str] = []
-    for item in raw:
-        if not isinstance(item, str):
-            raise ValueError(
-                f"'extra_tools' entries must be tool-name strings; got {type(item).__name__}"
-            )
-        if item.strip():
-            out.append(item.strip())
-    return out
+    if isinstance(raw, list):
+        return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+    return []
+
+
+def _advisory_grant_note(args: dict[str, Any]) -> str:
+    """Tell the model its grant request was ignored, and who can grant it.
+
+    A model can send ``extra_tools`` even though it isn't in the schema —
+    schemas are advertised to the model, not validated against its args.
+    The request is dropped rather than honoured (see the note above the
+    schemas: a grant the constrained party writes isn't a grant), but it is
+    dropped *out loud*, because a silently ignored argument is how a
+    scheduled job ends up failing later for a reason nobody can trace.
+
+    Names that are already in the firing default set produce no note — the
+    model asked for something it was going to have anyway, so there is
+    nothing to report and no reason to make a working reminder look
+    troubled."""
+    requested = _requested_names(args.get("extra_tools"))
+    if not requested:
+        return ""
+    # Imported here: cron_runner imports the tool registry, and this module
+    # is imported while building it.
+    from ..cron_runner import FIRING_DEFAULT_TOOLS
+
+    withheld = sorted({n for n in requested if n not in FIRING_DEFAULT_TOOLS})
+    if not withheld:
+        return ""
+    return (
+        "\n\nNote: this cron's firings will NOT be able to use "
+        f"{', '.join(withheld)} — scheduled jobs run unattended on a "
+        "reduced tool surface and cannot grant themselves more. Tell the "
+        "user that, and that they can allow it with "
+        f"`fitt cron add --grant-tool {withheld[0]}` if they want it."
+    )
 
 
 def _get_cron_service(ctx: ToolContext) -> Any:
@@ -314,11 +333,6 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     approval_mode: ApprovalModeOverride = approval_mode_raw  # type: ignore[assignment]
     agent_alias = str(args.get("agent_alias") or "")
 
-    try:
-        extra_tools = _parse_extra_tools(args.get("extra_tools"))
-    except ValueError as e:
-        return ToolResult.error(str(e))
-
     job = CronJob(
         id="",
         name=name.strip(),
@@ -326,7 +340,7 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         schedule=schedule,
         silent=silent,
         approval_mode=approval_mode,
-        extra_tools=extra_tools,
+        # extra_tools is deliberately NOT taken from args — operator-only.
         agent_alias=agent_alias,
         session_key=ctx.session_key,
         created_by_client=ctx.client,
@@ -355,6 +369,7 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         f"{'auto-approve' if approval_mode == 'auto' else 'per-tool approval'})"
         + _confirmation_hint(schedule)
         + warning
+        + _advisory_grant_note(args)
     )
 
 
@@ -426,11 +441,9 @@ async def _tool_cron_update(args: dict[str, Any], ctx: ToolContext) -> ToolResul
         if mode not in ("", "auto"):
             return ToolResult.error("approval_mode must be '' or 'auto'")
         kwargs["approval_mode"] = mode
-    if "extra_tools" in args and args["extra_tools"] is not None:
-        try:
-            kwargs["extra_tools"] = _parse_extra_tools(args["extra_tools"])
-        except ValueError as e:
-            return ToolResult.error(str(e))
+    # extra_tools is intentionally absent here too: a model that could
+    # widen an existing cron's surface would have the same hole as one
+    # that could set it at creation.
     if "agent_alias" in args and args["agent_alias"] is not None:
         kwargs["agent_alias"] = str(args["agent_alias"])
     if "schedule_spec" in args and args["schedule_spec"] is not None:
@@ -450,7 +463,7 @@ async def _tool_cron_update(args: dict[str, Any], ctx: ToolContext) -> ToolResul
         return ToolResult.error(str(e))
     except CronError as e:
         return ToolResult.error(str(e))
-    return ToolResult.ok(f"updated cron {updated.id!r}")
+    return ToolResult.ok(f"updated cron {updated.id!r}" + _advisory_grant_note(args))
 
 
 async def _tool_cron_remove(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -521,11 +534,13 @@ def build_cron_tools() -> list[Tool]:
                 "approval; `silent` and `approval_mode` control "
                 "whether firings announce and whether their "
                 "internal tools auto-approve. "
-                "Firings run unattended on a reduced tool surface: "
-                "they can notify, read, and use the todo list. If the "
-                "job needs to run a command, write a file, or reach "
-                "the network, name those tools in `extra_tools` — a "
-                "plain reminder needs none."
+                "Firings run unattended on a reduced tool surface: they "
+                "can notify, read, and use the todo list, and nothing "
+                "else. A plain reminder needs nothing more. If the job "
+                "would need to run a command, write a file, or reach the "
+                "network, say so in your reply and tell the user to grant "
+                "it with `fitt cron add --grant-tool <tool>` — you cannot "
+                "widen a scheduled job's surface yourself."
             ),
             schema=_SCHEMA_CRON_ADD,
             callable=_tool_cron_add,

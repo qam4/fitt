@@ -316,8 +316,48 @@ open PRs) now needs a grant, because a briefing is a world-touching job and
 should be declared as one; and old crons on disk load with no grant, since
 absent must read as the safe direction.
 
-**Still open:** live validation. The bug is intermittent, so a single green
-run proves nothing — this needs several.
+### 2026-08-20: I gave the model the key to its own restriction
+
+Four validation runs (1 + 3 samples), all green: **48/48 objective**, and
+`reminder_not_executed` passed every time with "did nothing else" — not one
+attempt at a withheld tool. So the symptom hasn't recurred. Stated
+precisely, though: that is *no regression*, not proof the restriction is
+what fixed it. gemma4 never reached for the shell in these runs, so the
+surface was never tested live. The restriction's guarantee is deterministic
+(an ungranted tool cannot execute) and pinned by unit tests; the live runs
+only establish that least privilege didn't break the working scenarios.
+
+What the runs *did* find was a hole in the fix, in a trace I was reading
+for another reason:
+
+```
+cron_add args={"extra_tools": ["send_message"], "schedule_spec": "in 10 minutes",
+               "text": "Tell me to stretch."}
+```
+
+gemma4 populated `extra_tools` unprompted, hours after the field shipped.
+That instance was harmless — `send_message` is already a firing default —
+but it proves the model will write the field, and therefore that a model
+wanting `project_shell` need only ask for it. **Least privilege where the
+constrained party writes its own grant is not least privilege.** I had put
+the model back inside the trust boundary the fix exists to draw, and the
+commit message claimed a guarantee the code didn't have.
+
+Fixed by making grants operator-only: removed from both model-facing
+schemas, and — because **tool schemas in FITT are advertised to the model,
+never validated against its arguments** — the handler drops a
+model-supplied grant regardless. Dropped *out loud*: the result tells the
+model what it won't have and that the user can allow it with
+`fitt cron add --grant-tool <tool>`, so the turn ends with the user
+informed rather than a scheduled job failing later for an untraceable
+reason. A request for something already in the default set produces no
+note, since nothing was withheld and a warning would make a working
+reminder look troubled.
+
+The generalisable bit: **the schema is documentation, not a gate.** Any
+argument that carries authority has to be enforced in the handler, because
+the model can send any field it likes. Worth checking the other tools for
+args that only the schema protects.
 
 ---
 
