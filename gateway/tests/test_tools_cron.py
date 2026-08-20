@@ -90,40 +90,23 @@ async def test_cron_add_cron_expression_with_tz(svc: CronService) -> None:
     assert job.schedule.timezone == "America/Los_Angeles"
 
 
-async def test_cron_add_silent_polling_warns_about_approval(svc: CronService) -> None:
-    """Interval + silent + default approval is almost always a
-    user mistake — they'll get spammed with approval prompts even
-    though they asked for silence. The tool notes this in its
-    success payload."""
-    tool = _tools()["cron_add"]
-    result = await tool.callable(
+async def test_silent_polling_no_longer_warns_about_approval(svc: CronService) -> None:
+    """The old warning said a silent interval cron without auto-approve
+    would prompt on every firing. That was true of the full tool surface
+    and is false now: a firing only reaches tools already in the AUTO
+    bucket. Keeping it would tell the user to fix a problem they don't
+    have, using a field they can no longer set from chat."""
+    result = await _tools()["cron_add"].callable(
         {
             "name": "monitor",
             "text": "check",
             "schedule_spec": "every 60s",
             "silent": True,
-            "approval_mode": "",
         },
         _ctx(svc),
     )
     assert not result.is_error
-    assert "approval_mode='auto'" in result.payload
-
-
-async def test_cron_add_no_warning_when_auto(svc: CronService) -> None:
-    tool = _tools()["cron_add"]
-    result = await tool.callable(
-        {
-            "name": "monitor",
-            "text": "check",
-            "schedule_spec": "every 60s",
-            "silent": True,
-            "approval_mode": "auto",
-        },
-        _ctx(svc),
-    )
-    assert not result.is_error
-    assert "approval_mode='auto'" not in result.payload
+    assert "approval_mode" not in result.payload
 
 
 async def test_cron_add_rejects_bad_schedule(svc: CronService) -> None:
@@ -172,19 +155,56 @@ async def test_cron_add_still_requires_text(svc: CronService) -> None:
     assert "'text'" in result.payload
 
 
-async def test_cron_add_rejects_invalid_approval_mode(svc: CronService) -> None:
-    tool = _tools()["cron_add"]
-    result = await tool.callable(
+async def test_a_model_cannot_mark_its_own_cron_auto_approving(svc: CronService) -> None:
+    """Same class as the extra_tools hole. On its own it buys the model
+    little — every firing-default tool is already AUTO — but it enables the
+    compound case: a cron the model marked auto-approve, an operator later
+    grants project_shell, and the shell runs unattended with no prompt,
+    neither party seeing both halves."""
+    result = await _tools()["cron_add"].callable(
         {
             "name": "n",
             "text": "m",
             "schedule_spec": "every 60",
-            "approval_mode": "yolo",
+            "approval_mode": "auto",
         },
         _ctx(svc),
     )
-    assert result.is_error
-    assert "approval_mode" in result.payload
+    assert not result.is_error, result.payload
+    assert svc.list()[0].approval_mode == ""
+    assert "approval_mode" in result.payload, "silently ignored an authority-bearing arg"
+    assert "--auto-approve" in result.payload
+
+
+async def test_a_model_cannot_mark_an_existing_cron_auto_approving(
+    svc: CronService,
+) -> None:
+    """The cron_update half of the same hole."""
+    await _tools()["cron_add"].callable({"text": "m", "schedule_spec": "every 60"}, _ctx(svc))
+    job_id = svc.list()[0].id
+
+    result = await _tools()["cron_update"].callable(
+        {"id": job_id, "approval_mode": "auto", "name": "renamed"}, _ctx(svc)
+    )
+
+    assert not result.is_error, result.payload
+    job = svc.get(job_id)
+    assert job is not None and job.approval_mode == ""
+    assert "--auto-approve" in result.payload
+
+
+async def test_the_operator_can_still_set_auto_approve(svc: CronService) -> None:
+    """Least privilege that can't be lifted would just break U2's
+    unattended polling. The operator path has to keep working."""
+    await _tools()["cron_add"].callable(
+        {"text": "poll the deploy", "schedule_spec": "every 60"}, _ctx(svc)
+    )
+    job_id = svc.list()[0].id
+
+    svc.update(job_id, approval_mode="auto")
+
+    job = svc.get(job_id)
+    assert job is not None and job.approval_mode == "auto"
 
 
 async def test_tool_fails_when_cron_service_missing() -> None:
@@ -569,15 +589,15 @@ async def test_cron_add_defaults_to_no_grant(svc: CronService) -> None:
     assert svc.list()[0].extra_tools == []
 
 
-async def test_the_model_facing_schemas_do_not_offer_grants() -> None:
-    """Belt as well as braces. The handler is what enforces this, since
+async def test_the_model_facing_schemas_do_not_offer_authority_args() -> None:
+    """Belt as well as braces. The handlers are what enforce this, since
     schemas are advertised and never validated — but advertising a field the
     model can't have would invite the call and waste a turn."""
     tools = _tools()
     for name in ("cron_add", "cron_update"):
-        assert "extra_tools" not in tools[name].schema["properties"], (
-            f"{name} still advertises extra_tools to the model"
-        )
+        props = tools[name].schema["properties"]
+        for arg in ("extra_tools", "approval_mode"):
+            assert arg not in props, f"{name} still advertises {arg} to the model"
 
 
 async def test_the_operator_path_replaces_the_grant_list(svc: CronService) -> None:

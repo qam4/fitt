@@ -26,7 +26,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ..cron import (
-    ApprovalModeOverride,
     CronError,
     CronJob,
     CronSchedule,
@@ -57,23 +56,34 @@ _CRON_ID_ARG = {
     "description": "Short hex id of an existing cron (from cron_list).",
 }
 
-# NOTE: there is deliberately no model-facing ``extra_tools`` argument.
+# NOTE: two cron fields are deliberately absent from the model-facing
+# schemas — ``extra_tools`` and ``approval_mode``. Both grant a scheduled
+# job authority, and a model that can grant itself authority isn't
+# constrained by it.
 #
-# Grants are what stop an unattended firing from running a shell (see
-# cron_runner.FIRING_DEFAULT_TOOLS). Letting the model write its own grant
-# puts the constrained party back inside the trust boundary: a model that
-# wants project_shell just asks for it, and the restriction evaporates.
+# ``extra_tools`` widens what a firing can reach past
+# ``cron_runner.FIRING_DEFAULT_TOOLS``. Observed 2026-08-20, within hours
+# of shipping the field: gemma4 sent ``extra_tools: ["send_message"]``
+# unprompted on a plain reminder. Harmless in itself (send_message is
+# already a default) but it proved the model populates the field, so a
+# model wanting ``project_shell`` need only ask.
 #
-# Observed 2026-08-20, within hours of shipping the field: gemma4 sent
-# ``extra_tools: ["send_message"]`` unprompted on a plain reminder. That
-# one was harmless (send_message is already a default) but it showed the
-# model will populate the field, so the hole was real rather than
-# theoretical.
+# ``approval_mode: "auto"`` collapses ASK to AUTO for every tool a firing
+# calls. Removing it costs the model nothing: with the surface reduced,
+# every firing-default tool is already in the AUTO bucket except
+# ``todo_remove`` (checked against the live registry 2026-08-20), so a
+# model-created cron has nothing to auto-approve. What it *would* have
+# bought is the compound case — a cron the model marked auto-approve, an
+# operator later grants ``project_shell``, and the shell then runs
+# unattended with no prompt, each party unaware of the other's half.
 #
-# Grants are therefore operator-only, via ``fitt cron add --grant-tool``.
-# Tool schemas are *advertised, not enforced* — nothing validates model
-# args against them — so removing the property is not sufficient on its
-# own; :func:`_advisory_grant_note` handles a model that sends it anyway.
+# Both are operator-only, via ``fitt cron add --grant-tool`` /
+# ``--auto-approve``, where one person sees both halves at once.
+#
+# Tool schemas are *advertised, not enforced* — nothing in FITT validates
+# model arguments against them — so deleting a property is not sufficient
+# on its own. :func:`_operator_only_note` handles a model that sends one
+# anyway.
 
 _SCHEMA_CRON_ADD: dict[str, Any] = {
     "type": "object",
@@ -106,18 +116,6 @@ _SCHEMA_CRON_ADD: dict[str, Any] = {
                 "expected to call send_message explicitly."
             ),
             "default": False,
-        },
-        "approval_mode": {
-            "type": "string",
-            "enum": ["", "auto"],
-            "description": (
-                "When 'auto', tool calls inside this cron's "
-                "firings auto-approve even if their default "
-                "bucket is 'ask'. Essential for unattended "
-                "polling crons — otherwise each firing sends an "
-                "approval prompt."
-            ),
-            "default": "",
         },
         "agent_alias": {
             "type": "string",
@@ -174,7 +172,6 @@ _SCHEMA_CRON_UPDATE: dict[str, Any] = {
         "text": {"type": "string"},
         "schedule_spec": _SCHEDULE_SPEC_ARG,
         "silent": {"type": "boolean"},
-        "approval_mode": {"type": "string", "enum": ["", "auto"]},
         "agent_alias": {"type": "string"},
         "timezone": {"type": "string"},
     },
@@ -209,37 +206,49 @@ def _requested_names(raw: Any) -> list[str]:
     return []
 
 
-def _advisory_grant_note(args: dict[str, Any]) -> str:
-    """Tell the model its grant request was ignored, and who can grant it.
+def _operator_only_note(args: dict[str, Any]) -> str:
+    """Tell the model which authority-bearing args were dropped, and who
+    can set them.
 
-    A model can send ``extra_tools`` even though it isn't in the schema —
-    schemas are advertised to the model, not validated against its args.
-    The request is dropped rather than honoured (see the note above the
-    schemas: a grant the constrained party writes isn't a grant), but it is
-    dropped *out loud*, because a silently ignored argument is how a
-    scheduled job ends up failing later for a reason nobody can trace.
+    A model can send ``extra_tools`` / ``approval_mode`` even though
+    neither is in the schema, because schemas are advertised and never
+    validated. They're dropped rather than honoured (see the note above
+    the schemas), but dropped *out loud*: a silently ignored argument is
+    how a scheduled job ends up behaving unexpectedly for a reason nobody
+    can trace back to the call that caused it.
 
-    Names that are already in the firing default set produce no note — the
-    model asked for something it was going to have anyway, so there is
-    nothing to report and no reason to make a working reminder look
-    troubled."""
+    Says nothing when the request wouldn't have changed anything — a grant
+    for a tool already in the firing defaults, or ``approval_mode: ""``.
+    Warning about a no-op would make a working reminder look troubled."""
+    notes: list[str] = []
+
     requested = _requested_names(args.get("extra_tools"))
-    if not requested:
-        return ""
-    # Imported here: cron_runner imports the tool registry, and this module
-    # is imported while building it.
-    from ..cron_runner import FIRING_DEFAULT_TOOLS
+    if requested:
+        # Imported here: cron_runner imports the tool registry, and this
+        # module is imported while that registry is being built.
+        from ..cron_runner import FIRING_DEFAULT_TOOLS
 
-    withheld = sorted({n for n in requested if n not in FIRING_DEFAULT_TOOLS})
-    if not withheld:
+        withheld = sorted({n for n in requested if n not in FIRING_DEFAULT_TOOLS})
+        if withheld:
+            notes.append(
+                f"this cron's firings will NOT be able to use {', '.join(withheld)} "
+                "— scheduled jobs run unattended on a reduced tool surface and "
+                "cannot widen it themselves. The user can allow it with "
+                f"`fitt cron add --grant-tool {withheld[0]}`."
+            )
+
+    if args.get("approval_mode"):
+        notes.append(
+            "approval_mode was ignored — a scheduled job cannot mark itself "
+            "auto-approving. It doesn't need to: everything a firing can "
+            "reach by default already runs without a prompt. The user can set "
+            "it with `fitt cron add --auto-approve`."
+        )
+
+    if not notes:
         return ""
-    return (
-        "\n\nNote: this cron's firings will NOT be able to use "
-        f"{', '.join(withheld)} — scheduled jobs run unattended on a "
-        "reduced tool surface and cannot grant themselves more. Tell the "
-        "user that, and that they can allow it with "
-        f"`fitt cron add --grant-tool {withheld[0]}` if they want it."
-    )
+    body = " ".join(f"({i + 1}) {n}" for i, n in enumerate(notes)) if len(notes) > 1 else notes[0]
+    return f"\n\nNote: {body} Tell the user."
 
 
 def _get_cron_service(ctx: ToolContext) -> Any:
@@ -325,12 +334,6 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return ToolResult.error(f"invalid schedule: {e}")
 
     silent = bool(args.get("silent", False))
-    approval_mode_raw = args.get("approval_mode") or ""
-    if approval_mode_raw not in ("", "auto"):
-        return ToolResult.error("approval_mode must be '' or 'auto'")
-    # At this point the value is one of the two Literals; the
-    # annotation below makes mypy see that.
-    approval_mode: ApprovalModeOverride = approval_mode_raw  # type: ignore[assignment]
     agent_alias = str(args.get("agent_alias") or "")
 
     job = CronJob(
@@ -339,8 +342,8 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         message=text.strip(),
         schedule=schedule,
         silent=silent,
-        approval_mode=approval_mode,
-        # extra_tools is deliberately NOT taken from args — operator-only.
+        # approval_mode and extra_tools are deliberately NOT taken from
+        # args — both are operator-only (see the note above the schemas).
         agent_alias=agent_alias,
         session_key=ctx.session_key,
         created_by_client=ctx.client,
@@ -352,24 +355,16 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     except CronError as e:
         return ToolResult.error(str(e))
 
-    warning = ""
-    if silent and approval_mode != "auto" and schedule.kind == "every":
-        # A polling cron that's silent but not auto-approved
-        # will ping the user for approval on every firing.
-        # That's almost always a mistake; warn loudly.
-        warning = (
-            "\n\nNote: silent=true with approval_mode='' and an interval schedule "
-            "will still prompt for approval on each firing. If you want "
-            "unattended polling, set approval_mode='auto'."
-        )
-
+    # The old "silent + not auto-approved will prompt on every firing"
+    # warning is gone: it was true of the full tool surface, and false now
+    # that a firing only reaches tools that are already in the AUTO bucket.
+    # Keeping it would have told the user to fix a problem they don't have,
+    # using a field they can no longer set from chat.
     return ToolResult.ok(
         f"created cron {stored.id!r} ({_format_schedule(schedule)}, "
-        f"{'silent' if silent else 'announce'}, "
-        f"{'auto-approve' if approval_mode == 'auto' else 'per-tool approval'})"
+        f"{'silent' if silent else 'announce'})"
         + _confirmation_hint(schedule)
-        + warning
-        + _advisory_grant_note(args)
+        + _operator_only_note(args)
     )
 
 
@@ -436,14 +431,9 @@ async def _tool_cron_update(args: dict[str, Any], ctx: ToolContext) -> ToolResul
         kwargs["message"] = str(args["text"])
     if "silent" in args and args["silent"] is not None:
         kwargs["silent"] = bool(args["silent"])
-    if "approval_mode" in args and args["approval_mode"] is not None:
-        mode = args["approval_mode"]
-        if mode not in ("", "auto"):
-            return ToolResult.error("approval_mode must be '' or 'auto'")
-        kwargs["approval_mode"] = mode
-    # extra_tools is intentionally absent here too: a model that could
-    # widen an existing cron's surface would have the same hole as one
-    # that could set it at creation.
+    # approval_mode and extra_tools are intentionally absent here too: a
+    # model that could widen an existing cron's authority has the same hole
+    # as one that could set it at creation.
     if "agent_alias" in args and args["agent_alias"] is not None:
         kwargs["agent_alias"] = str(args["agent_alias"])
     if "schedule_spec" in args and args["schedule_spec"] is not None:
@@ -463,7 +453,7 @@ async def _tool_cron_update(args: dict[str, Any], ctx: ToolContext) -> ToolResul
         return ToolResult.error(str(e))
     except CronError as e:
         return ToolResult.error(str(e))
-    return ToolResult.ok(f"updated cron {updated.id!r}" + _advisory_grant_note(args))
+    return ToolResult.ok(f"updated cron {updated.id!r}" + _operator_only_note(args))
 
 
 async def _tool_cron_remove(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -530,10 +520,8 @@ def build_cron_tools() -> list[Tool]:
                 "'every 2h', 'every 3d', 'every 1w'), one-shot "
                 "('at 2026-05-06T09:00:00'), or cron-expression "
                 "('cron 0 9 * * *'). `name` is optional (derived "
-                "from the text if omitted). Defaults to ask for "
-                "approval; `silent` and `approval_mode` control "
-                "whether firings announce and whether their "
-                "internal tools auto-approve. "
+                "from the text if omitted). `silent` controls whether a "
+                "firing announces its reply. "
                 "Firings run unattended on a reduced tool surface: they "
                 "can notify, read, and use the todo list, and nothing "
                 "else. A plain reminder needs nothing more. If the job "
