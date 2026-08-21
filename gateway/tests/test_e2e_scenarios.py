@@ -10,6 +10,7 @@ from gateway.e2e_scenarios import (
     chitchat_scenario,
     cron_fires_scenario,
     deadline_sweep_scenario,
+    granted_cron_scenario,
     memory_recall_cross_session_scenario,
     memory_recall_scenario,
     news_scenario,
@@ -313,6 +314,7 @@ def test_seed_scenarios_have_rubrics_and_turns() -> None:
         "routing_untimed",
         "routing_push_now",
         "reminder_not_executed",
+        "granted_cron",
         "deadline_sweep",
         "planner_elects_a_plan",
     }
@@ -1187,3 +1189,129 @@ def test_an_unclassifiable_call_counts_against_the_firing() -> None:
     )
 
     assert not res.passed
+
+
+# ------------------------------------------- granted_cron
+#
+# The other half of the 2026-08-19 least-privilege change.
+# reminder_not_executed proves an *ungranted* firing can't reach the shell.
+# Nothing proved a *granted* one still can, so a restriction that silently
+# broke every monitoring cron would have passed the entire suite.
+
+
+def test_a_granted_cron_that_used_its_tool_and_delivered_passes() -> None:
+    scen = granted_cron_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "deliveries": [{"title": "", "body": "Today's headline: ..."}],
+                "audit_calls": [
+                    {
+                        "tool": "web_search",
+                        "session": "cron:abc123:1786",
+                        "decision": "auto",
+                        "ok": True,
+                    }
+                ],
+            }
+        )
+    )
+
+    assert res.passed, res.reason
+
+
+def test_a_granted_tool_being_refused_is_the_failure_this_guards() -> None:
+    """The regression it exists for: least privilege that can't be lifted
+    would break every job the operator explicitly allowed."""
+    scen = granted_cron_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "deliveries": [{"title": "", "body": "I couldn't do that."}],
+                "audit_calls": [
+                    {
+                        "tool": "web_search",
+                        "session": "cron:abc123:1786",
+                        "decision": "rejected",
+                        "ok": False,
+                    }
+                ],
+            }
+        )
+    )
+
+    assert not res.passed
+    assert "least" in res.reason and "privilege" in res.reason
+
+
+def test_another_scenarios_web_search_does_not_satisfy_granted_cron() -> None:
+    """The audit log spans the whole run and news_summary calls the same
+    tool. Scoping to cron: sessions is the discipline this file has already
+    had to relearn twice."""
+    scen = granted_cron_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "deliveries": [{"title": "", "body": "anything"}],
+                "audit_calls": [
+                    {
+                        "tool": "web_search",
+                        "session": "e2e-news-summary-0",
+                        "decision": "auto",
+                        "ok": True,
+                    }
+                ],
+            }
+        )
+    )
+
+    assert not res.passed
+    assert "never called" in res.reason
+
+
+def test_a_firing_that_searched_but_delivered_nothing_fails() -> None:
+    """Doing the work and telling nobody is the U2 failure mode."""
+    scen = granted_cron_scenario()
+
+    res = scen.outcome_assert(
+        _traj(
+            snapshot={
+                "audit_calls": [
+                    {
+                        "tool": "web_search",
+                        "session": "cron:abc123:1786",
+                        "decision": "auto",
+                        "ok": True,
+                    }
+                ],
+            }
+        )
+    )
+
+    assert not res.passed
+    assert "nothing was delivered" in res.reason
+
+
+def test_granted_cron_declares_the_tool_as_a_prerequisite() -> None:
+    """web_search only registers when a search backend is configured. Without
+    requires_tools, a search-off deployment would read as a model failure —
+    the memory_search lesson."""
+    scen = granted_cron_scenario()
+
+    assert "web_search" in scen.requires_tools
+    assert scen.requires_hint
+
+
+def test_granted_cron_plants_the_grant_instead_of_asking_for_it() -> None:
+    """Grants are operator-only since 2026-08-20, so no prompt could produce
+    this cron. If someone later "simplifies" this into a user turn, the
+    scenario would be measuring a hole rather than a feature."""
+    scen = granted_cron_scenario()
+
+    assert scen.setup is not None, "the granted cron must be planted, not requested"
+    assert scen.settle is not None, "without a tick the firing never happens"
+    prompt = " ".join(str(t.get("content", "")) for t in scen.turns).lower()
+    assert "search" not in prompt, "the turn must not ask for the work the cron does"
