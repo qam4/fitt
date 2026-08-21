@@ -41,6 +41,7 @@ from typing import Any
 
 from .lessons import LessonsStore
 from .memory_templates import DEFAULTS, LEGACY_TEMPLATES
+from .session_paths import session_dir
 
 _log = logging.getLogger(__name__)
 
@@ -200,7 +201,9 @@ class MemoryStore:
 
     def history_path(self, session_id: str, day: date | None = None) -> Path:
         day = day or _today()
-        return self._sessions_dir / session_id / "history" / f"{day.isoformat()}.md"
+        # session_dir, not raw concatenation: a cron firing's session id
+        # contains colons, which no Windows path component may.
+        return session_dir(self._sessions_dir, session_id) / "history" / f"{day.isoformat()}.md"
 
     def load_context(self, session_id: str) -> LoadedContext:
         """Assemble identity + lessons + today's history for
@@ -539,7 +542,7 @@ class MemoryStore:
 
         Format: ``YYYY-MM-DD: N user turns (with tools|chat only)``.
         Days with no user turns are skipped."""
-        session_history_dir = self._sessions_dir / session_id / "history"
+        session_history_dir = session_dir(self._sessions_dir, session_id) / "history"
         if not session_history_dir.exists():
             return []
 

@@ -84,6 +84,7 @@ from pathlib import Path
 from typing import Any
 
 from .auth import is_router_mode_client
+from .session_paths import session_dir
 
 _log = logging.getLogger(__name__)
 
@@ -210,8 +211,12 @@ class TurnCaptureStore:
     # ------------------------------------------------ paths
 
     def turn_dir(self, session_key: str, day: datetime) -> Path:
-        """Per-day directory for one session's captures."""
-        return self._sessions_dir / session_key / "turns" / day.strftime("%Y-%m-%d")
+        """Per-day directory for one session's captures.
+
+        Via :func:`gateway.session_paths.session_dir`: a cron firing's key
+        contains colons, so hand-built paths dropped every scheduled job's
+        capture on Windows."""
+        return session_dir(self._sessions_dir, session_key) / "turns" / day.strftime("%Y-%m-%d")
 
     def turn_path(self, session_key: str, day: datetime, turn_id: str) -> Path:
         """Canonical path for a turn's capture file."""
@@ -286,14 +291,14 @@ class TurnCaptureStore:
         than computing the right day. Returns ``None`` when the
         file isn't present (turn never captured, capture failed
         silently, or the privacy default ruled it out)."""
-        session_dir = self._sessions_dir / session_key / "turns"
-        if not session_dir.exists():
+        turns_dir = session_dir(self._sessions_dir, session_key) / "turns"
+        if not turns_dir.exists():
             return None
         # Walk per-day directories. Most lookups hit recent
         # turns, so iterate newest-first.
         try:
             day_dirs = sorted(
-                (p for p in session_dir.iterdir() if p.is_dir()),
+                (p for p in turns_dir.iterdir() if p.is_dir()),
                 reverse=True,
             )
         except OSError:
@@ -323,12 +328,12 @@ class TurnCaptureStore:
         ``started_at`` is at-or-after ``since`` survive. ``limit``
         is applied after sorting newest-first.
         """
-        session_dir = self._sessions_dir / session_key / "turns"
-        if not session_dir.exists():
+        turns_dir = session_dir(self._sessions_dir, session_key) / "turns"
+        if not turns_dir.exists():
             return []
         try:
             day_dirs = sorted(
-                (p for p in session_dir.iterdir() if p.is_dir()),
+                (p for p in turns_dir.iterdir() if p.is_dir()),
                 reverse=True,
             )
         except OSError:

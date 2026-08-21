@@ -128,6 +128,8 @@ from pathlib import Path
 from time import time
 from typing import Any, TypeAlias
 
+from .session_paths import session_dir
+
 _log = logging.getLogger(__name__)
 
 
@@ -286,8 +288,13 @@ class TurnLog:
 
         Public helper so the CLI's `fitt watch` can stat the
         expected path at tail time without duplicating the
-        layout logic."""
-        return self._sessions_dir / session_key / "turns" / f"{day.isoformat()}.jsonl"
+        layout logic.
+
+        Goes through :func:`gateway.session_paths.session_dir` because a
+        cron firing's key (``cron:<id>:<ts>``) is not a legal Windows
+        path component — building this by hand silently dropped every
+        scheduled job's turn events."""
+        return session_dir(self._sessions_dir, session_key) / "turns" / f"{day.isoformat()}.jsonl"
 
     # ------------------------------------------------ write
 

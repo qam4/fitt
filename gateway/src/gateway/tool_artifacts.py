@@ -86,6 +86,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .session_paths import safe_session_dirname, session_dir
+
 _log = logging.getLogger(__name__)
 
 
@@ -284,7 +286,10 @@ class ArtifactStore:
         session's artifact dir. Returns the absolute path on
         success; raises on any IO failure so the caller can
         decide whether to degrade gracefully."""
-        safe_session = _sanitize_for_path(session_key) or "unknown"
+        # Session component via the shared helper so all four per-session
+        # stores agree on one layout. For a cron key the two rules produce
+        # the same name (cron:a:1 -> cron_a_1), so nothing relocates.
+        safe_session = safe_session_dirname(session_key)
         safe_tool = _sanitize_for_path(tool_name) or "tool"
         day = now.strftime("%Y-%m-%d")
         day_dir = self._sessions_dir / safe_session / "artifacts" / day
@@ -342,4 +347,4 @@ def default_artifact_dir(sessions_dir: Path, session_key: str) -> Path:
     """Resolve the artifact base dir for one session. Mirrors
     the ``history`` layout one level deeper: callers that want
     to list all artifacts for a session can point at this."""
-    return sessions_dir / _sanitize_for_path(session_key) / "artifacts"
+    return session_dir(sessions_dir, session_key) / "artifacts"
