@@ -119,6 +119,42 @@ The curated ordering - the judgment call a tool can't make for you.
   which is why it isn't a drive-by. Probably never worked on Windows, and
   no test would notice: they assert on the event and audit logs, not on
   turn files.
+- **Nothing supersedes a corrected fact (memory gap review, 2026-08-21).**
+  History is append-only and retrieval indexes every turn, so a fact the
+  user later corrected stays fully retrievable and can come back as if
+  current. `learn_add` and editing `user.md` fix the *injected* layers and
+  leave the *recalled* ones contradicting them — the model then holds two
+  truths, each layer built to its own spec. Phase 2 and Phase 9 both treat
+  their layer in isolation, so nothing is violated. The cheap version is a
+  supersede marker a correction can write, which retrieval filters or
+  labels; the expensive version is reconciliation at recall time. Worth
+  scoping before Phase 9 gets leaned on harder, since every month of use
+  makes the stale set bigger.
+- **Prefetch has no relevance floor (same review).** `prefetch_block`
+  takes top-k and injects; no minimum score. So with prefetch on,
+  something is always injected as recalled context however unrelated,
+  because top-k over a non-empty store never returns empty. Latent —
+  prefetch is off by default — and a score threshold is the obvious guard
+  to add *before* switching it on, not after.
+- **Lessons can contradict each other with no precedence rule (same
+  review, partial finding).** Growth is capped (`lessons.capacity_drop`
+  evicts oldest), so the reviewer's "200 lessons pile up" is wrong. But
+  two lessons that disagree ("use tabs" / "use spaces") are both injected
+  every turn with nothing to reconcile them. Lower priority than the two
+  above; note it exists so it isn't re-derived.
+- **Requirements review as a judge use-case — hit rate HELD on a second
+  feature (2026-08-21).** Memory: 8 findings, 3 real, same ratio as crons,
+  40s and $0.51 for one call. It also independently re-derived an existing
+  backlog item (task 70, truncation never surfaced) with no sight of the
+  backlog — the second time that has happened and the strongest evidence
+  the method works. Two features in, it's worth reaching for whenever a
+  feature is about to be extended. Still not worth a `fitt` command.
+  **One prompt change to make next time:** include the acceptance
+  criteria, not just the user stories. Two of the five misses were the
+  reviewer flagging things the AC already promises. The cost is that it
+  then reads the spec as authoritative, which is exactly what blinded it
+  to the reminder bug — so it's a trade, not a fix, and worth running
+  both ways on the same feature once to see which yields more.
 - **Requirements review as a judge use-case (validated once, 2026-08-17).**
   Pointing a frontier model at a feature's *requirements* plus its tool
   surface and asking "what would a user reasonably expect that these never

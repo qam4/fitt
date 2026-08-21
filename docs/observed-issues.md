@@ -109,6 +109,73 @@ unverified — recorded, not promoted.
 
 ---
 
+## Requirements-gap review, second feature: the hit rate holds (memory, 3 of 8)
+
+**Date:** 2026-08-21. **Tag:** validation method / judge design.
+
+The open question from the 2026-08-17 experiment was whether one good
+result on crons was luck. Same prompt, same model (`claude-sonnet-5`), one
+call, pointed at memory (Phase 2 identity + history, Phase 9 retrieval,
+plus lessons). Eight findings, **three real** — the same ratio as crons.
+Artefacts in `output/gap-review/`. 40s, $0.51.
+
+### The three that stand
+
+1. **Nothing supersedes a corrected fact.** History is append-only and
+   retrieval indexes every turn, so a fact the user later corrected stays
+   fully retrievable and can be resurfaced as if current. `learn_add` and
+   editing `user.md` both fix the *injected* layers while leaving the
+   recalled ones contradicting them. Two of the eight findings were this
+   one from different angles (a correction mid-conversation, and an edit
+   to `user.md` after a job change). Nothing in either spec covers the
+   interaction — Phase 2 and Phase 9 each treat their layer in isolation.
+2. **Truncation is measured and never surfaced.** Oldest-first inside a
+   single day drops the constraints stated at the top of a long session
+   ("don't touch prod", "use library X"), and by turn 40 the model breaks
+   a rule the user believes is still in force because it was said today.
+   `truncated_bytes` is computed and told to nobody. **This independently
+   rediscovered an existing backlog item** (task 70), which is the same
+   thing that happened on the cron run with the approval blast radius —
+   and the strongest signal the method works, since it re-derived a real
+   item with no sight of the backlog.
+3. **Prefetch has no relevance floor.** `prefetch_block` takes top-k and
+   injects; there is no minimum score. So with prefetch on, *something* is
+   always injected as recalled context, however unrelated, because top-k
+   over a non-empty store never comes back empty. Latent today (off by
+   default), and a floor is the obvious guard when it's switched on.
+
+### The five that don't, and why that matters
+
+- **"No provenance on retrieval results"** — false. `memory_search`
+  returns `[session date] excerpt`, and AC 1.1 / 6.3 require exactly
+  that. The reviewer couldn't know: **I fed it the user stories and not
+  the acceptance criteria.** Same shape as the cron run. So part of the
+  yield is an artefact of what I withheld, and the fix is to include the
+  AC — at the cost of the reviewer then reading the spec as
+  authoritative, which is what blinded it to the reminder bug. That
+  tension is the ladder insight in miniature: more context, fewer
+  low-level findings.
+- **"Indexing lag is unbounded"** — false. `MemoryIndexer.on_turn`
+  schedules a per-turn `create_task`, so the lag is seconds. The
+  reviewer imagined a nightly batch, which the requirements permit and
+  the code doesn't do.
+- **"Lessons pile up forever"** — half. There *is* a capacity cap that
+  drops the oldest (`lessons.capacity_drop`). No contradiction or
+  duplicate detection, so the "two lessons that disagree" half stands;
+  the unbounded-growth half doesn't.
+- **"Cross-session retrieval leaks compartmentalised context"** — not a
+  FITT concern. Single user, no ACLs by design; the reviewer applied
+  multi-tenant privacy reasoning to a single-person assistant.
+
+**Method verdict:** two features, 3-of-8 both times, no live model or
+tunnel needed, ~$0.50 and a minute each. Good enough to keep using;
+still not worth a `fitt` command until something about it has to be
+repeatable. The recurring caveat is unchanged and now demonstrated
+twice: a spec-derived review finds promises you half-wrote, never one
+you never wrote down.
+
+---
+
 ## Every cron firing's turn events and memory are dropped on Windows (colon in the session key)
 
 **First observed:** 2026-08-19, reading an eval log for something else.

@@ -1,0 +1,117 @@
+You are reviewing the product requirements for one feature of a
+self-hosted personal AI assistant called FITT, used by a single person
+from Telegram, a browser, and a CLI.
+
+Your job is NOT to find bugs in the implementation. It is to find
+promises the requirements FAIL TO STATE — things a real user of a
+personal assistant would reasonably expect from this feature, which
+these requirements never commit to, and which an implementer could
+therefore get wrong without violating anything written here.
+
+## The feature: memory
+
+Mechanism, as built. Three layers reach the model on every turn:
+
+1. **Identity** — markdown files under `$FITT_HOME/identity/`:
+   `user.md` (facts about the user), `soul.md` (FITT's personality),
+   `tools.md`. Injected into the system prompt on every request, for
+   every session. Hand-editable; re-read when changed.
+2. **Recency history** — each session's turns are appended to
+   `sessions/<id>/history/<date>.md`. Before dispatching a request,
+   the gateway loads the session's recent history and replays it as
+   alternating user/assistant messages ahead of the new message.
+   Truncated oldest-first against a byte budget when too long.
+3. **Retrieval** — every persisted turn is indexed (embeddings +
+   keyword) into a derived store. A `memory_search` tool lets the model
+   query it: semantic or keyword, current session by default, all
+   sessions on request. Optional config-gated "prefetch" can inject the
+   most relevant excerpt into the system prompt without the model
+   asking.
+
+Separately, a `learn_add` tool records a correction or preference as a
+"lesson". Lessons are injected into every future system prompt, for
+every session, until removed.
+
+### The written user stories, verbatim
+
+Phase 2 (identity + today's history):
+
+P2-1 — "As a user, I want FITT to know who I am and what I'm working on
+so I don't re-introduce myself at the start of every conversation."
+
+P2-2 — "As a user, I want the gateway to remember the current day's
+conversation across process restarts so a crash or reboot doesn't lose
+context."
+
+P2-3 — "As a user, I want to verify that memory actually works end to
+end." (the "keys on the counter" test)
+
+P2-4 — "As a user, I want the memory layer to be ready to support
+multiple named sessions even though v0 only exposes `main`."
+
+P2-5 — "As a user, I want the gateway to avoid exceeding the model's
+context window because of an overly long history file."
+
+P2-6 — "As a developer, I want to debug and operate memory without
+rebuilding the gateway."
+
+Phase 2 explicit non-goals: no cross-day history, no vector search, no
+per-session identity, no automatic summarization, no multi-user.
+
+Phase 9 (retrieval / memory v1):
+
+U1 — "As a FITT user, I want to ask 'remember when we discussed X' and
+get the relevant prior turns back, even if they're weeks old or in
+another session, so the assistant stops feeling amnesiac."
+
+U2 — "As a FITT user, I want to find the exact phrase or identifier I
+used before ('the pid 456 monitoring job', an error string), so I can
+locate specifics that semantic search fuzzes over."
+
+U3 — "As a FITT user, I want single-session reads to stay fast and
+isolated by default, but be able to say 'search across all sessions,' so
+cross-project recall is available without polluting every turn."
+
+U4 — "As a FITT maintainer, I want the vector/keyword index to be a
+rebuildable derivative of the markdown, so 'shareable by construction'
+and hand-editability survive."
+
+U5 — "As a FITT operator, I want turns to persist and respond at the
+same latency as today, with indexing happening after the fact, so recall
+never costs interactive speed."
+
+U6 — "As a FITT user, I want the agent to reach for prior context when a
+turn benefits from it, without me manually running a search, so recall
+feels automatic."
+
+U7 — "As a FITT maintainer, I want the embedding model bound to an alias
+in config, so swapping it is a config change with no code edit."
+
+U8 — "As a FITT operator, I want to see how much is indexed and how
+fresh it is, so I can tell whether recall is working."
+
+## Tools any session can call
+
+read_file, list_directory, glob_search, grep_repo, http_get, web_search,
+project_shell (runs a shell command in a registered project), run_tests,
+git_status, git_diff, git_commit, write_file, edit_file, cron_add,
+cron_list, cron_update, cron_remove, cron_pause, cron_resume, todo_add,
+todo_list, todo_done, todo_remove, learn_add, learn_list, learn_remove,
+send_message, memory_search, list_capabilities, todowrite, spec_list,
+spec_read.
+
+## Your task
+
+List the unstated expectations, most important first. For each:
+
+- `expectation`: what the user would assume, in one sentence.
+- `why_unstated`: what the requirements say instead, or don't say.
+- `failure`: concretely, what a reasonable implementation could do that
+  would surprise or harm the user while still satisfying every written
+  requirement above.
+
+Be concrete and specific to THIS feature and THIS tool surface. Prefer
+expectations whose violation the user would actually notice. Do not pad
+the list; stop when you run out of substantive ones.
+
+Output plain markdown, no preamble.
