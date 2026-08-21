@@ -84,9 +84,46 @@ class ToolResult:
     payload: str
     is_error: bool = False
 
+    user_note: str = ""
+    """Text the user must see regardless of what the model says.
+
+    ``payload`` goes to the model, which may or may not pass anything on.
+    A ``user_note`` is appended to the turn's reply by the agent loop, so
+    it does not depend on the model cooperating.
+
+    Added for cron schedule confirmation. The tool result carried the
+    resolved local fire time and *asked* the model to state it; a judged
+    run on 2026-08-20 caught a reply of "scheduled that reminder for you
+    in 10 minutes" — the relative phrasing the confirmation exists to
+    eliminate — in roughly one sample in three. A confirmation the user
+    only sometimes receives is not a confirmation.
+
+    Use sparingly: this is for facts the user needs in order to catch a
+    mistake, not for commentary. Anything the model can be trusted to
+    relay belongs in ``payload``."""
+
+    user_note_probe: str = ""
+    """Short distinctive fragment used to suppress a duplicate note.
+
+    If this appears in the model's reply, the model already said it and
+    the note is dropped. Explicit rather than inferred from ``user_note``
+    because the model paraphrases ("at 10:18 AM" vs "at 10:18"), so only
+    the caller knows which fragment is the reliable tell."""
+
     @classmethod
-    def ok(cls, payload: str) -> ToolResult:
-        return cls(payload=payload, is_error=False)
+    def ok(
+        cls,
+        payload: str,
+        *,
+        user_note: str = "",
+        user_note_probe: str = "",
+    ) -> ToolResult:
+        return cls(
+            payload=payload,
+            is_error=False,
+            user_note=user_note,
+            user_note_probe=user_note_probe,
+        )
 
     @classmethod
     def error(cls, message: str) -> ToolResult:

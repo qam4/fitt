@@ -622,6 +622,8 @@ async def run_agent_loop(
     # Loop brake state: signatures of calls that already succeeded this
     # turn (-> their result), and how many corrections we've issued.
     succeeded_calls: dict[str, str] = {}
+    # (note, probe) pairs from ToolResult.user_note — see _append_user_notes.
+    user_notes: list[tuple[str, str]] = []
     repeated_calls = 0
 
     for iteration in range(max_iterations):
@@ -804,12 +806,19 @@ async def run_agent_loop(
             if loop_brake and not result.is_error:
                 succeeded_calls[signature] = result.payload
 
+            # Facts the user must see whatever the model chooses to say.
+            # Collected here rather than emitted immediately so they land
+            # once, at the end, after the final reply is known (and so a
+            # note whose content the model DID relay can be dropped).
+            if result.user_note and not result.is_error:
+                user_notes.append((result.user_note, result.user_note_probe))
+
         # The model ignored our corrections and keeps repeating. Stop
         # rather than burn the remaining iterations.
         if loop_brake and repeated_calls >= max_repeated_calls:
             return AgentLoopResult(
                 status="tool_loop_repeated",
-                assistant_text=extract_assistant_text(response_obj),
+                assistant_text=_append_user_notes(extract_assistant_text(response_obj), user_notes),
                 response_obj=response_obj,
                 model_used=model_used,
                 fallback_used=fallback_used,
@@ -834,7 +843,7 @@ async def run_agent_loop(
 
     return AgentLoopResult(
         status="ok",
-        assistant_text=extract_assistant_text(response_obj),
+        assistant_text=_append_user_notes(extract_assistant_text(response_obj), user_notes),
         response_obj=response_obj,
         model_used=model_used,
         fallback_used=fallback_used,
@@ -844,6 +853,39 @@ async def run_agent_loop(
         messages=working_messages,
         tool_calls_for_memory=tool_calls_for_memory,
     )
+
+
+def _append_user_notes(text: str, notes: list[tuple[str, str]]) -> str:
+    """Append any ``ToolResult.user_note`` the reply didn't already convey.
+
+    The point is to stop a fact the user needs from depending on the model
+    repeating it. Cron schedule confirmation was advisory — the tool result
+    stated the resolved local fire time and asked the model to relay it —
+    and a judged run caught it being dropped in about one sample in three,
+    leaving "in 10 minutes" as the only thing the user saw. A confirmation
+    that arrives two times in three is not a confirmation.
+
+    A note is skipped when its ``probe`` already appears in the reply, so a
+    model that did its job isn't followed by a redundant restatement. Empty
+    probe means always append.
+
+    Duplicates are collapsed: two calls to the same tool in one turn
+    shouldn't produce the same sentence twice."""
+    if not notes:
+        return text
+    seen: set[str] = set()
+    additions: list[str] = []
+    for note, probe in notes:
+        if note in seen:
+            continue
+        seen.add(note)
+        if probe and probe in text:
+            continue
+        additions.append(note)
+    if not additions:
+        return text
+    joined = " ".join(additions)
+    return f"{text}\n\n{joined}" if text.strip() else joined
 
 
 def _persisted_tool_call_from_result(

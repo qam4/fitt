@@ -360,43 +360,47 @@ async def _tool_cron_add(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     # that a firing only reaches tools that are already in the AUTO bucket.
     # Keeping it would have told the user to fix a problem they don't have,
     # using a field they can no longer set from chat.
+    note, probe = _confirmation_note(schedule)
     return ToolResult.ok(
         f"created cron {stored.id!r} ({_format_schedule(schedule)}, "
         f"{'silent' if silent else 'announce'})"
-        + _confirmation_hint(schedule)
-        + _operator_only_note(args)
+        # Also in the payload, so a model that does mention the time gets
+        # it right and the appended note is then suppressed as redundant.
+        + (f"\n\n{note}" if note else "")
+        + _operator_only_note(args),
+        user_note=note,
+        user_note_probe=probe,
     )
 
 
-def _confirmation_hint(sched: CronSchedule) -> str:
-    """Tell the model to state the time it actually got, in local terms.
+def _confirmation_note(sched: CronSchedule) -> tuple[str, str]:
+    """The absolute local fire time, as a fact the user is guaranteed to
+    see, plus the fragment that says the model already said it.
 
-    A schedule the user can't verify is a schedule they find out about by
-    missing it. FITT already had the parsing half of this bug — "remind me
-    at 1 PM" once became `13:00` UTC and fired immediately — and the
-    `[Current time]` preamble fixed that. What stayed broken is
-    *confirmation*: a live run replied "I've scheduled a reminder … for 15
-    minutes from now" with no absolute time, so a misparse was
-    unverifiable until it fired. Found again by a requirements review,
-    2026-08-17.
+    A schedule the user can't verify is one they find out about by missing
+    it. FITT had the parsing half of this bug — "remind me at 1 PM" once
+    became `13:00` UTC and fired immediately — and the `[Current time]`
+    preamble fixed that. Confirmation stayed broken: a live run replied
+    "I've scheduled a reminder … for 15 minutes from now" with no absolute
+    time, so a misparse was unverifiable until it fired.
 
-    The resolved timestamp was already in this result, in UTC ISO — easy
-    for a model to ignore and unfriendly to a human even if relayed. So
-    render it in the operator's own timezone and ask for it explicitly."""
+    The first fix put the time in the tool result and *asked* the model to
+    relay it. A judged run on 2026-08-20 caught that being ignored in
+    roughly one sample in three ("scheduled that reminder for you in 10
+    minutes"). So it moved out of the model's hands: the loop appends this
+    note itself, and skips it only when the reply already contains the
+    ``HH:MM`` probe. Returns ``("", "")`` for intervals and cron
+    expressions, which are self-describing ("every 2h") and have no single
+    instant to misread."""
     if sched.kind != "at" or sched.at_ts is None:
-        # Intervals and cron expressions are already self-describing
-        # ("every 2h"); there's no single instant to misread.
-        return ""
+        return "", ""
     from datetime import datetime as _dt
 
     local = _dt.fromtimestamp(sched.at_ts).astimezone()
+    clock = local.strftime("%H:%M")
     when = local.strftime("%a %d %b at %H:%M")
     tz_name = local.tzname() or "local time"
-    return (
-        f"\n\nTell the user this fires {when} ({tz_name}) so they can "
-        "check it's what they meant — a relative phrase like 'in 15 "
-        "minutes' hides a misread time."
-    )
+    return f"This fires {when} ({tz_name}).", clock
 
 
 async def _tool_cron_list(args: dict[str, Any], ctx: ToolContext) -> ToolResult:

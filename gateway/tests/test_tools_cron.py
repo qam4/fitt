@@ -433,57 +433,62 @@ def test_cron_add_uses_text_arg_not_message() -> None:
 # Found again by a requirements review, 2026-08-17.
 
 
-async def test_a_one_shot_result_asks_the_model_to_state_the_local_time() -> None:
+async def test_a_one_shot_result_states_the_local_time() -> None:
     from gateway.cron import CronSchedule
-    from gateway.tools.cron_tools import _confirmation_hint
+    from gateway.tools.cron_tools import _confirmation_note
 
     # 2026-08-17 21:57 UTC, the timestamp from the live run.
-    hint = _confirmation_hint(CronSchedule(kind="at", at_ts=1_787_003_858.0))
+    note, probe = _confirmation_note(CronSchedule(kind="at", at_ts=1_787_003_858.0))
 
-    assert "Tell the user this fires" in hint
-    assert "check it's what they meant" in hint
-    # It must name a concrete instant. (Not "'in 15 minutes' not in hint" —
-    # the hint quotes that phrase as an example of what NOT to say, which
-    # made the first version of this assertion a false negative.)
-    assert re.search(r"\d{2}:\d{2}", hint), hint
+    assert note.startswith("This fires ")
+    # It must name a concrete instant, and the probe must be the fragment
+    # that tells us the model already said it.
+    assert re.search(r"\d{2}:\d{2}", note), note
+    assert re.fullmatch(r"\d{2}:\d{2}", probe), probe
+    assert probe in note
 
 
-async def test_the_hint_renders_in_local_time_not_utc() -> None:
+async def test_the_note_renders_in_local_time_not_utc() -> None:
     """UTC ISO was already in the result and got ignored; a human-readable
     local rendering is the point."""
     from datetime import datetime
 
     from gateway.cron import CronSchedule
-    from gateway.tools.cron_tools import _confirmation_hint
+    from gateway.tools.cron_tools import _confirmation_note
 
     ts = 1_787_003_858.0
     expected = datetime.fromtimestamp(ts).astimezone().strftime("%H:%M")
 
-    assert expected in _confirmation_hint(CronSchedule(kind="at", at_ts=ts))
+    assert expected in _confirmation_note(CronSchedule(kind="at", at_ts=ts))[0]
 
 
-async def test_intervals_and_cron_expressions_get_no_hint() -> None:
+async def test_intervals_and_cron_expressions_get_no_note() -> None:
     """ "every 2h" is self-describing — there's no single instant to
     misread, so don't pad every result with boilerplate."""
     from gateway.cron import CronSchedule
-    from gateway.tools.cron_tools import _confirmation_hint
+    from gateway.tools.cron_tools import _confirmation_note
 
-    assert _confirmation_hint(CronSchedule(kind="every", every_secs=7200)) == ""
-    assert _confirmation_hint(CronSchedule(kind="cron", cron_expr="0 9 * * *")) == ""
+    assert _confirmation_note(CronSchedule(kind="every", every_secs=7200)) == ("", "")
+    assert _confirmation_note(CronSchedule(kind="cron", cron_expr="0 9 * * *")) == ("", "")
     # Defensive: an 'at' with no timestamp must not raise.
-    assert _confirmation_hint(CronSchedule(kind="at", at_ts=None)) == ""
+    assert _confirmation_note(CronSchedule(kind="at", at_ts=None)) == ("", "")
 
 
-async def test_cron_add_result_carries_the_confirmation(svc: CronService) -> None:
-    """End to end through the tool, since the hint is only useful if it
-    actually reaches the model's tool result."""
+async def test_cron_add_carries_the_confirmation_as_a_user_note(svc: CronService) -> None:
+    """The whole point of the 2026-08-20 change: the confirmation must not
+    depend on the model choosing to relay it, so it travels as a
+    ``user_note`` the agent loop appends itself."""
     res = await _tools()["cron_add"].callable(
         {"text": "Remind me to check my emails", "schedule_spec": "in 15 minutes"},
         _ctx(svc),
     )
 
     assert not res.is_error
-    assert "Tell the user this fires" in res.payload
+    assert res.user_note.startswith("This fires ")
+    assert res.user_note_probe and res.user_note_probe in res.user_note
+    # Still in the payload too, so a model that does mention the time gets
+    # it right (and then the appended note is suppressed as redundant).
+    assert res.user_note in res.payload
 
 
 async def test_an_interval_cron_result_has_no_confirmation_noise(svc: CronService) -> None:
@@ -492,7 +497,8 @@ async def test_an_interval_cron_result_has_no_confirmation_noise(svc: CronServic
     )
 
     assert not res.is_error
-    assert "Tell the user this fires" not in res.payload
+    assert res.user_note == ""
+    assert "This fires" not in res.payload
 
 
 # --------------------------------------------------------------- extra_tools grants
