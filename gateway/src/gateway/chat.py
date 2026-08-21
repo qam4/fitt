@@ -33,6 +33,7 @@ from .agent_loop import (
     record_gap,
     response_to_dict,
     run_agent_loop,
+    strip_template_tokens,
 )
 from .auth import is_router_mode_client
 from .capabilities import build_capability_block
@@ -452,7 +453,15 @@ def _extract_usage(response: Any) -> tuple[int, int]:
 
 def _extract_assistant_text(response: Any) -> str:
     """Pull the assistant's text content from a non-streaming
-    LiteLLM response."""
+    LiteLLM response, with template control tokens stripped.
+
+    The strip used to live only in :func:`agent_loop.extract_assistant_text`,
+    described at the time as "the one funnel every non-streaming reply
+    passes through". It wasn't: plain-chat turns (no ``tools`` /
+    ``tool_choice`` in the request — Telegram and Open WebUI's ordinary
+    conversation) come through here instead and never touched it, so a
+    leaked ``<|tool_response>`` in a tool-less reply reached the user.
+    Two extractors, one of them corrected."""
     if response is None:
         return ""
     if hasattr(response, "model_dump"):
@@ -467,7 +476,7 @@ def _extract_assistant_text(response: Any) -> str:
         return ""
     content = msg.get("content")
     if isinstance(content, str):
-        return content
+        return strip_template_tokens(content)
     return ""
 
 
@@ -518,6 +527,38 @@ def _build_tool_context(request: Request) -> ToolContext:
         retrieval=getattr(request.app.state, "retrieval_provider", None),
         todos=getattr(request.app.state, "todos", None),
     )
+
+
+def _apply_assistant_text(body: dict[str, Any], assistant_text: str) -> None:
+    """Write ``assistant_text`` into the response body's message content.
+
+    In place, and only when there's something to write and it differs, so
+    a turn with no corrections leaves the upstream body byte-identical.
+
+    Exists because ``choices[0].message.content`` and ``assistant_text``
+    had silently diverged: the latter is what FITT persists, logs, parses
+    for capability gaps and streams, and it accumulated two corrections
+    (template-token stripping, appended user notes) that the former never
+    received. A client reading the non-streaming body got the model's raw
+    output. Keeping one of them corrected and the other not is the actual
+    defect; this is the join."""
+    if not assistant_text:
+        # A tool-loop turn that ended without text — leave the envelope
+        # exactly as upstream sent it rather than inventing an empty
+        # message, which would erase a tool_calls-only response.
+        return
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return
+    first = choices[0]
+    if not isinstance(first, dict):
+        return
+    message = first.get("message")
+    if not isinstance(message, dict):
+        message = {"role": "assistant"}
+        first["message"] = message
+    if message.get("content") != assistant_text:
+        message["content"] = assistant_text
 
 
 def _record_gap(request: Request, assistant_text: str, session_key: str) -> None:
@@ -1086,6 +1127,19 @@ async def _run_tool_loop(
     )
 
     body_dict = response_to_dict(response_obj) or {}
+    # The body a non-streaming client reads must carry the SAME text we
+    # treated as the reply everywhere else.
+    #
+    # It didn't. `response_obj` is the raw upstream response, so every
+    # correction applied on the way to `assistant_text` — the
+    # `<|tool_response>` template-token strip, and now the appended
+    # `user_note` — reached memory, the logs, the gap parser and the
+    # streaming envelope (which rebuilds content from `assistant_text`
+    # below) while the non-streaming body still held the model's
+    # unmodified output. Two fixes that looked shipped were only ever
+    # live for streaming clients, and the judged harness posts
+    # non-streaming, so it was measuring the uncorrected text.
+    _apply_assistant_text(body_dict, assistant_text)
     headers = {
         "X-FITT-Backend": backend_header,
         "X-FITT-Alias": parsed.model,
@@ -1519,6 +1573,10 @@ async def chat_completions(request: Request) -> Response:
         body = response_obj
     else:
         body = {"raw": str(response_obj)}
+    # Same join as the tool-loop path: whatever we persisted and logged as
+    # the reply is what the client must receive. Here that means the
+    # template-token strip actually reaches plain-chat clients.
+    _apply_assistant_text(body, assistant_text)
 
     headers = {
         "X-FITT-Backend": backend_header,
